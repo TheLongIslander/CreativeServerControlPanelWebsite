@@ -1,3 +1,4 @@
+/* Light mode styles (default) */
 body {
     font-family: 'Arial', sans-serif;
     background-color: #f4f4f4;
@@ -8,31 +9,32 @@ body {
     align-items: center;
     height: 100vh;
     flex-direction: column;
-  }
-  
-  h2 {
+    color: #333; /* Ensuring text color is set for light mode */
+}
+
+h2 {
     color: #333;
     font-size: 1.5rem;
     margin-bottom: 1rem;
-  }
-  
-  form {
+}
+
+form {
     background: #fff;
     padding: 20px;
     border-radius: 10px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     text-align: center;
-  }
-  
-  label {
+}
+
+label {
     display: block;
     margin-top: 10px;
     font-size: 1rem;
     color: #666;
-  }
-  
-  input[type="text"],
-  input[type="password"] {
+}
+
+input[type="text"],
+input[type="password"] {
     width: 100%;
     padding: 10px;
     margin-top: 5px;
@@ -40,9 +42,11 @@ body {
     border: 1px solid #ddd;
     border-radius: 5px;
     box-sizing: border-box;
-  }
-  
-  button {
+    background: #fff; /* Explicitly setting background for inputs */
+    color: #333; /* Text color for inputs */
+}
+
+button {
     background-color: #4CAF50; /* Green */
     color: white;
     padding: 10px 15px;
@@ -51,9 +55,36 @@ body {
     cursor: pointer;
     font-size: 1rem;
     transition: background-color 0.3s;
-  }
-  
-  button:hover {
+}
+
+button:hover {
     background-color: #45a049;
-  }
-  
+}
+
+/* Dark mode styles */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #121212;
+        color: #ccc;
+    }
+
+    h2 {
+        color: #ccc;
+    }
+
+    form {
+        background: #333;
+        color: #ccc;
+    }
+
+    label {
+        color: #aaa; /* Slightly lighter color for labels */
+    }
+
+    input[type="text"],
+    input[type="password"] {
+        background: #222;
+        color: #ccc;
+        border-color: #555;
+    }   
+}
