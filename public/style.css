@@ -57,7 +57,8 @@ button:disabled {
 }
 
 /* Dark mode styles */
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: dark) 
+{
     body {
         background-color: #121212;
         color: #ccc;
@@ -91,5 +92,28 @@ button:disabled {
     button:disabled {
         background-color: #444; /* Darker gray for disabled buttons */
         color: #666;
+    }
+}
+
+/* Responsive adjustments for screens less than 768px wide */
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+        flex-direction: column; /* Ensure stacking is clean and vertical */
+    }
+
+    h1 {
+        font-size: 1.5rem; /* Smaller font size for smaller screens */
+    }
+
+    button {
+        padding: 10px 20px; /* Smaller padding */
+        font-size: 14px; /* Smaller font for buttons */
+        margin: 10px 0; /* More space around buttons */
+        width: 100%; /* Full width buttons are easier to tap */
+    }
+
+    #start-server, #stop-server {
+        margin-bottom: 10px;
     }
 }
