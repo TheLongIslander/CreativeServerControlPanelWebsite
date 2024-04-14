@@ -1,0 +1,57 @@
+body {
+    font-family: 'Arial', sans-serif;
+    background-color: #f4f4f4;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    flex-direction: column;
+  }
+  
+  h1 {
+    color: #333;
+    font-size: 2rem;
+    margin-bottom: 2rem;
+  }
+  
+  button {
+    border: none;
+    border-radius: 20px; /* Rounded corners */
+    color: white;
+    padding: 15px 32px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 4px 2px;
+    cursor: pointer;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* Specific styles for start and stop buttons */
+  #start-server {
+    background-color: #4CAF50; /* Green */
+  }
+  
+  #start-server:hover {
+    background-color: #45a049; /* Darker green */
+  }
+  
+  #stop-server {
+    background-color: #f44336; /* Red */
+  }
+  
+  #stop-server:hover {
+    background-color: #da190b; /* Darker red */
+  }
+  
+  button:disabled {
+    background-color: #cccccc; /* Light gray */
+    color: #666666; /* Dark gray */
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+  
