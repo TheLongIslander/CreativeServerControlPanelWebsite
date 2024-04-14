@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 
-const { getEasternTime } = require('./utils');
+const { getEasternTime } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
 const port = 8087;
 const users = {
@@ -41,6 +41,8 @@ const users = {
     res.sendFile(path.join(__dirname, 'public', 'login.html'));
   });
 app.use(express.static('public')); // Serve static files from 'public' directory
+// Serve static files from 'assets' directory
+app.use('/assets', express.static('assets'));
 app.use(express.json()); // Parse JSON bodies
 
 let serverRunning = false; // Variable to track the server state
