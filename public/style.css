@@ -1,3 +1,4 @@
+/* Light mode styles (default) */
 body {
     font-family: 'Arial', sans-serif;
     background-color: #f4f4f4;
@@ -8,17 +9,18 @@ body {
     align-items: center;
     height: 100vh;
     flex-direction: column;
-  }
-  
-  h1 {
+    color: #333;
+}
+
+h1 {
     color: #333;
     font-size: 2rem;
     margin-bottom: 2rem;
-  }
-  
-  button {
+}
+
+button {
     border: none;
-    border-radius: 20px; /* Rounded corners */
+    border-radius: 20px;
     color: white;
     padding: 15px 32px;
     text-align: center;
@@ -29,29 +31,65 @@ body {
     cursor: pointer;
     transition: background-color 0.3s ease, box-shadow 0.3s ease;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  }
-  
-  /* Specific styles for start and stop buttons */
-  #start-server {
+}
+
+#start-server {
     background-color: #4CAF50; /* Green */
-  }
-  
-  #start-server:hover {
+}
+
+#start-server:hover {
     background-color: #45a049; /* Darker green */
-  }
-  
-  #stop-server {
+}
+
+#stop-server {
     background-color: #f44336; /* Red */
-  }
-  
-  #stop-server:hover {
+}
+
+#stop-server:hover {
     background-color: #da190b; /* Darker red */
-  }
-  
-  button:disabled {
+}
+
+button:disabled {
     background-color: #cccccc; /* Light gray */
     color: #666666; /* Dark gray */
     cursor: not-allowed;
     box-shadow: none;
-  }
-  
+}
+
+/* Dark mode styles */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #121212;
+        color: #ccc;
+    }
+
+    h1 {
+        color: #ccc;
+    }
+
+    button {
+        background-color: #666; /* Default button background in dark mode */
+        color: #fff;
+    }
+
+    #start-server {
+        background-color: #198754; /* Bootstrap green */
+    }
+
+    #start-server:hover {
+        background-color: #146c43; /* Darker green */
+    }
+
+    #stop-server {
+        background-color: #dc3545; /* Bootstrap red */
+    }
+
+    #stop-server:hover {
+        background-color: #bb2d3b; /* Darker red */
+    }
+
+    button:disabled {
+        background-color: #444; /* Darker gray for disabled buttons */
+        color: #666;
+    }
+}
