@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 
-const { getEasternTime } = require('./utils');  // Adjust the path as necessary based on your file structure
+const { getEasternTime } = require('./utils');
 const app = express();
 const port = 8087;
 const users = {
