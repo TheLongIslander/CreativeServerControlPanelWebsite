@@ -48,6 +48,13 @@ button {
 #stop-server:hover {
     background-color: #da190b; /* Darker red */
 }
+#backup-server {
+    background-color: #04d6d6; /* Aqua */
+}
+
+#backup-server:hover {
+    background-color: #05aeb4; /* Darker aqua */
+}
 
 button:disabled {
     background-color: #cccccc; /* Light gray */
@@ -93,6 +100,13 @@ button:disabled {
         background-color: #444; /* Darker gray for disabled buttons */
         color: #666;
     }
+    #backup-server {
+        background-color: #20B2AA; /* LightSeaGreen for contrast in dark mode */
+    }
+
+    #backup-server:hover {
+        background-color: #1D7F7E; /* Darker LightSeaGreen */
+    }
 }
 
 /* Responsive adjustments for screens less than 768px wide */
@@ -113,7 +127,7 @@ button:disabled {
         width: 100%; /* Full width buttons are easier to tap */
     }
 
-    #start-server, #stop-server {
+    #start-server, #stop-server, #backup-server {
         margin-bottom: 10px;
     }
 }
