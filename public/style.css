@@ -34,38 +34,46 @@ button {
 }
 
 #start-server {
-    background-color: #4CAF50; /* Green */
+    background-color: #4CAF50;
+    /* Green */
 }
 
 #start-server:hover {
-    background-color: #45a049; /* Darker green */
+    background-color: #45a049;
+    /* Darker green */
 }
 
 #stop-server {
-    background-color: #f44336; /* Red */
+    background-color: #f44336;
+    /* Red */
 }
 
 #stop-server:hover {
-    background-color: #da190b; /* Darker red */
+    background-color: #da190b;
+    /* Darker red */
 }
+
 #backup-server {
-    background-color: #04d6d6; /* Aqua */
+    background-color: #04d6d6;
+    /* Aqua */
 }
 
 #backup-server:hover {
-    background-color: #05aeb4; /* Darker aqua */
+    background-color: #05aeb4;
+    /* Darker aqua */
 }
 
 button:disabled {
-    background-color: #cccccc; /* Light gray */
-    color: #666666; /* Dark gray */
+    background-color: #cccccc;
+    /* Light gray */
+    color: #666666;
+    /* Dark gray */
     cursor: not-allowed;
     box-shadow: none;
 }
 
 /* Dark mode styles */
-@media (prefers-color-scheme: dark) 
-{
+@media (prefers-color-scheme: dark) {
     body {
         background-color: #121212;
         color: #ccc;
@@ -76,36 +84,77 @@ button:disabled {
     }
 
     button {
-        background-color: #666; /* Default button background in dark mode */
+        background-color: #666;
+        /* Default button background in dark mode */
         color: #fff;
     }
 
     #start-server {
-        background-color: #198754; /* Bootstrap green */
+        background-color: #198754;
+        /* Bootstrap green */
     }
 
     #start-server:hover {
-        background-color: #146c43; /* Darker green */
+        background-color: #146c43;
+        /* Darker green */
     }
 
     #stop-server {
-        background-color: #dc3545; /* Bootstrap red */
+        background-color: #dc3545;
+        /* Bootstrap red */
     }
 
     #stop-server:hover {
-        background-color: #bb2d3b; /* Darker red */
+        background-color: #bb2d3b;
+        /* Darker red */
     }
 
     button:disabled {
-        background-color: #444; /* Darker gray for disabled buttons */
+        background-color: #444;
+        /* Darker gray for disabled buttons */
         color: #666;
     }
+
     #backup-server {
-        background-color: #20B2AA; /* LightSeaGreen for contrast in dark mode */
+        background-color: #20B2AA;
+        /* LightSeaGreen for contrast in dark mode */
     }
 
     #backup-server:hover {
-        background-color: #1D7F7E; /* Darker LightSeaGreen */
+        background-color: #1D7F7E;
+        /* Darker LightSeaGreen */
+    }
+
+    #progress-area {
+        width: 80%; /* Adjust the width of the progress area */
+        text-align: center; /* This will center the percentage text */
+        margin-top: 20px; /* Adjust this value to match the space you want */
+    }
+    
+    #progress-container {
+        display: none; /* Hide the progress bar initially */
+        background-color: #ddd;
+        border-radius: 20px;
+        overflow: hidden;
+        height: 20px;
+        margin: 0 auto 10px auto; /* Center the container and add space under it */
+        position: relative; /* For absolute positioning of percentage text */
+        margin-bottom: 20px; /* Add space for the percentage text below */
+    }
+    
+    #progress-bar {
+        height: 100%;
+        width: 0%;
+        background-color: #4CAF50;
+        transition: width 0.4s ease;
+    }
+    
+    #progress-percentage {
+        display: none; /* Ensure it is not set to none */
+        text-align: center; /* Center the text */
+        margin-top: 20px; /* Adjust this value so the text appears just below the progress bar */
+        color: #ccc; /* Color may need to change based on the theme */
+        font-size: 1rem; /* Set an appropriate font size */
     }
 }
 
@@ -113,21 +162,34 @@ button:disabled {
 @media (max-width: 768px) {
     body {
         padding: 10px;
-        flex-direction: column; /* Ensure stacking is clean and vertical */
+        flex-direction: column;
+        /* Ensure stacking is clean and vertical */
     }
 
     h1 {
-        font-size: 1.5rem; /* Smaller font size for smaller screens */
+        font-size: 1.5rem;
+        /* Smaller font size for smaller screens */
     }
 
     button {
-        padding: 10px 20px; /* Smaller padding */
-        font-size: 14px; /* Smaller font for buttons */
-        margin: 10px 0; /* More space around buttons */
-        width: 100%; /* Full width buttons are easier to tap */
+        padding: 10px 20px;
+        /* Smaller padding */
+        font-size: 14px;
+        /* Smaller font for buttons */
+        margin: 10px 0;
+        /* More space around buttons */
+        width: 100%;
+        /* Full width buttons are easier to tap */
     }
 
-    #start-server, #stop-server, #backup-server {
+    #start-server,
+    #stop-server,
+    #backup-server,
+    #progress-container,
+    #progress-percentage {
         margin-bottom: 10px;
+    }
+    #progress-percentage {
+        color: white; /* White color text for dark mode */
     }
 }
