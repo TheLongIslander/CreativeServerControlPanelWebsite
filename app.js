@@ -1,10 +1,13 @@
 require('dotenv').config();
 const express = require('express');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const WebSocket = require('ws');  
+const recursive = require('recursive-readdir');
+let wss;
 
 const { getEasternTime, getFormattedDate, getEasternDateHour } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
@@ -126,37 +129,137 @@ app.post('/backup', authenticateJWT, async (req, res) => {
     setTimeout(() => performBackup(currentHour, now, wasServerRunning, res), 5)
   }
 });
+// Utility function to calculate directory size
+function calculateDirectorySize(directoryPath) {
+  return new Promise((resolve, reject) => {
+      // Define an array of patterns or filenames to ignore
+      const ignoreFiles = [
+          '.zsh_sessions', 
+          '.bash_history', 
+          '.zsh_history', 
+          // Include patterns to ignore any hidden files or specific directories if necessary
+          '.*', // Ignores all hidden files (files starting with a dot)
+          '**/node_modules/**' // Ignores all node_modules directories
+      ];
+
+      recursive(directoryPath, ignoreFiles, (err, files) => {
+          if (err) {
+              reject(err);
+          } else {
+              let totalSize = 0;
+              files.forEach(file => {
+                  try {
+                      totalSize += fs.statSync(file).size;
+                  } catch (err) {
+                      console.error(`Error accessing file ${file}: ${err}`);
+                  }
+              });
+              resolve(totalSize);
+          }
+      });
+  });
+}
 // Function to handle the backup process
 function performBackup(currentHour, now, wasServerRunning, res) {
   try {
-    const dateFolder = getFormattedDate();
-    const hourLabel = now.getHours() >= 12 ? `${(now.getHours() % 12) || 12} PM` : `${now.getHours()} AM`; // Correct 12-hour format with AM/PM
-    const backupPath = `${process.env.BACKUP_PATH}${dateFolder}/${hourLabel}`;
+    const dateFolder = getFormattedDate(now);
+    const hourLabel = now.getHours() >= 12 ? `${(now.getHours() % 12) || 12} PM` : `${now.getHours()} AM`;
+    const backupPath = `${process.env.BACKUP_PATH}/${dateFolder}/${hourLabel}`;
     fs.mkdirSync(backupPath, { recursive: true });
-    execSync(`cp -Ra ${process.env.MINECRAFT_SERVER_PATH}* "${backupPath}"`);
-    console.log(`Backup performed successfully at ${getEasternTime()}`);
+
+    // Call calculateDirectorySize and wait for the result before starting rsync
+    calculateDirectorySize(process.env.MINECRAFT_SERVER_PATH)
+    .then(totalSize => {
+      let totalTransferred = 0; // Initialize the total transferred bytes
+
+      const rsync = spawn('rsync', [
+        '-avh',
+        '--info=progress2',
+        '--out-format=%n %l %b', // Custom format: filename, total size, bytes transferred
+        '--exclude', '.zsh_sessions',
+        '--exclude', '.bash_history',
+        '--exclude', '.zsh_history',
+        `${process.env.MINECRAFT_SERVER_PATH}`,
+        `${backupPath}`
+      ]);
+
+
+      rsync.stdout.on('data', (data) => {
+        const progressData = data.toString();
+        console.log(progressData); // Log the raw data for debugging
+
+        // Match the custom output format for transferred bytes
+        const match = progressData.match(/[\w\.\-]+ (\d+) (\d+)/);
+
+        if (match) {
+          const fileSize = parseInt(match[1], 10);
+          const transferredBytes = parseInt(match[2], 10);
+
+          totalTransferred += transferredBytes;
+
+          // Calculate the overall progress
+          const progress = Math.min(Math.round((totalTransferred / totalSize) * 100), 100);
+          console.log(`Broadcasting progress: ${progress}%`);
+          broadcastProgress({ type: 'progress', value: progress });
+        }
+      });
+
+        rsync.stderr.on('data', (data) => {
+          console.error(`rsync stderr: ${data.toString()}`);
+        });
+
+        rsync.on('close', (code) => {
+          if (code === 0) {
+            console.log(`Backup performed successfully at ${getEasternTime()}`);
+            res.send('Backup performed successfully');
+            lastBackupHour = currentHour;
+            if (wasServerRunning) {
+              startServer();
+            }
+          } else {
+            console.error(`Backup failed with exit code: ${code}`);
+            res.status(500).send('Failed to perform backup');
+          }
+        });
+
+      }).catch(err => {
+        console.error(`Error calculating directory size: ${err}`);
+        res.status(500).send('Failed to calculate directory size for backup');
+      });
+
   } catch (error) {
     console.error(`Backup failed: ${error}`);
-    return res.status(500).send('Failed to perform backup');
+    res.status(500).send('Failed to perform backup');
   }
-
-  // Restart the server if it was originally running
-  if (wasServerRunning) {
-    exec(`sh ${process.env.START_COMMAND_PATH}`, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`Error starting the server: ${error}`);
-        return;
-      }
+}
+// Additional function to start the server if it was running before
+function startServer() {
+  exec(`sh ${process.env.START_COMMAND_PATH}`, (error) => {
+    if (error) {
+      console.error(`Error starting the server: ${error}`);
+    } else {
       serverRunning = true;
       console.log(`Server restarted after backup at ${getEasternTime()}`);
-    });
-  }
-
-  lastBackupHour = currentHour; // Update last backup hour
-  res.send('Backup performed successfully');
+    }
+  });
 }
-app.listen(port, () => {
+// Broadcasts progress data to all connected WebSocket clients
+function broadcastProgress(message) {
+  const data = JSON.stringify(message);
+  wss.clients.forEach(function each(client) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  });
+}
+const server = app.listen(port, () => {
   console.log(`Server listening at http://localhost:${port}`);
+  // Attach WebSocket server to the same HTTP server
+  wss = new WebSocket.Server({ server });
+
+  wss.on('connection', function connection(ws) {
+    console.log('Client connected to WebSocket.');
+  });
 });
 
 
