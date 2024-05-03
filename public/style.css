@@ -62,6 +62,13 @@ button {
     background-color: #05aeb4;
     /* Darker aqua */
 }
+#restart-server {
+    background-color: #ffcc00; /* Yellow */
+}
+
+#restart-server:hover {
+    background-color: #dca502; /* Darker yellow */
+}
 
 button:disabled {
     background-color: #cccccc;
@@ -70,6 +77,37 @@ button:disabled {
     /* Dark gray */
     cursor: not-allowed;
     box-shadow: none;
+}
+#progress-area {
+    width: 80%; /* Adjust the width of the progress area */
+    text-align: center; /* This will center the percentage text */
+    margin-top: 20px; /* Adjust this value to match the space you want */
+}
+
+#progress-container {
+    display: none; /* Hide the progress bar initially */
+    background-color: #ddd;
+    border-radius: 20px;
+    overflow: hidden;
+    height: 20px;
+    margin: 0 auto 10px auto; /* Center the container and add space under it */
+    position: relative; /* For absolute positioning of percentage text */
+    margin-bottom: 20px; /* Add space for the percentage text below */
+}
+
+#progress-bar {
+    height: 100%;
+    width: 0%;
+    background-color: #4CAF50;
+    transition: width 0.4s ease;
+}
+
+#progress-percentage {
+    display: none; /* Ensure it is not set to none */
+    text-align: center; /* Center the text */
+    margin-top: 20px; /* Adjust this value so the text appears just below the progress bar */
+    color: #333; /* Color may need to change based on the theme */
+    font-size: 1rem; /* Set an appropriate font size */
 }
 
 /* Dark mode styles */
@@ -124,38 +162,10 @@ button:disabled {
         background-color: #1D7F7E;
         /* Darker LightSeaGreen */
     }
-
-    #progress-area {
-        width: 80%; /* Adjust the width of the progress area */
-        text-align: center; /* This will center the percentage text */
-        margin-top: 20px; /* Adjust this value to match the space you want */
-    }
-    
-    #progress-container {
-        display: none; /* Hide the progress bar initially */
-        background-color: #ddd;
-        border-radius: 20px;
-        overflow: hidden;
-        height: 20px;
-        margin: 0 auto 10px auto; /* Center the container and add space under it */
-        position: relative; /* For absolute positioning of percentage text */
-        margin-bottom: 20px; /* Add space for the percentage text below */
-    }
-    
-    #progress-bar {
-        height: 100%;
-        width: 0%;
-        background-color: #4CAF50;
-        transition: width 0.4s ease;
-    }
-    
     #progress-percentage {
-        display: none; /* Ensure it is not set to none */
-        text-align: center; /* Center the text */
-        margin-top: 20px; /* Adjust this value so the text appears just below the progress bar */
-        color: #ccc; /* Color may need to change based on the theme */
-        font-size: 1rem; /* Set an appropriate font size */
+        color: white; /* White color text for dark mode */
     }
+
 }
 
 /* Responsive adjustments for screens less than 768px wide */
@@ -189,7 +199,5 @@ button:disabled {
     #progress-percentage {
         margin-bottom: 10px;
     }
-    #progress-percentage {
-        color: white; /* White color text for dark mode */
-    }
+
 }
