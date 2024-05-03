@@ -16,18 +16,22 @@ if (!localStorage.getItem('token')) {
             const startButton = document.getElementById('start-server');
             const stopButton = document.getElementById('stop-server');
             const backupButton = document.getElementById('backup-server');
-  
-            // Update the disabled status based on server running state and backup state
-            startButton.disabled = isBackingUp || (!isBackingUp && data.running);
-            stopButton.disabled = isBackingUp || (!isBackingUp && !data.running);
+            const restartButton = document.getElementById('restart-server'); // Add reference to restart button
+
+            // Server must be running to stop or restart, and should not be backing up or restarting
+            const serverOperable = !isBackingUp && data.running;
+
+            startButton.disabled = isBackingUp || data.running;
+            stopButton.disabled = isBackingUp || !data.running;
             backupButton.disabled = isBackingUp;
-  
+            restartButton.disabled = isBackingUp || !data.running; // Disable if server is off or backup is in progress
+
             console.log(`Server running: ${data.running}, Is backing up: ${isBackingUp}`);
         })
         .catch(err => {
             console.error('Error checking server status: ', err);
         });
-  }
+}
   function setupWebSocket() {
     ws = new WebSocket('wss://' + window.location.host);
 
@@ -164,3 +168,36 @@ function setBackupState(isBacking) {
       setBackupState(false); // Ensure state is reset on error
   });
   });
+  document.getElementById('restart-server').addEventListener('click', function() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        return alert('You are not authenticated.');
+    }
+
+    // Disable all buttons to prevent multiple operations during restart
+    document.getElementById('start-server').disabled = true;
+    document.getElementById('stop-server').disabled = true;
+    document.getElementById('backup-server').disabled = true;
+    document.getElementById('restart-server').disabled = true;
+
+    fetch('/restart', {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    })
+    .then(response => response.text())
+    .then(text => {
+        alert(text);
+        // Wait for 3 seconds before re-enabling the buttons
+        setTimeout(() => {
+            checkServerStatus(); // Re-enable buttons based on server status
+        }, 3000 + 3000); // Additional 3 seconds added to the existing delay
+    })
+    .catch(err => {
+        alert('Error restarting server: ' + err);
+        setTimeout(() => {
+            checkServerStatus(); // Re-enable buttons based on server status
+        }, 3000 + 3000); // Additional 3 seconds added to the existing delay
+    });
+});
