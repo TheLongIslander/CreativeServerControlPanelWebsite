@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
-const WebSocket = require('ws');  
+const WebSocket = require('ws');  // Import the WebSocket library
 const recursive = require('recursive-readdir');
 let wss;
 
@@ -89,6 +89,29 @@ app.post('/stop', authenticateJWT, (req, res) => {
     console.log(`Server stop command executed at ${getEasternTime()}`);
   });
 });
+app.post('/restart', authenticateJWT, (req, res) => {
+  if (!serverRunning) {
+      res.status(400).send('Server is not currently running.');
+      return;
+  }
+  // Sends the "stop" command to the Minecraft server running in a screen session
+  exec('screen -S MinecraftSession -p 0 -X stuff "stop$(printf "\\r")"', (error, stdout, stderr) => {
+      if (error) {
+          console.error(`exec error: ${error}`);
+          res.status(500).send('Failed to stop the server');
+          return;
+      }
+
+      console.log(`Server stop command executed at ${getEasternTime()}`);
+      serverRunning = false; // Update the server running status
+
+      // Wait for 3 seconds before starting the server again
+      setTimeout(() => {
+          startServer();
+          res.send('Server is being restarted'); // Inform the client that the restart process has been initiated
+      }, 3000);
+  });
+});
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
@@ -152,6 +175,7 @@ function calculateDirectorySize(directoryPath) {
                       totalSize += fs.statSync(file).size;
                   } catch (err) {
                       console.error(`Error accessing file ${file}: ${err}`);
+                      // Optionally handle errors, e.g., permission issues or file not found, without throwing
                   }
               });
               resolve(totalSize);
@@ -259,6 +283,8 @@ const server = app.listen(port, () => {
 
   wss.on('connection', function connection(ws) {
     console.log('Client connected to WebSocket.');
+
+    // Add any message handlers or other WebSocket-related code here
   });
 });
 
