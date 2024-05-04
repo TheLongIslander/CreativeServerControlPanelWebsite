@@ -10,7 +10,7 @@ const recursive = require('recursive-readdir');
 const sqlite3 = require('sqlite3').verbose();
 let wss;
 
-const { getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens } = require('./utils');  // Adjust the path as necessary based on your file structure
+const { getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens,logServerAction } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
 const port = 8087;
 const users = {
@@ -94,6 +94,7 @@ app.post('/start', authenticateJWT, (req, res) => {
   serverRunning = true; // Set to true when server starts
   res.send('Server start command executed');
   console.log(`Server start command executed at ${getEasternTime()}`);
+  logServerAction('Server Started');
 });
 
 // Stop the Minecraft server
@@ -107,6 +108,7 @@ app.post('/stop', authenticateJWT, (req, res) => {
     serverRunning = false; // Set to false when server stops
     res.send('Server stop command issued successfully');
     console.log(`Server stop command executed at ${getEasternTime()}`);
+    logServerAction('Server Stopped');
   });
 });
 app.post('/restart', authenticateJWT, (req, res) => {
@@ -129,6 +131,7 @@ app.post('/restart', authenticateJWT, (req, res) => {
       setTimeout(() => {
           startServer();
           res.send('Server is being restarted'); // Inform the client that the restart process has been initiated
+          logServerAction('Server Restarted'); 
       }, 3000);
   });
 });
@@ -144,6 +147,7 @@ app.post('/login', async (req, res) => {
       // Create and assign a token
       const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
       res.json({ message: "Authentication successful!", token });
+      logServerAction('Logged In'); 
     } else {
       res.status(401).send("Invalid Credentials");
     }
@@ -159,6 +163,7 @@ app.post('/logout', authenticateJWT, (req, res) => {
       return console.error(err.message);
     }
     console.log('Logged out');
+    logServerAction('Logged Out'); 
     cleanupExpiredTokens();
     res.send("Logged out");
   });
@@ -177,6 +182,7 @@ app.post('/backup', authenticateJWT, async (req, res) => {
     execSync('screen -S MinecraftSession -p 0 -X stuff "stop$(printf "\\r")"');
     serverRunning = false;
     console.log(`Server stopped for backup at ${getEasternTime()}`);
+    logServerAction('Server Stopped for Backup'); 
     setTimeout(() => performBackup(currentHour, now, wasServerRunning, res), 3000)
   }
   else {
@@ -266,6 +272,7 @@ function performBackup(currentHour, now, wasServerRunning, res) {
         rsync.on('close', (code) => {
           if (code === 0) {
             console.log(`Backup performed successfully at ${getEasternTime()}`);
+            logServerAction('Server Backed Up'); 
             res.send('Backup performed successfully');
             lastBackupHour = currentHour;
             if (wasServerRunning) {
@@ -295,6 +302,7 @@ function startServer() {
     } else {
       serverRunning = true;
       console.log(`Server restarted after backup at ${getEasternTime()}`);
+      logServerAction('Server Started'); 
     }
   });
 }
