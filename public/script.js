@@ -81,6 +81,7 @@ function updateBackupProgress(progress) {
     if (progress == 100) {
         setTimeout(() => {
             progressContainer.style.display = 'none';
+            progressPercentage.style.display = 'none';
         }, 2000); // Or however long you want the bar to remain visible after reaching 100%
     }
 }
@@ -99,79 +100,117 @@ function setBackupState(isBacking) {
         progressBar.textContent = '0%'; // Reset the text
     }
 }
-  
+function handleFetchResponse(response) {
+    if (response.status === 403) {
+        alert('Session has expired, please log in again.');
+        localStorage.removeItem('token'); // Clear the token as it's no longer valid
+        window.location.href = '/'; // Redirect to login
+        return null; // Stop further processing
+    } else if (response.status === 429) {
+        // Handle backup frequency error specifically
+        alert('A backup has already been performed this hour.');
+        return null; // Stop further processing and do not throw a session expired message
+    }
+    return response; // Continue processing for other status codes
+}
   document.getElementById('start-server').addEventListener('click', function() {
-  const token = localStorage.getItem('token');
-  if (!token) {
-      return alert('You are not authenticated.');
-  }
-  
-  fetch('/start', {
-      method: 'POST',
-      headers: {
-          'Authorization': 'Bearer ' + token
-      }
-  })
-  .then(response => response.text())
-  .then(text => {
-      alert(text);
-      checkServerStatus();
-  })
-  .catch(err => {
-      alert('Error starting server: ' + err);
-      checkServerStatus();
-  });
-  });
-  document.getElementById('stop-server').addEventListener('click', function() {
-  const token = localStorage.getItem('token');
-  if (!token) {
-      return alert('You are not authenticated.');
-  }
-  
-  fetch('/stop', {
-      method: 'POST',
-      headers: {
-          'Authorization': 'Bearer ' + token
-      }
-  })
-  .then(response => response.text())
-  .then(text => {
-      alert(text);
-      checkServerStatus();
-  })
-  .catch(err => {
-      alert('Error stopping server: ' + err);
-      checkServerStatus();
-  });
-  });
-  document.getElementById('backup-server').addEventListener('click', function() {
-  const token = localStorage.getItem('token');
-  if (!token) {
-      return alert('You are not authenticated.');
-  }
-  
-  setBackupState(true); // Indicate backup is starting
-  
-  fetch('/backup', {
-      method: 'POST',
-      headers: {
-          'Authorization': 'Bearer ' + token
-      }
-  })
-  .then(response => response.text())
-  .then(text => {
-      alert(text);
-      setBackupState(false); // Indicate backup has finished
-  })
-  .catch(err => {
-      alert('Error performing backup: ' + err);
-      setBackupState(false); // Ensure state is reset on error
-  });
-  });
-  document.getElementById('restart-server').addEventListener('click', function() {
     const token = localStorage.getItem('token');
     if (!token) {
-        return alert('You are not authenticated.');
+        alert('You are not authenticated.');
+        window.location.href = '/';
+        return;
+    }
+
+    fetch('/start', {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    })
+    .then(handleFetchResponse)
+    .then(response => response ? response.text() : null)
+    .then(text => {
+        if (text) {
+            alert(text);
+            checkServerStatus();
+        }
+    })
+    .catch(err => {
+        console.error('Error starting server:', err);
+        alert('Error starting server.');
+    });
+});
+document.getElementById('stop-server').addEventListener('click', function() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        alert('You are not authenticated.');
+        window.location.href = '/';
+        return;
+    }
+
+    fetch('/stop', {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    })
+    .then(handleFetchResponse)
+    .then(response => response ? response.text() : null)
+    .then(text => {
+        if (text) {
+            alert(text);
+            checkServerStatus();
+        }
+    })
+    .catch(err => {
+        console.error('Error stopping server:', err);
+        alert('Error stopping server.');
+    });
+});
+document.getElementById('backup-server').addEventListener('click', function() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        alert('You are not authenticated.');
+        window.location.href = '/';
+        return;
+    }
+    
+    setBackupState(true); // Indicate backup is starting
+    
+    fetch('/backup', {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    })
+    .then(handleFetchResponse)
+    .then(response => {
+        if (response && response.ok) {
+            return response.text();
+        } else {
+            return null; // This prevents the next .then from executing with a null response
+        }
+    })
+    .then(text => {
+        if (text) {
+            alert(text);
+        }
+        setBackupState(false); // Indicate backup has finished or failed
+        checkServerStatus(); // Check server status to update button states
+    })
+    .catch(err => {
+        console.error('Error performing backup:', err);
+        alert('Error performing backup.');
+        setBackupState(false); // Ensure state is reset on error
+        checkServerStatus(); // Ensure buttons are re-enabled even after an error
+    });
+});
+document.getElementById('restart-server').addEventListener('click', function() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        alert('You are not authenticated.');
+        window.location.href = '/';
+        return;
     }
 
     // Disable all buttons to prevent multiple operations during restart
@@ -186,18 +225,51 @@ function setBackupState(isBacking) {
             'Authorization': 'Bearer ' + token
         }
     })
-    .then(response => response.text())
+    .then(handleFetchResponse)
+    .then(response => response ? response.text() : null)
     .then(text => {
-        alert(text);
-        // Wait for 3 seconds before re-enabling the buttons
-        setTimeout(() => {
-            checkServerStatus(); // Re-enable buttons based on server status
-        }, 3000 + 3000); // Additional 3 seconds added to the existing delay
+        if (text) {
+            alert(text);
+            setTimeout(() => {
+                checkServerStatus(); // Re-enable buttons based on server status
+            }, 6000); // Additional 3 seconds added to the existing delay
+        }
     })
     .catch(err => {
-        alert('Error restarting server: ' + err);
+        console.error('Error restarting server:', err);
+        alert('Error restarting server.');
         setTimeout(() => {
             checkServerStatus(); // Re-enable buttons based on server status
-        }, 3000 + 3000); // Additional 3 seconds added to the existing delay
+        }, 6000); // Additional 3 seconds added to the existing delay
+    });
+});
+document.getElementById('logout-button').addEventListener('click', function() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        alert('No active session.');
+        window.location.href = '/';
+        return;
+    }
+
+    fetch('/logout', {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    })
+    .then(handleFetchResponse)
+    .then(response => {
+        if (response && response.ok) {
+            console.log('Logout successful on server.');
+        } else {
+            console.log('Server responded with an error during logout.');
+        }
+        localStorage.removeItem('token'); // Ensure the token is removed after server acknowledgment
+        window.location.href = '/'; // Redirect to the login page
+        alert('You have been logged out.');
+    })
+    .catch(error => {
+        console.error('Error during logout:', error);
+        alert('Error logging out.');
     });
 });
