@@ -9,6 +9,19 @@ const db = new sqlite3.Database('./token_blacklist.db', sqlite3.OPEN_READWRITE, 
     }
     console.log('Connected to the SQLite database.');
 });
+const logDB = new sqlite3.Database('./server_logs.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+        console.error('Error when creating the database', err);
+    } else {
+        console.log('Database created!');
+        // Create the table if it does not exist
+        logDB.run(`CREATE TABLE IF NOT EXISTS server_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )`);
+    }
+});
 
 function getEasternTime() {
     const date = new Date();
@@ -49,10 +62,20 @@ function cleanupExpiredTokens() {
         });
     });
 }
+function logServerAction(action) {
+    const timestamp = getEasternTime(); // This will fetch the time in Eastern Time
+    logDB.run('INSERT INTO server_logs (action, timestamp) VALUES (?, ?)', [action, timestamp], (err) => {
+        if (err) {
+            return console.error('Error logging to database:', err.message);
+        }
+        console.log(`Logged action "${action}" at ${timestamp}`);
+    });
+}
 
 module.exports = {
     getEasternTime,
     getFormattedDate,
     getEasternDateHour,
-    cleanupExpiredTokens
+    cleanupExpiredTokens,
+    logServerAction
 };
