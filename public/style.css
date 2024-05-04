@@ -10,14 +10,54 @@ body {
     height: 100vh;
     flex-direction: column;
     color: #333;
+    position: relative;
+}
+
+header {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+}
+
+.content {
+    width: 100%; /* Continues to span the full width */
+    max-width: 80%; /* Allows it to grow until 80% of the viewport width on larger screens */
+    margin: 0 auto; /* Keeps it centered */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 h1 {
     color: #333;
     font-size: 2rem;
     margin-bottom: 2rem;
+    text-align: center;
 }
 
+
+main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+#logout-button {
+    padding: 10px 20px;
+    background-color: #f44336; /* Red */
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+}
+
+#logout-button:hover {
+    background-color: #da190b; /* Darker red */
+}
+
+/* Button styling remains the same */
 button {
     border: none;
     border-radius: 20px;
@@ -79,7 +119,7 @@ button:disabled {
     box-shadow: none;
 }
 #progress-area {
-    width: 80%; /* Adjust the width of the progress area */
+    width: 100%; /* Adjust the width of the progress area */
     text-align: center; /* This will center the percentage text */
     margin-top: 20px; /* Adjust this value to match the space you want */
 }
@@ -93,6 +133,7 @@ button:disabled {
     margin: 0 auto 10px auto; /* Center the container and add space under it */
     position: relative; /* For absolute positioning of percentage text */
     margin-bottom: 20px; /* Add space for the percentage text below */
+    width: 100%;
 }
 
 #progress-bar {
@@ -173,23 +214,44 @@ button:disabled {
     body {
         padding: 10px;
         flex-direction: column;
-        /* Ensure stacking is clean and vertical */
+        align-items: center;
+    }
+    header {
+        top: 10px;
+        right: 10px; /* Adjust right positioning for better edge spacing on small screens */
+    }
+    #logout-button {
+        padding: 12px 24px; /* Slightly increased padding */
+        font-size: 16px; /* Appropriate font size for visibility */
+        line-height: 20px; /* Adjust line height to center text vertically */
+        display: flex; /* Use flexbox to center content */
+        justify-content: center; /* Center horizontally */
+        align-items: center; /* Center vertically */
     }
 
     h1 {
-        font-size: 1.5rem;
-        /* Smaller font size for smaller screens */
+        font-size: 1.5rem; /* Smaller font size for smaller screens */
+        margin-top: 20px; /* Provide some top margin for spacing */
     }
-
+    .header {
+        flex-direction: column;
+        align-items: center;
+    }
+    #logout-button {
+        padding: 6px 12px; /* Even smaller padding for a neater appearance */
+        font-size: 12px; /* Reduce font size further for space efficiency */
+    }
+    .content {
+        width: 100%; /* Use full width for layout adjustments */
+    }
     button {
-        padding: 10px 20px;
-        /* Smaller padding */
-        font-size: 14px;
-        /* Smaller font for buttons */
-        margin: 10px 0;
-        /* More space around buttons */
-        width: 100%;
-        /* Full width buttons are easier to tap */
+        width: 90%; /* Make buttons slightly smaller than full width for aesthetics */
+        margin: 10px 5%; /* Center buttons with automatic margins */
+        padding: 12px; /* Slightly smaller padding */
+        font-size: 14px; /* Adjust font size for readability */
+    }
+    #progress-area {
+        width: 90%; /* Adjust the progress area width to match button styling */
     }
 
     #start-server,
@@ -199,5 +261,5 @@ button:disabled {
     #progress-percentage {
         margin-bottom: 10px;
     }
-
+   
 }
