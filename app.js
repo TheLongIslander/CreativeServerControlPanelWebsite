@@ -131,14 +131,18 @@ app.post('/login', async (req, res) => {
     res.status(401).send("User does not exist");
   }
 });
-
+app.post('/logout', (req, res) => {
+  // This route can be used for server-side logging if needed
+  console.log('Logout requested');
+  res.status(200).send("Logged out"); // Just send a confirmation response
+});
 // Backup Minecraft server
 app.post('/backup', authenticateJWT, async (req, res) => {
   const now = new Date();
   const currentHour = getEasternDateHour();
 
   if (lastBackupHour === currentHour) {
-    return res.status(403).send('A backup has already been performed this hour.');
+    return res.status(429).send('A backup has already been performed this hour.');
   }
 
   let wasServerRunning = serverRunning; // Store the state of the server
