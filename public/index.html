@@ -3,23 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <title>Creative Server Control Panel</title>
-    <link rel="stylesheet" href="style.css"> <!-- Link to the stylesheet -->
+    <link rel="stylesheet" href="style.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1"> 
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
-    <h1>Creative Server Control Panel</h1>
-    <button id="start-server">Start Server</button>
-    <button id="restart-server">Restart Server</button>
-    <button id="stop-server">Stop Server</button>
-    <button id="backup-server">Backup Server</button> <!-- Backup button -->
-    <div id="progress-area">
-        <div id="progress-container">
-            <div id="progress-bar"></div>
+    <header>
+        <button id="logout-button">Logout</button>
+    </header>
+    <div class="content">
+        <h1>Creative Server Control Panel</h1>
+        <button id="start-server">Start Server</button>
+        <button id="restart-server">Restart Server</button>
+        <button id="stop-server">Stop Server</button>
+        <button id="backup-server">Backup Server</button>
+        <div id="progress-area">
+            <div id="progress-container">
+                <div id="progress-bar"></div>
+            </div>
+            <div id="progress-percentage">0%</div>
         </div>
-        <div id="progress-percentage">0%</div> <!-- This should be outside the progress container -->
     </div>
-
     <script src="script.js"></script>
 </body>
 </html>
