@@ -7,9 +7,10 @@ const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');  // Import the WebSocket library
 const recursive = require('recursive-readdir');
+const sqlite3 = require('sqlite3').verbose();
 let wss;
 
-const { getEasternTime, getFormattedDate, getEasternDateHour } = require('./utils');  // Adjust the path as necessary based on your file structure
+const { getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
 const port = 8087;
 const users = {
@@ -25,18 +26,37 @@ const authenticateJWT = (req, res, next) => {
   if (authHeader) {
     const token = authHeader.split(' ')[1];
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    db.get('SELECT token FROM blacklisted_tokens WHERE token = ?', [token], (err, row) => {
       if (err) {
-        return res.sendStatus(403);
+        return res.status(500).send('Error checking token');
+      }
+      if (row) {
+        return res.status(401).send('Token has been blacklisted');
       }
 
-      req.user = user;
-      next();
+      jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) {
+          return res.sendStatus(403);
+        }
+        req.user = user;
+        next();
+      });
     });
   } else {
     res.sendStatus(401);
   }
 };
+
+const db = new sqlite3.Database('./token_blacklist.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+  if (err) {
+    console.error(err.message);
+  }
+  db.run('CREATE TABLE IF NOT EXISTS blacklisted_tokens(token TEXT UNIQUE)', (err) => {
+    if (err) {
+      console.error(err.message);
+    }
+  });
+});
 
 
 
@@ -131,10 +151,17 @@ app.post('/login', async (req, res) => {
     res.status(401).send("User does not exist");
   }
 });
-app.post('/logout', (req, res) => {
-  // This route can be used for server-side logging if needed
-  console.log('Logout requested');
-  res.status(200).send("Logged out"); // Just send a confirmation response
+app.post('/logout', authenticateJWT, (req, res) => {
+  const token = req.headers.authorization.split(' ')[1];
+  db.run('INSERT INTO blacklisted_tokens(token) VALUES(?)', [token], function(err) {
+    if (err) {
+      res.status(500).send("Failed to blacklist token");
+      return console.error(err.message);
+    }
+    console.log('Logged out');
+    cleanupExpiredTokens();
+    res.send("Logged out");
+  });
 });
 // Backup Minecraft server
 app.post('/backup', authenticateJWT, async (req, res) => {
