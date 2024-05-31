@@ -344,33 +344,34 @@ app.get('/sftp/list', authenticateJWT, (req, res) => {
 
   const conn = new Client();
   conn.on('ready', () => {
-    console.log('Connected to SFTP server.');
-    conn.sftp((err, sftp) => {
-      if (err) {
-        console.error('SFTP session error:', err);
-        res.status(500).send('Failed to start SFTP session');
-        return;
-      }
+      conn.sftp((err, sftp) => {
+          if (err) {
+              console.error('SFTP session error:', err);
+              res.status(500).send('Failed to start SFTP session');
+              return;
+          }
 
-      sftp.readdir(dirPath, (err, list) => {
-        if (err) {
-          console.error('Directory read error:', err);
-          res.status(500).send('Failed to read directory');
-          return;
-        }
-        const filteredList = list.filter(item => !item.filename.startsWith('.'));
-        res.json(filteredList.map(item => ({
-          name: item.filename,
-          type: item.longname[0] === 'd' ? 'directory' : 'file',
-          size: item.attrs.size,
-          modified: item.attrs.mtime * 1000 // Convert to milliseconds
-        })));
-        conn.end();
+          sftp.readdir(dirPath, (err, list) => {
+              if (err) {
+                  console.error('Directory read error:', err);
+                  res.status(500).send('Failed to read directory');
+                  return;
+              }
+              const filteredList = list.filter(item => !item.filename.startsWith('.'));
+              // Sort the list by modification time (mtime)
+              filteredList.sort((a, b) => b.attrs.mtime - a.attrs.mtime);
+              res.json(filteredList.map(item => ({
+                  name: item.filename,
+                  type: item.longname[0] === 'd' ? 'directory' : 'file',
+                  size: item.attrs.size,
+                  modified: item.attrs.mtime * 1000 // Convert to milliseconds
+              })));
+              conn.end();
+          });
       });
-    });
   }).on('error', (err) => {
-    console.error('Connection error:', err);
-    res.status(500).send('Failed to connect to SFTP server');
+      console.error('Connection error:', err);
+      res.status(500).send('Failed to connect to SFTP server');
   }).connect(sftpConnectionDetails);
 });
 
