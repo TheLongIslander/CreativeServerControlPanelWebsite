@@ -5,7 +5,7 @@ document.addEventListener('DOMContentLoaded', function() {
     logoutButton.addEventListener('click', function() {
         logout();
     });
-    
+
     const pathInput = document.getElementById('path-input');
     pathInput.addEventListener('keypress', function(event) {
         if (event.key === 'Enter') {
@@ -32,7 +32,39 @@ document.addEventListener('DOMContentLoaded', function() {
     uploadButton.addEventListener('click', function() {
         triggerFileUpload();
     });
+
+    // Detect user activity
+    detectUserActivity();
 });
+
+let activityTimeout;
+let refreshInterval;
+
+function detectUserActivity() {
+    document.addEventListener('mousemove', resetActivityTimeout);
+    document.addEventListener('keypress', resetActivityTimeout);
+    document.addEventListener('click', resetActivityTimeout);
+    document.addEventListener('scroll', resetActivityTimeout);
+
+    resetActivityTimeout(); // Initialize activity detection
+}
+
+function resetActivityTimeout() {
+    clearTimeout(activityTimeout);
+    activityTimeout = setTimeout(setUserInactive, 300000); // 5 minutes of inactivity
+
+    if (!refreshInterval) {
+        refreshInterval = setInterval(() => {
+            const currentPath = document.getElementById('path-input').value;
+            fetchFiles(currentPath);
+        }, 1000); // Refresh every 1 minute
+    }
+}
+
+function setUserInactive() {
+    clearInterval(refreshInterval);
+    refreshInterval = null;
+}
 
 function triggerFileUpload() {
     document.getElementById('file-input').click();
@@ -62,54 +94,102 @@ function fetchFiles(path) {
     })
     .then(files => {
         const fileList = document.getElementById('file-list');
-        fileList.innerHTML = '';
-        files.forEach(file => {
-            const fileItem = document.createElement('li');
-
-            const fileName = document.createElement('span');
-            fileName.textContent = file.name;
-
-            if (file.type === 'directory') {
-                fileName.classList.add('directory');
-                fileName.onclick = () => openDirectory(path, file.name);
+        const existingItems = Array.from(fileList.children);
+        
+        // Remove items that are not in the new list
+        existingItems.forEach(item => {
+            const fileName = item.querySelector('span').textContent;
+            if (!files.some(file => file.name === fileName)) {
+                fileList.removeChild(item);
             }
+        });
+        
+        files.forEach(file => {
+            const existingItem = existingItems.find(item => item.querySelector('span').textContent === file.name);
+            
+            if (!existingItem) {
+                const fileItem = document.createElement('li');
+                fileItem.classList.add('directory-item');
 
-            const downloadForm = document.createElement('form');
-            downloadForm.method = 'POST';
-            downloadForm.action = '/download';
-            downloadForm.onsubmit = function() {
-                const tokenInput = document.createElement('input');
-                tokenInput.type = 'hidden';
-                tokenInput.name = 'token';
-                tokenInput.value = localStorage.getItem('token');
-                downloadForm.appendChild(tokenInput);
+                let fileIcon;
+                if (file.type === 'directory') {
+                    fileIcon = document.createElement('img');
+                    fileIcon.src = 'assets/folder-icon.png';
+                    fileIcon.alt = 'Folder';
+                    fileIcon.classList.add('folder-icon');
+                    fileIcon.onclick = () => openDirectory(path, file.name);
 
-                showLoadingSpinner(downloadForm);
+                    const fileName = document.createElement('span');
+                    fileName.classList.add('file-name'); // Ensure the class is applied here
+                    fileName.classList.add('directory');
+                    fileName.textContent = file.name;
+                    fileName.onclick = () => openDirectory(path, file.name);
 
-                // Set a timeout to hide the spinner and show the download button again
-                setTimeout(() => {
-                    hideLoadingSpinner(downloadForm);
-                }, 1000);
+                    fileItem.appendChild(fileIcon);
+                    fileItem.appendChild(fileName);
+                } else {
+                    const fileName = document.createElement('span');
+                    fileName.textContent = file.name;
 
-                return true;
-            };
+                    if (file.name.endsWith('.jar')) {
+                        fileIcon = document.createElement('img');
+                        fileIcon.src = 'assets/jar.png'; // Path to your JAR file icon
+                        fileIcon.alt = 'JAR File';
+                    } else if (file.name.endsWith('.gz')) {
+                        fileIcon = document.createElement('img');
+                        fileIcon.src = 'assets/gz.png'; // Path to your GZ file icon
+                        fileIcon.alt = 'GZ File';
+                    } else if (file.name.endsWith('.png')) {
+                        fileIcon = document.createElement('img');
+                        fileIcon.src = 'assets/png.png'; // Path to your PNG file icon
+                        fileIcon.alt = 'PNG File';
+                    } else {
+                        fileIcon = document.createElement('img');
+                        fileIcon.src = 'assets/file.png'; // Path to your default file icon
+                        fileIcon.alt = 'File';
+                    }
+                    fileIcon.classList.add('file-icon');
+                    fileItem.appendChild(fileIcon);
+                    fileName.classList.add('file-name'); // Ensure the class is applied here
+                    fileItem.appendChild(fileName);
+                }
 
-            const pathInput = document.createElement('input');
-            pathInput.type = 'hidden';
-            pathInput.name = 'path';
-            pathInput.value = path.endsWith('/') ? path + file.name : path + '/' + file.name;
+                const downloadForm = document.createElement('form');
+                downloadForm.method = 'POST';
+                downloadForm.action = '/download';
+                downloadForm.onsubmit = function() {
+                    const tokenInput = document.createElement('input');
+                    tokenInput.type = 'hidden';
+                    tokenInput.name = 'token';
+                    tokenInput.value = localStorage.getItem('token');
+                    downloadForm.appendChild(tokenInput);
 
-            const downloadButton = document.createElement('button');
-            downloadButton.type = 'submit';
-            downloadButton.classList.add('download-button');
-            downloadButton.textContent = 'Download';
+                    showLoadingSpinner(downloadForm);
 
-            downloadForm.appendChild(pathInput);
-            downloadForm.appendChild(downloadButton);
+                    // Set a timeout to hide the spinner and show the download button again
+                    setTimeout(() => {
+                        hideLoadingSpinner(downloadForm);
+                    }, 1000);
 
-            fileItem.appendChild(fileName);
-            fileItem.appendChild(downloadForm);
-            fileList.appendChild(fileItem);
+                    return true;
+                };
+
+                const pathInput = document.createElement('input');
+                pathInput.type = 'hidden';
+                pathInput.name = 'path';
+                pathInput.value = path.endsWith('/') ? path + file.name : path + '/' + file.name;
+
+                const downloadButton = document.createElement('button');
+                downloadButton.type = 'submit';
+                downloadButton.classList.add('download-button');
+                downloadButton.textContent = 'Download';
+
+                downloadForm.appendChild(pathInput);
+                downloadForm.appendChild(downloadButton);
+
+                fileItem.appendChild(downloadForm);
+                fileList.appendChild(fileItem);
+            }
         });
     })
     .catch(error => {
@@ -117,6 +197,7 @@ function fetchFiles(path) {
         alert('Error fetching files. Please try again.');
     });
 }
+
 
 function showLoadingSpinner(form) {
     const downloadButton = form.querySelector('.download-button');
@@ -327,4 +408,8 @@ function generateUniqueId() {
             v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
     });
+}
+
+function goToRoot() {
+    fetchFiles('/');
 }
