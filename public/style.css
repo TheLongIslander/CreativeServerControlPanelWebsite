@@ -7,16 +7,17 @@ body {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    height: 100vh; /* Ensures the body takes the full height of the viewport */
     flex-direction: column;
     color: #333;
     position: relative;
+    overflow: hidden; /* Prevents scrolling */
 }
 
 header {
     position: absolute;
-    top: 20px;
-    right: 20px;
+    width: 100%; /* Ensure the header spans the full width */
+    top: 20px; /* Align the header at the top */
 }
 
 .content {
@@ -35,7 +36,6 @@ h1 {
     text-align: center;
 }
 
-
 main {
     flex: 1;
     display: flex;
@@ -45,6 +45,9 @@ main {
 }
 
 #logout-button {
+    position: absolute;
+    top: 0; /* Adjust as needed */
+    right: 20px;
     padding: 10px 20px;
     background-color: #f44336; /* Red */
     color: white;
@@ -55,6 +58,21 @@ main {
 
 #logout-button:hover {
     background-color: #da190b; /* Darker red */
+}
+
+#sftp-button {
+    position: absolute;
+    top: 0; /* Adjust as needed */
+    left: 20px;
+    background-color: #008CBA; /* Blue */
+    border: none; /* Remove border */
+    color: white; /* Text color */
+    cursor: pointer; /* Pointer cursor */
+    border-radius: 20px; /* Match border-radius with the logout button */
+}
+
+#sftp-button:hover {
+    background-color: #005f73; /* Darker blue */
 }
 
 /* Button styling remains the same */
@@ -74,34 +92,29 @@ button {
 }
 
 #start-server {
-    background-color: #4CAF50;
-    /* Green */
+    background-color: #4CAF50; /* Green */
 }
 
 #start-server:hover {
-    background-color: #45a049;
-    /* Darker green */
+    background-color: #45a049; /* Darker green */
 }
 
 #stop-server {
-    background-color: #f44336;
-    /* Red */
+    background-color: #f44336; /* Red */
 }
 
 #stop-server:hover {
-    background-color: #da190b;
-    /* Darker red */
+    background-color: #da190b; /* Darker red */
 }
 
 #backup-server {
-    background-color: #04d6d6;
-    /* Aqua */
+    background-color: #04d6d6; /* Aqua */
 }
 
 #backup-server:hover {
-    background-color: #05aeb4;
-    /* Darker aqua */
+    background-color: #05aeb4; /* Darker aqua */
 }
+
 #restart-server {
     background-color: #ffcc00; /* Yellow */
 }
@@ -111,13 +124,12 @@ button {
 }
 
 button:disabled {
-    background-color: #cccccc;
-    /* Light gray */
-    color: #666666;
-    /* Dark gray */
+    background-color: #cccccc; /* Light gray */
+    color: #666666; /* Dark gray */
     cursor: not-allowed;
     box-shadow: none;
 }
+
 #progress-area {
     width: 100%; /* Adjust the width of the progress area */
     text-align: center; /* This will center the percentage text */
@@ -169,46 +181,40 @@ button:disabled {
     }
 
     #start-server {
-        background-color: #198754;
-        /* Bootstrap green */
+        background-color: #198754; /* Bootstrap green */
     }
 
     #start-server:hover {
-        background-color: #146c43;
-        /* Darker green */
+        background-color: #146c43; /* Darker green */
     }
 
     #stop-server {
-        background-color: #dc3545;
-        /* Bootstrap red */
+        background-color: #dc3545; /* Bootstrap red */
     }
 
     #stop-server:hover {
-        background-color: #bb2d3b;
-        /* Darker red */
+        background-color: #bb2d3b; /* Darker red */
     }
 
     button:disabled {
-        background-color: #444;
-        /* Darker gray for disabled buttons */
+        background-color: #444; /* Darker gray for disabled buttons */
         color: #666;
     }
 
     #backup-server {
-        background-color: #20B2AA;
-        /* LightSeaGreen for contrast in dark mode */
+        background-color: #20B2AA; /* LightSeaGreen for contrast in dark mode */
     }
 
     #backup-server:hover {
-        background-color: #1D7F7E;
-        /* Darker LightSeaGreen */
+        background-color: #1D7F7E; /* Darker LightSeaGreen */
     }
+
     #progress-percentage {
         color: white; /* White color text for dark mode */
     }
-
 }
 
+/* Responsive adjustments for screens less than 768px wide */
 /* Responsive adjustments for screens less than 768px wide */
 @media (max-width: 768px) {
     body {
@@ -216,40 +222,27 @@ button:disabled {
         flex-direction: column;
         align-items: center;
     }
+
     header {
         top: 10px;
-        right: 10px; /* Adjust right positioning for better edge spacing on small screens */
-    }
-    #logout-button {
-        padding: 12px 24px; /* Slightly increased padding */
-        font-size: 16px; /* Appropriate font size for visibility */
-        line-height: 20px; /* Adjust line height to center text vertically */
-        display: flex; /* Use flexbox to center content */
-        justify-content: center; /* Center horizontally */
-        align-items: center; /* Center vertically */
     }
 
     h1 {
         font-size: 1.5rem; /* Smaller font size for smaller screens */
         margin-top: 20px; /* Provide some top margin for spacing */
     }
-    .header {
-        flex-direction: column;
-        align-items: center;
-    }
-    #logout-button {
-        padding: 6px 12px; /* Even smaller padding for a neater appearance */
-        font-size: 12px; /* Reduce font size further for space efficiency */
-    }
+
     .content {
         width: 100%; /* Use full width for layout adjustments */
     }
+
     button {
         width: 90%; /* Make buttons slightly smaller than full width for aesthetics */
         margin: 10px 5%; /* Center buttons with automatic margins */
         padding: 12px; /* Slightly smaller padding */
         font-size: 14px; /* Adjust font size for readability */
     }
+
     #progress-area {
         width: 90%; /* Adjust the progress area width to match button styling */
     }
@@ -261,5 +254,16 @@ button:disabled {
     #progress-percentage {
         margin-bottom: 10px;
     }
-   
+
+    #logout-button {
+        padding: 6px 12px; /* Smaller padding */
+        font-size: 12px; /* Smaller font size */
+        width: auto; /* Prevent full-width on small screens */
+    }
+
+    #sftp-button {
+        padding: 6px 12px; /* Smaller padding */
+        font-size: 12px; /* Smaller font size */
+        width: auto; /* Prevent full-width on small screens */
+    }
 }
