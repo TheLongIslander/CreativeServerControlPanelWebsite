@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>The Creative Server Backup File Browser</title>
+    <link rel="stylesheet" href="styleSFTP.css">
+    <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <header>
+        <input type="text" id="path-input" placeholder="Enter path here..." value="/">
+        <button onclick="changeDirectory()">Go</button>
+        <button id="up-directory-button" onclick="upDirectory()">Up Directory</button>
+        <button id="logout-button">Logout</button>
+        <button onclick="location.href='index.html'">Control Panel</button>
+    </header>
+    <div class="content">
+        <h1>The Creative Server Backup File Browser</h1>
+        <ul id="file-list"></ul>
+    </div>
+    <div class="upload-section">
+        <form id="upload-form" enctype="multipart/form-data">
+            <input type="file" id="file-input" name="file" webkitdirectory style="display:none;" multiple>
+            <button type="button" id="upload-button">Upload</button>
+            <div id="progress-container" style="display:none;">
+                <progress id="upload-progress" value="0" max="100" style="width: 80%;"></progress>
+                <div id="upload-percentage" style="text-align:center; margin-top:5px;"></div>
+            </div>
+        </form>
+    </div>
+    <div id="loading-spinner" class="spinner" style="display:none;"></div>
+    <script src="sftp.js"></script>
+</body>
+</html>
