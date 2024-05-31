@@ -22,6 +22,25 @@ const logDB = new sqlite3.Database('./server_logs.db', sqlite3.OPEN_READWRITE | 
         )`);
     }
 });
+const activityDb = new sqlite3.Database('./sftp_activity_log.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+      console.error(err.message);
+    }
+    activityDb.run(`
+      CREATE TABLE IF NOT EXISTS sftp_activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        action TEXT,
+        file_path TEXT,
+        timestamp TEXT,
+        ip_address TEXT
+      )
+    `, (err) => {
+      if (err) {
+        console.error(err.message);
+      }
+    });
+  });
 
 function getEasternTime() {
     const date = new Date();
@@ -71,11 +90,25 @@ function logServerAction(action) {
         console.log(`Logged action "${action}" at ${timestamp}`);
     });
 }
+function logSFTPServerAction(username, action, filePath, ipAddress) {
+    const timestamp = getEasternTime(); // Fetch the time in Eastern Time
+    console.log(`Attempting to log action: ${action} by ${username} on ${filePath} at ${timestamp} from IP ${ipAddress}`); // Debug log
+    activityDb.run(`
+        INSERT INTO sftp_activity_log (username, action, file_path, timestamp, ip_address)
+        VALUES (?, ?, ?, ?, ?)
+    `, [username, action, filePath, timestamp, ipAddress], (err) => {
+        if (err) {
+            return console.error('Error logging to database:', err.message);
+        }
+        console.log(`Logged SFTP action "${action}" by ${username} on ${filePath} at ${timestamp} from IP ${ipAddress}`);
+    });
+}
 
 module.exports = {
     getEasternTime,
     getFormattedDate,
     getEasternDateHour,
     cleanupExpiredTokens,
-    logServerAction
+    logServerAction,
+    logSFTPServerAction
 };
