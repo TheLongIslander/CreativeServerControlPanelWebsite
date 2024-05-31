@@ -12,11 +12,11 @@
         <input type="text" id="path-input" placeholder="Enter path here..." value="/">
         <button onclick="changeDirectory()">Go</button>
         <button id="up-directory-button" onclick="upDirectory()">Up Directory</button>
+        <button id="control-panel" onclick="location.href='index.html'">Control Panel</button>
         <button id="logout-button">Logout</button>
-        <button onclick="location.href='index.html'">Control Panel</button>
     </header>
     <div class="content">
-        <h1>The Creative Server Backup File Browser</h1>
+        <h1 onclick="goToRoot()">The Creative Server Backup File Browser</h1>
         <ul id="file-list"></ul>
     </div>
     <div class="upload-section">
