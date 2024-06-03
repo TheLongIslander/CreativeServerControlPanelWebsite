@@ -36,8 +36,8 @@ Prerequisites
 Installation Steps
 
 1. Clone the repository:
-    git clone https://github.com/your-repo/minecraft-control-panel.git
-    cd minecraft-control-panel
+    git clone https://github.com/TheLongIslander/CreativeServerControlPanelWebsite.git
+    cd CreativeServerControlPanelWebsite
 
 2. Install dependencies:
     npm install
