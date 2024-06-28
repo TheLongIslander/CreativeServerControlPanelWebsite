@@ -348,7 +348,6 @@ function uploadFiles() {
         formData.append('files', file, file.webkitRelativePath || file.name);
     });
 
-    formData.append('token', token);
     formData.append('path', currentPath);
 
     // Hide the upload button and show the progress bar
@@ -363,6 +362,7 @@ function uploadFiles() {
     xhr.open('POST', '/upload', true);
     xhr.setRequestHeader('Authorization', 'Bearer ' + token);
 
+    // Monitor the upload progress
     xhr.upload.onprogress = function(event) {
         if (event.lengthComputable) {
             const percentComplete = (event.loaded / event.total) * 100;
@@ -374,6 +374,7 @@ function uploadFiles() {
         }
     };
 
+    // Handle the response after upload completion
     xhr.onload = function() {
         if (xhr.status === 200) {
             alert('Upload successful!');
@@ -389,6 +390,7 @@ function uploadFiles() {
         uploadButton.style.display = 'block';
     };
 
+    // Handle errors during upload
     xhr.onerror = function() {
         alert('Upload failed: ' + xhr.statusText);
 
@@ -401,6 +403,8 @@ function uploadFiles() {
 
     xhr.send(formData);
 }
+
+
 
 function generateUniqueId() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
