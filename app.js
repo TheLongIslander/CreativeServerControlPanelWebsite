@@ -83,14 +83,20 @@ app.get('/', (req, res) => {
 app.use(express.static('public')); // Serve static files from 'public' directory
 // Serve static files from 'assets' directory
 // Middleware to parse URL-encoded bodies (as sent by HTML forms)
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '50gb' }));
 app.use('/assets', express.static('assets'));
-app.use(express.json()); // Parse JSON bodies
+app.use(express.json({ limit: '50gb' })); // Parse JSON bodies
 app.use(fileUpload({
   useTempFiles: true,
-  tempFileDir: process.env.TMP_UPLOAD_SERVER_PATH  // Adjust this to your preferred temporary directory
+  tempFileDir: process.env.TMP_UPLOAD_SERVER_PATH,  // Adjust this to your preferred temporary directory
+  limits: { fileSize: 50 * 1024 * 1024 * 1024 }  // Set the limit to 2GB
 }));
-
+app.use((err, req, res, next) => {
+  if (err && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).send('File size exceeds the 50GB limit. Please upload a smaller file.');
+  }
+  next(err);
+});
 let serverRunning = false; // Variable to track the server state
 let lastBackupHour = null;
 app.get('/status', (req, res) => {
@@ -559,17 +565,6 @@ app.post('/upload', authenticateJWT, (req, res) => {
             });
           });
 
-          // Clean up the temporary file
-          fs.unlink(localFilePath, (err) => {
-            if (err) console.error('Error deleting temp file:', err);
-            else console.log('Temp file deleted:', localFilePath);
-          });
-
-          // Log the upload activity
-          const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-          console.log('IP Address:', ipAddress); // Debug logging
-          logSFTPServerAction(req.user.username, 'upload', remoteFilePath, ipAddress);
-
           // If the file is a ZIP file, unzip it into a new directory
           if (path.extname(file.name) === '.zip') {
             const baseName = path.basename(file.name, '.zip');
@@ -581,7 +576,7 @@ app.post('/upload', authenticateJWT, (req, res) => {
             await ensureDirectoryExists(sftp, newDir);
             await uploadDirectory(sftp, tempDir, newDir);
             fs.rmdirSync(tempDir, { recursive: true });
-            // Remove the ZIP file after extraction
+            // Remove the ZIP file after extraction and upload
             await new Promise((resolve, reject) => {
               sftp.unlink(remoteFilePath, (err) => {
                 if (err) reject(err);
@@ -590,6 +585,17 @@ app.post('/upload', authenticateJWT, (req, res) => {
             });
             console.log(`Deleted ZIP file: ${remoteFilePath}`);
           }
+
+          // Clean up the temporary file after all operations are completed
+          fs.unlink(localFilePath, (err) => {
+            if (err) console.error('Error deleting temp file:', err);
+            else console.log('Temp file deleted:', localFilePath);
+          });
+
+          // Log the upload activity
+          const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+          console.log('IP Address:', ipAddress); // Debug logging
+          logSFTPServerAction(req.user.username, 'upload', remoteFilePath, ipAddress);
         }
 
         res.send('Files uploaded successfully');
@@ -602,6 +608,7 @@ app.post('/upload', authenticateJWT, (req, res) => {
     });
   }).connect(sftpConnectionDetails);
 });
+
 
 async function getUniqueFilePath(sftp, remoteFilePath) {
   let baseName = path.basename(remoteFilePath, path.extname(remoteFilePath));
