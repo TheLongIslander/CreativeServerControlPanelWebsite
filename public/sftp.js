@@ -143,7 +143,12 @@ function fetchFiles(path) {
                         fileIcon = document.createElement('img');
                         fileIcon.src = 'assets/png.png'; // Path to your PNG file icon
                         fileIcon.alt = 'PNG File';
-                    } else {
+                    } 
+                    else if (file.name.endsWith('.zip')){
+                        fileIcon = document.createElement('img');
+                        fileIcon.src = 'assets/zip-icon.png'; // Path to your ZIP file icon
+                        fileIcon.alt = 'ZIP File';
+                    }else {
                         fileIcon = document.createElement('img');
                         fileIcon.src = 'assets/file.png'; // Path to your default file icon
                         fileIcon.alt = 'File';
@@ -203,22 +208,40 @@ function showLoadingSpinner(form) {
     const downloadButton = form.querySelector('.download-button');
     downloadButton.style.display = 'none';
 
+    // Create spinner
     const spinner = document.createElement('div');
     spinner.classList.add('spinner');
+    
+    // Create the loading message
+    const loadingMessage = document.createElement('div');
+    loadingMessage.classList.add('loading-message');
+    loadingMessage.textContent = 'This may take a minute! Please wait till the download starts!';
+
+    // Append spinner and message to the form
     form.appendChild(spinner);
+    form.appendChild(loadingMessage);
 }
+
 
 function hideLoadingSpinner() {
     const spinners = document.querySelectorAll('.spinner');
     spinners.forEach(spinner => {
         const form = spinner.parentElement;
         spinner.remove();
+
+        // Remove the loading message as well
+        const loadingMessage = form.querySelector('.loading-message');
+        if (loadingMessage) {
+            loadingMessage.remove();
+        }
+
         const downloadButton = form.querySelector('.download-button');
         if (downloadButton) {
             downloadButton.style.display = 'inline-block';
         }
     });
 }
+
 
 window.addEventListener('message', function(event) {
     if (event.data === 'hideLoadingSpinner') {
@@ -358,16 +381,27 @@ function uploadFiles() {
     uploadButton.style.display = 'none';
     progressContainer.style.display = 'block';
 
+    // Set the progress bar to 100% by default and show "Uploading..."
+    progressBar.value = 100;
+    uploadPercentage.textContent = 'Uploading...';  // Default text
+
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/upload', true);
     xhr.setRequestHeader('Authorization', 'Bearer ' + token);
 
+    let progressDetected = false;
+
     // Monitor the upload progress
     xhr.upload.onprogress = function(event) {
         if (event.lengthComputable) {
+            progressDetected = true;
             const percentComplete = (event.loaded / event.total) * 100;
-            progressBar.value = percentComplete;
-            uploadPercentage.textContent = `${Math.round(percentComplete)}%`;
+
+            if (percentComplete >= 1) {
+                progressBar.value = percentComplete;  // Update the progress bar with actual progress
+                uploadPercentage.textContent = `${Math.round(percentComplete)}%`;  // Update the text
+            }
+
             if (percentComplete === 100) {
                 uploadPercentage.textContent = 'Processing...';
             }
@@ -401,8 +435,22 @@ function uploadFiles() {
         uploadButton.style.display = 'block';
     };
 
+    // If no progress is detected after a short delay, keep the bar full and show "Uploading..."
+    setTimeout(() => {
+        if (!progressDetected) {
+            progressBar.value = 100;  // Keep the bar full
+            uploadPercentage.textContent = 'Uploading...';  // Keep "Uploading..." if no progress events fired
+        }
+    }, 500);  // Adjust this delay as necessary
+
     xhr.send(formData);
 }
+
+
+
+
+
+
 
 
 
