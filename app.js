@@ -524,88 +524,91 @@ app.post('/upload', authenticateJWT, (req, res) => {
 
   const conn = new Client();
   conn.on('ready', () => {
-    conn.sftp(async (err, sftp) => {
-      if (err) {
-        console.error('SFTP connection error:', err);
-        res.status(500).send('SFTP connection error: ' + err.message);
-        return;
-      }
-
-      try {
-        if (!Array.isArray(files)) {
-          files = [files];
-        }
-
-        for (const file of files) {
-          let localFilePath = file.tempFilePath || file.path;
-          console.log('Processing file:', file.name);
-          console.log('Local file path:', localFilePath);
-
-          if (!localFilePath) {
-            throw new Error('Local file path is undefined for file: ' + file.name);
+      conn.sftp(async (err, sftp) => {
+          if (err) {
+              console.error('SFTP connection error:', err);
+              res.status(500).send('SFTP connection error: ' + err.message);
+              return;
           }
 
-          let relativeFilePath = file.name;
-          let remoteFilePath = path.join(destinationPath, relativeFilePath);
+          try {
+              if (!Array.isArray(files)) {
+                  files = [files];
+              }
 
-          // Ensure the remote directory exists
-          const remoteDir = path.dirname(remoteFilePath);
-          await ensureDirectoryExists(sftp, remoteDir);
+              for (const file of files) {
+                  let localFilePath = file.tempFilePath || file.path;
+                  console.log('Processing file:', file.name);
+                  console.log('Local file path:', localFilePath);
 
-          // Check if the file exists and modify the file name if necessary
-          remoteFilePath = await getUniqueFilePath(sftp, remoteFilePath);
+                  if (!localFilePath) {
+                      throw new Error('Local file path is undefined for file: ' + file.name);
+                  }
 
-          console.log(`Uploading ${localFilePath} to ${remoteFilePath}`);
+                  let relativeFilePath = file.name;
+                  let remoteFilePath = path.join(destinationPath, relativeFilePath);
 
-          // Upload the file
-          await new Promise((resolve, reject) => {
-            sftp.fastPut(localFilePath, remoteFilePath, (err) => {
-              if (err) reject(err);
-              else resolve();
-            });
-          });
+                  // Ensure the remote directory exists
+                  const remoteDir = path.dirname(remoteFilePath);
+                  await ensureDirectoryExists(sftp, remoteDir);
 
-          // If the file is a ZIP file, unzip it into a new directory
-          if (path.extname(file.name) === '.zip') {
-            const baseName = path.basename(file.name, '.zip');
-            const tempDir = path.join(os.tmpdir(), baseName);
-            const newDir = path.join(destinationPath, baseName);
+                  // Check if the file exists and modify the file name if necessary
+                  remoteFilePath = await getUniqueFilePath(sftp, remoteFilePath);
 
-            fs.mkdirSync(tempDir, { recursive: true });
-            await unzipFile(localFilePath, tempDir);
-            await ensureDirectoryExists(sftp, newDir);
-            await uploadDirectory(sftp, tempDir, newDir);
-            fs.rmdirSync(tempDir, { recursive: true });
-            // Remove the ZIP file after extraction and upload
-            await new Promise((resolve, reject) => {
-              sftp.unlink(remoteFilePath, (err) => {
-                if (err) reject(err);
-                else resolve();
-              });
-            });
-            console.log(`Deleted ZIP file: ${remoteFilePath}`);
+                  console.log(`Uploading ${localFilePath} to ${remoteFilePath}`);
+
+                  // Upload the file
+                  await new Promise((resolve, reject) => {
+                      sftp.fastPut(localFilePath, remoteFilePath, (err) => {
+                          if (err) reject(err);
+                          else resolve();
+                      });
+                  });
+
+                  // If the file is a ZIP file, unzip it into a new directory
+                  if (path.extname(file.name) === '.zip') {
+                      let baseName = path.basename(file.name, '.zip');
+                      let tempDir = path.join(os.tmpdir(), baseName);
+                      let newDir = path.join(destinationPath, baseName);
+
+                      // Ensure the directory does not overwrite an existing one
+                      newDir = await getUniqueDirectoryPath(sftp, newDir);
+
+                      fs.mkdirSync(tempDir, { recursive: true });
+                      await unzipFile(localFilePath, tempDir);
+                      await ensureDirectoryExists(sftp, newDir);
+                      await uploadDirectory(sftp, tempDir, newDir);
+                      fs.rmSync(tempDir, { recursive: true, force: true });
+                      // Remove the ZIP file after extraction and upload
+                      await new Promise((resolve, reject) => {
+                          sftp.unlink(remoteFilePath, (err) => {
+                              if (err) reject(err);
+                              else resolve();
+                          });
+                      });
+                      console.log(`Deleted ZIP file: ${remoteFilePath}`);
+                  }
+
+                  // Clean up the temporary file after all operations are completed
+                  fs.unlink(localFilePath, (err) => {
+                      if (err) console.error('Error deleting temp file:', err);
+                      else console.log('Temp file deleted:', localFilePath);
+                  });
+
+                  // Log the upload activity
+                  const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+                  console.log('IP Address:', ipAddress); // Debug logging
+                  logSFTPServerAction(req.user.username, 'upload', remoteFilePath, ipAddress);
+              }
+
+              res.send('Files uploaded successfully');
+          } catch (error) {
+              console.error('Error uploading files:', error);
+              res.status(500).send('Error uploading files: ' + error.message);
+          } finally {
+              conn.end();
           }
-
-          // Clean up the temporary file after all operations are completed
-          fs.unlink(localFilePath, (err) => {
-            if (err) console.error('Error deleting temp file:', err);
-            else console.log('Temp file deleted:', localFilePath);
-          });
-
-          // Log the upload activity
-          const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-          console.log('IP Address:', ipAddress); // Debug logging
-          logSFTPServerAction(req.user.username, 'upload', remoteFilePath, ipAddress);
-        }
-
-        res.send('Files uploaded successfully');
-      } catch (error) {
-        console.error('Error uploading files:', error);
-        res.status(500).send('Error uploading files: ' + error.message);
-      } finally {
-        conn.end();
-      }
-    });
+      });
   }).connect(sftpConnectionDetails);
 });
 
@@ -625,23 +628,35 @@ async function getUniqueFilePath(sftp, remoteFilePath) {
 
   return uniqueFilePath;
 }
+async function getUniqueDirectoryPath(sftp, remoteDirPath) {
+  let uniqueDirPath = remoteDirPath;
+  let counter = 2;
+
+  // Check if directory exists and modify the name if necessary
+  while (await fileExists(sftp, uniqueDirPath)) {
+      uniqueDirPath = path.join(path.dirname(remoteDirPath), `${path.basename(remoteDirPath)}-${counter}`);
+      counter++;
+  }
+
+  return uniqueDirPath;
+}
 
 async function fileExists(sftp, remoteFilePath) {
   return new Promise((resolve, reject) => {
-    sftp.stat(remoteFilePath, (err, stats) => {
-      if (err) {
-        if (err.code === 2) {
-          // File does not exist
-          resolve(false);
-        } else {
-          // Some other error
-          reject(err);
-        }
-      } else {
-        // File exists
-        resolve(true);
-      }
-    });
+      sftp.stat(remoteFilePath, (err, stats) => {
+          if (err) {
+              if (err.code === 2) {
+                  // File or directory does not exist
+                  resolve(false);
+              } else {
+                  // Some other error
+                  reject(err);
+              }
+          } else {
+              // File or directory exists
+              resolve(true);
+          }
+      });
   });
 }
 
