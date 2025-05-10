@@ -290,7 +290,6 @@ function handleFetchResponse(response) {
     }
     return response;
 }
-
 function changeDirectory() {
     const path = document.getElementById('path-input').value;
     const token = localStorage.getItem('token');
@@ -445,14 +444,6 @@ function uploadFiles() {
 
     xhr.send(formData);
 }
-
-
-
-
-
-
-
-
 
 function generateUniqueId() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
