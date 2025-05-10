@@ -1,0 +1,8 @@
+.DS_Store
+.env
+login_start/
+node_modules/
+server_logs.db
+sftp_activity_log.db
+tmp/
+token_blacklist.db
