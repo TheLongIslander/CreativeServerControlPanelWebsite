@@ -18,11 +18,14 @@ const { pipeline } = require('stream/promises');
 const { join } = require('path');
 const fileUpload = require('express-fileupload');
 const unzipper = require('unzipper');
+const { Worker } = require('worker_threads');
+const sharp = require('sharp');
+const { PDFImage } = require('pdf-image');
 let wss;
 
 const { getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens, logServerAction, logSFTPServerAction } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
-const port = 8087;
+const port = 3000;
 const users = {
   admin: {
     username: "admin",
@@ -34,8 +37,15 @@ const sftpConnectionDetails = {
   host: process.env.SFTP_HOST,
   port: process.env.SFTP_PORT,
   username: process.env.SFTP_USERNAME,
-  password: process.env.SFTP_PASSWORD
+  password: process.env.SFTP_PASSWORD,
+  readyTimeout: 600000,
+  keepaliveInterval: 10000
 };
+const videoCacheDir = process.env.VIDEO_CACHE_DIR || path.join(os.tmpdir(), 'video_cache');
+
+if (!fs.existsSync(videoCacheDir)) {
+  fs.mkdirSync(videoCacheDir, { recursive: true });
+}
 const authenticateJWT = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
@@ -290,7 +300,7 @@ function performBackup(currentHour, now, wasServerRunning, res) {
             // Calculate the overall progress
             const progress = Math.min(Math.round((totalTransferred / totalSize) * 100), 100);
             console.log(`Broadcasting progress: ${progress}%`);
-            broadcastProgress({ type: 'progress', value: progress });
+            broadcastBackupProgress({ type: 'progress', value: progress });
           }
         });
 
@@ -336,7 +346,7 @@ function startServer() {
   });
 }
 // Broadcasts progress data to all connected WebSocket clients
-function broadcastProgress(message) {
+function broadcastBackupProgress(message) {
   const data = JSON.stringify(message);
   wss.clients.forEach(function each(client) {
     if (client.readyState === WebSocket.OPEN) {
@@ -401,123 +411,120 @@ app.post('/open-directory', authenticateJWT, (req, res) => {
   res.json({ path: currentPath });
 });
 
-// Download route
-app.post('/download', (req, res) => {
-  const token = req.body.token;
-  const filePath = req.body.path;
-  const filename = path.basename(filePath);
-  const localPath = path.join(os.tmpdir(), filename); // Local path to save directory
+const downloads = {};
+const tempDownloadLinks = new Map();
 
-  jwt.verify(token, process.env.JWT_SECRET, async (err, user) => {
+app.post('/download', (req, res) => {
+  const { token, path: filePath, requestId: frontendRequestId } = req.body;
+  const formattedIpAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) {
+      logSFTPServerAction('unknown', 'download', filePath, formattedIpAddress);
       return res.sendStatus(403);
     }
 
-    const conn = new Client();
-    conn.on('ready', () => {
-      conn.sftp(async (err, sftp) => {
-        if (err) {
-          console.error('SFTP connection error:', err);
-          res.status(500).end('SFTP connection error: ' + err.message);
-          return;
-        }
+    const requestId = frontendRequestId || generateUniqueId();
 
-        try {
-          const stats = await sftpStat(sftp, filePath);
-          if (stats.isDirectory()) {
-            await downloadDirectory(sftp, filePath, localPath); // Function to recursively download directory
-            const zipPath = await zipDirectory(localPath, filename);
-            res.download(zipPath, `${filename}.zip`, (err) => {
-              if (err) {
-                console.error('Error sending the zip file:', err);
-              } else {
-                // Log the download activity after sending the zip file
-                const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-                logSFTPServerAction(user.username, 'download', filePath, ipAddress);
-              }
-              // Cleanup local files after sending
-              exec(`rm -rf "${localPath}" "${zipPath}"`);
-            });
-          } else {
-            // Handle single file download
-            res.cookie('fileDownload', 'true', { path: '/', httpOnly: true });
-            res.attachment(filename);
-            const fileStream = sftpReadStream(sftp, filePath);
-            res.setHeader('Content-Length', stats.size);
-            await pipeline(fileStream, res);
-            console.log('File has been sent.');
-            // Log the download activity
-            const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-            console.log('IP Address:', ipAddress); // Debug logging
-            logSFTPServerAction(user.username, 'download', filePath, ipAddress);
-          }
-        } catch (error) {
-          console.error('Failed to process download:', error);
-          res.status(500).send('Failed to process download: ' + error.message);
-        } finally {
-          conn.end();
+    if (!downloads[requestId]) {
+      const worker = new Worker(path.join(__dirname, 'downloadWorker.js'), {
+        workerData: {
+          filePath,
+          user,
+          requestId,
+          formattedIpAddress
         }
       });
-    }).connect({
-      host: process.env.SFTP_HOST,
-      port: process.env.SFTP_PORT,
-      username: process.env.SFTP_USERNAME,
-      password: process.env.SFTP_PASSWORD
-    });
-  });
-});
-const zipDirectory = async (localPath, filename) => {
-  const zipPath = `${localPath}/${filename}.zip`;
-  // Ensure paths are correctly quoted to handle spaces and special characters
-  const command = `cd "${localPath}" && zip -r "${zipPath}" .`;
 
-  return new Promise((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error('Error zipping file:', stderr);
-        reject(stderr);
-      } else {
-        console.log('Zipping complete:', stdout);
-        resolve(zipPath);
-      }
-    });
-  });
-};
-async function downloadDirectory(sftp, remotePath, localPath) {
-  // Ensure the local directory exists
-  await fsPromises.mkdir(localPath, { recursive: true });
+      downloads[requestId] = { worker, status: 'in-progress', filePath: null };
 
-  // Get list of files/directories from the remote directory
-  const items = await new Promise((resolve, reject) => {
-    sftp.readdir(remotePath, (err, list) => {
-      if (err) reject(err);
-      else resolve(list);
-    });
-  });
+      worker.on('message', message => {
+        if (message.type === 'progress') {
+          broadcastDownloadProgress(requestId, message.progress);
+        } else if (message.type === 'done') {
+          downloads[requestId].status = 'ready';
+          downloads[requestId].filePath = message.filePath;
+          tempDownloadLinks.set(requestId, message.filePath);
+          broadcastDownloadProgress(requestId, 100);
 
-  // Process each item in the directory
-  for (const item of items) {
-    const remoteItemPath = join(remotePath, item.filename);
-    const localItemPath = join(localPath, item.filename);
+          wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify({ type: 'complete', requestId }));
+            }
+          });
+        }
+      });
 
-    if (item.attrs.isDirectory()) {
-      // Recursive call to download directory
-      await downloadDirectory(sftp, remoteItemPath, localItemPath);
-    } else {
-      // Download file
-      await new Promise((resolve, reject) => {
-        sftp.fastGet(remoteItemPath, localItemPath, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
+      worker.on('error', err => {
+        console.error(`[Worker ${requestId}] error:`, err);
+        downloads[requestId].status = 'error';
+      });
+
+      worker.on('exit', code => {
+        if (code !== 0) {
+          console.error(`[Worker ${requestId}] exited with code ${code}`);
+        }
       });
     }
+
+    res.json({ requestId, message: 'Download queued' });
+  });
+});
+
+app.get('/downloads/:requestId', (req, res) => {
+  const requestId = req.params.requestId;
+  const filePath = tempDownloadLinks.get(requestId);
+
+  if (!filePath || !fs.existsSync(filePath)) {
+    return res.status(404).send('File not found');
   }
+
+  const filename = path.basename(filePath);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Length', fs.statSync(filePath).size);
+
+  const stream = fs.createReadStream(filePath);
+  stream.pipe(res);
+
+  res.on('finish', () => {
+    fs.unlink(filePath, () => {});
+    tempDownloadLinks.delete(requestId);
+  });
+});
+
+function broadcastDownloadProgress(requestId, progress) {
+  if (!requestId) {
+    return;
+  }
+
+  if (!wss || !wss.clients) {
+    return;
+  }
+
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ type: 'progress', requestId, progress }));
+    }
+  });
+}
+
+function generateUniqueId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = Math.random() * 16 | 0,
+      v = c === 'x' ? r : (c === 'y' ? (r & 0x3 | 0x8) : r);
+    return v.toString(16);
+  });
 }
 
 app.post('/upload', authenticateJWT, (req, res) => {
   let files = req.files.files; // Files uploaded
   const destinationPath = req.body.path; // Destination directory
+  const lastModifiedRaw = req.body.lastModified;
+  const parsedLastModified = Array.isArray(lastModifiedRaw)
+    ? parseInt(lastModifiedRaw[0], 10)
+    : parseInt(lastModifiedRaw, 10);
+  const lastModified = Number.isFinite(parsedLastModified) ? parsedLastModified : Date.now();
 
   console.log('Files received:', files);
   console.log('Destination path:', destinationPath);
@@ -565,16 +572,30 @@ app.post('/upload', authenticateJWT, (req, res) => {
                       });
                   });
 
+                  const modifiedDate = new Date(lastModified);
+                  await new Promise((resolve, reject) => {
+                      sftp.utimes(remoteFilePath, modifiedDate, modifiedDate, (err) => {
+                          if (err) reject(err);
+                          else resolve();
+                      });
+                  });
+
                   // If the file is a ZIP file, unzip it into a new directory
                   if (path.extname(file.name) === '.zip') {
                       let baseName = path.basename(file.name, '.zip');
-                      let tempDir = path.join(os.tmpdir(), baseName);
+                      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${baseName}-`));
                       let newDir = path.join(destinationPath, baseName);
+                      const expectedZipSize = Number(file.size);
 
                       // Ensure the directory does not overwrite an existing one
                       newDir = await getUniqueDirectoryPath(sftp, newDir);
 
-                      fs.mkdirSync(tempDir, { recursive: true });
+                      if (Number.isFinite(expectedZipSize)) {
+                        const stats = fs.statSync(localFilePath);
+                        if (stats.size !== expectedZipSize) {
+                          throw new Error(`ZIP size mismatch: expected ${expectedZipSize}, got ${stats.size}`);
+                        }
+                      }
                       await unzipFile(localFilePath, tempDir);
                       await ensureDirectoryExists(sftp, newDir);
                       await uploadDirectory(sftp, tempDir, newDir);
@@ -662,16 +683,33 @@ async function fileExists(sftp, remoteFilePath) {
 
 async function unzipFile(zipFilePath, destinationPath) {
   return new Promise((resolve, reject) => {
-    fs.createReadStream(zipFilePath)
-      .pipe(unzipper.Extract({ path: destinationPath }))
-      .on('close', () => {
-        console.log(`Unzipped file to ${destinationPath}`);
-        resolve();
-      })
-      .on('error', (err) => {
-        console.error(`Error unzipping file: ${err}`);
-        reject(err);
-      });
+    const unzip = spawn('unzip', ['-o', '-qq', zipFilePath, '-d', destinationPath], {
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+    let stderr = '';
+    const timeoutId = setTimeout(() => {
+      unzip.kill('SIGKILL');
+      reject(new Error('unzip timed out'));
+    }, 10 * 60 * 1000);
+
+    unzip.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    unzip.on('close', (code) => {
+      clearTimeout(timeoutId);
+      if (code !== 0) {
+        reject(new Error(`unzip failed with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+        return;
+      }
+      console.log(`Unzipped file to ${destinationPath}`);
+      resolve();
+    });
+
+    unzip.on('error', (err) => {
+      clearTimeout(timeoutId);
+      reject(err);
+    });
   });
 }
 
@@ -681,7 +719,22 @@ async function uploadDirectory(sftp, localDir, remoteDir) {
     const localItemPath = path.join(localDir, item);
     const remoteItemPath = path.join(remoteDir, item);
 
-    const stats = fs.statSync(localItemPath);
+    let stats;
+    try {
+      stats = fs.lstatSync(localItemPath);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        console.warn(`Skipping missing item during upload: ${localItemPath}`);
+        continue;
+      }
+      throw error;
+    }
+
+    if (stats.isSymbolicLink()) {
+      console.warn(`Skipping symlink during upload: ${localItemPath}`);
+      continue;
+    }
+
     if (stats.isDirectory()) {
       await ensureDirectoryExists(sftp, remoteItemPath);
       await uploadDirectory(sftp, localItemPath, remoteItemPath);
@@ -735,6 +788,446 @@ async function ensureDirectoryExists(sftp, dir) {
 
 
 
+const cacheDir = path.join(os.tmpdir(), 'image_cache');
+
+if (!fs.existsSync(cacheDir)) {
+  fs.mkdirSync(cacheDir);
+}
+
+app.get('/download-preview', authenticateJWT, (req, res) => {
+  const filePath = req.query.path;
+
+  const conn = new Client();
+  conn.on('ready', () => {
+    conn.sftp((err, sftp) => {
+      if (err) {
+        console.error('SFTP connection error:', err);
+        res.status(500).send('SFTP connection error');
+        return;
+      }
+
+      const fileExtension = path.extname(filePath).toLowerCase();
+      const cacheFilePath = path.join(cacheDir, path.basename(filePath) + '.jpg');
+
+      if (fileExtension === '.pdf') {
+        handlePDF(sftp, filePath, cacheFilePath, res);
+      } else if (fileExtension === '.heic') {
+        handleHEIC(sftp, filePath, cacheFilePath, res);
+      } else if (/\.(mp4|mov|avi|webm|mkv)$/i.test(filePath)) {
+        handleVideo(sftp, filePath, cacheFilePath, res);
+      } else if (/\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(filePath)) {
+        handleImage(sftp, filePath, cacheFilePath, res);
+      } else {
+        streamFile(sftp, filePath, res);
+      }
+    });
+  }).connect(sftpConnectionDetails);
+});
+
+function handleVideo(sftp, filePath, cacheFilePath, res) {
+  const videoCacheFilePath = path.join(videoCacheDir, path.basename(filePath) + '.jpg');
+
+  if (fs.existsSync(videoCacheFilePath)) {
+    return res.sendFile(videoCacheFilePath);
+  }
+
+  const tempLocalVideoPath = path.join(os.tmpdir(), `${path.basename(filePath)}`);
+  const tempThumbnailPath = path.join(os.tmpdir(), `${path.basename(filePath)}.jpg`);
+  const videoStream = sftp.createReadStream(filePath);
+  const videoFileWriteStream = fs.createWriteStream(tempLocalVideoPath);
+
+  videoStream.pipe(videoFileWriteStream);
+
+  videoFileWriteStream.on('finish', () => {
+    const runFfmpeg = (timestamp) => new Promise((resolve, reject) => {
+      const ffmpeg = spawn('ffmpeg', [
+        '-i', tempLocalVideoPath,
+        '-ss', timestamp,
+        '-vframes', '1',
+        '-q:v', '5',
+        '-vf', 'eq=brightness=0.05:saturation=1.2',
+        tempThumbnailPath
+      ]);
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      ffmpeg.on('close', (code) => {
+        if (code !== 0) {
+          return reject(new Error(`ffmpeg exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+        }
+        resolve();
+      });
+
+      ffmpeg.on('error', (error) => {
+        reject(error);
+      });
+    });
+
+    runFfmpeg('00:00:01')
+      .catch((error) => {
+        console.warn(`ffmpeg failed at 00:00:01, retrying at 00:00:00: ${error.message}`);
+        return runFfmpeg('00:00:00');
+      })
+      .then(() => {
+        fs.copyFileSync(tempThumbnailPath, videoCacheFilePath);
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.sendFile(videoCacheFilePath, (err) => cleanupFiles(tempLocalVideoPath, tempThumbnailPath, err, res));
+      })
+      .catch((error) => {
+        console.error('Error generating video thumbnail:', error.message);
+        res.status(500).send('Error generating video thumbnail');
+      });
+  });
+
+  videoFileWriteStream.on('error', (err) => {
+    console.error('Error writing video file:', err);
+    res.status(500).send('Error downloading video for thumbnail generation');
+  });
+}
+
+const MAX_WORKERS = Math.max(1, os.cpus().filter(cpu => cpu.speed > 2000).length);
+const workerPool = [];
+const taskQueue = [];
+let activeWorkers = 0;
+
+for (let i = 0; i < MAX_WORKERS; i++) {
+  const worker = new Worker(path.join(__dirname, 'heicWorker.js'));
+  workerPool.push(worker);
+}
+
+function assignTaskToWorker(task) {
+  if (workerPool.length > 0) {
+    const worker = workerPool.pop();
+    activeWorkers++;
+
+    worker.postMessage(task.data);
+
+    worker.once('message', (message) => {
+      task.resolve(message);
+      workerPool.push(worker);
+      activeWorkers--;
+      processQueue();
+    });
+
+    worker.once('error', (error) => {
+      task.reject(error);
+      workerPool.push(worker);
+      activeWorkers--;
+      processQueue();
+    });
+
+    worker.once('exit', (code) => {
+      if (code !== 0) {
+        console.error(`Worker exited with code ${code}`);
+        task.reject(new Error(`Worker exited with code ${code}`));
+      }
+      workerPool.push(worker);
+      activeWorkers--;
+      processQueue();
+    });
+  } else {
+    taskQueue.push(task);
+  }
+}
+
+function scheduleTask(data) {
+  return new Promise((resolve, reject) => {
+    assignTaskToWorker({ data, resolve, reject });
+  });
+}
+
+function handleHEIC(sftp, filePath, cacheFilePath, res) {
+  const placeholderImagePath = path.join(__dirname, 'assets', 'android-chrome-512x512.png');
+
+  if (fs.existsSync(cacheFilePath)) {
+    return res.sendFile(cacheFilePath);
+  }
+
+  const chunks = [];
+  const readStream = sftp.createReadStream(filePath);
+
+  readStream.on('data', (chunk) => chunks.push(chunk));
+  readStream.on('end', () => {
+    const heicBuffer = Buffer.concat(chunks);
+
+    scheduleTask({ heicBuffer, cacheFilePath })
+      .then((message) => {
+        if (message.success) {
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.sendFile(message.cacheFilePath);
+        } else {
+          console.error('Error generating HEIC thumbnail:', message.error);
+          res.sendFile(placeholderImagePath);
+        }
+      })
+      .catch((error) => {
+        console.error('Error processing HEIC file:', error);
+        res.sendFile(placeholderImagePath);
+      });
+  });
+
+  readStream.on('error', (err) => {
+    console.error('Error reading HEIC file:', err.message);
+    res.sendFile(placeholderImagePath);
+  });
+}
+
+function processQueue() {
+  if (taskQueue.length > 0 && activeWorkers < MAX_WORKERS) {
+    const task = taskQueue.shift();
+    assignTaskToWorker(task);
+  }
+}
+
+function handleImage(sftp, filePath, cacheFilePath, res) {
+  if (fs.existsSync(cacheFilePath)) {
+    return res.sendFile(cacheFilePath);
+  }
+
+  const chunks = [];
+  const readStream = sftp.createReadStream(filePath);
+  readStream.on('data', (chunk) => chunks.push(chunk));
+  readStream.on('end', async () => {
+    const imageBuffer = Buffer.concat(chunks);
+    try {
+      sharp(imageBuffer)
+        .rotate()
+        .resize(800, 600)
+        .toBuffer((err, resizedBuffer) => {
+          if (err) {
+            console.error('Error resizing image:', err);
+            return res.status(500).send('Error resizing image');
+          }
+          fs.writeFileSync(cacheFilePath, resizedBuffer);
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.send(resizedBuffer);
+        });
+    } catch (error) {
+      console.error('Error processing image:', error);
+      res.status(500).send('Error processing image');
+    }
+  });
+  readStream.on('error', (err) => {
+    console.error('Error in file stream:', err);
+    res.status(500).send('Error streaming image');
+  });
+}
+
+function streamFile(sftp, filePath, res) {
+  const readStream = sftp.createReadStream(filePath);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  readStream.pipe(res);
+
+  readStream.on('error', (err) => {
+    console.error('Error in file stream:', err);
+    res.status(500).send('Error streaming file');
+  });
+}
+
+function cleanupFiles(tempLocalVideoPath, tempThumbnailPath, err, res) {
+  if (err) {
+    console.error('Error sending thumbnail:', err);
+    return res.status(500).send('Error sending thumbnail');
+  }
+
+  fs.unlink(tempLocalVideoPath, (err) => {
+    if (err) console.error('Error deleting temp video file:', err);
+  });
+  fs.unlink(tempThumbnailPath, (err) => {
+    if (err) console.error('Error deleting temp thumbnail file:', err);
+  });
+}
+
+function handlePDF(sftp, filePath, cacheFilePath, res) {
+  if (fs.existsSync(cacheFilePath)) {
+    return res.sendFile(cacheFilePath);
+  }
+
+  const tempPDFPath = path.join(os.tmpdir(), `${path.basename(filePath)}`);
+  const pdfStream = sftp.createReadStream(filePath);
+  const pdfFileWriteStream = fs.createWriteStream(tempPDFPath);
+
+  pdfStream.pipe(pdfFileWriteStream);
+
+  pdfFileWriteStream.on('finish', () => {
+    const pdfImage = new PDFImage(tempPDFPath, { combinedImage: false });
+
+    pdfImage.convertPage(0)
+      .then((imagePath) => {
+        fs.renameSync(imagePath, cacheFilePath);
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.sendFile(cacheFilePath);
+      })
+      .catch(err => {
+        console.error('Error converting PDF to thumbnail:', err);
+        res.status(500).send('Error generating PDF thumbnail');
+      })
+      .finally(() => {
+        fs.unlink(tempPDFPath, (err) => {
+          if (err) console.error('Error deleting temp PDF file:', err);
+        });
+      });
+  });
+
+  pdfFileWriteStream.on('error', (err) => {
+    console.error('Error writing PDF file to temp path:', err);
+    res.status(500).send('Error processing PDF');
+  });
+}
+
+async function precacheVideoThumbnails() {
+  const conn = new Client();
+  conn.on('ready', () => {
+    conn.sftp(async (err, sftp) => {
+      if (err) {
+        console.error('SFTP session error:', err);
+        return;
+      }
+
+      try {
+        const startDir = '/';
+        await processDirectory(sftp, startDir);
+        conn.end();
+      } catch (error) {
+        console.error('Error during video pre-caching:', error);
+      }
+    });
+  }).connect(sftpConnectionDetails);
+}
+
+async function processDirectory(sftp, dirPath) {
+  const files = await new Promise((resolve, reject) => {
+    sftp.readdir(dirPath, (err, list) => {
+      if (err) reject(err);
+      else resolve(list);
+    });
+  });
+
+  for (const file of files) {
+    const fullPath = path.join(dirPath, file.filename);
+    if (file.longname.startsWith('d')) {
+      await processDirectory(sftp, fullPath);
+    } else if (/\.(mp4|mov|avi|webm|mkv)$/i.test(file.filename)) {
+      await generateThumbnailForVideo(sftp, fullPath);
+    }
+  }
+}
+
+async function generateThumbnailForVideo(sftp, filePath) {
+  const cacheFilePath = path.join(videoCacheDir, path.basename(filePath) + '.jpg');
+  const placeholderImagePath = path.join(__dirname, 'assets', 'android-chrome-512x512.png');
+
+  if (fs.existsSync(cacheFilePath)) {
+    return;
+  }
+
+  const tempLocalVideoPath = path.join(os.tmpdir(), `${path.basename(filePath)}`);
+  const tempThumbnailPath = path.join(os.tmpdir(), `${path.basename(filePath)}.jpg`);
+
+  const videoStream = sftp.createReadStream(filePath);
+  const videoFileWriteStream = fs.createWriteStream(tempLocalVideoPath);
+
+  videoStream.pipe(videoFileWriteStream);
+
+  return new Promise((resolve, reject) => {
+    videoFileWriteStream.on('finish', () => {
+      if (!fs.existsSync(tempLocalVideoPath)) {
+        fs.copyFileSync(placeholderImagePath, cacheFilePath);
+        return resolve();
+      }
+
+      const ffmpeg = spawn('ffmpeg', [
+        '-i', tempLocalVideoPath,
+        '-ss', '00:01:00',
+        '-vframes', '1',
+        '-q:v', '5',
+        '-vf', 'eq=brightness=0.05:saturation=1.2',
+        tempThumbnailPath
+      ]);
+
+      ffmpeg.on('close', (code) => {
+        if (code !== 0) {
+          fs.copyFileSync(placeholderImagePath, cacheFilePath);
+          return resolve();
+        }
+
+        fs.copyFileSync(tempThumbnailPath, cacheFilePath);
+        resolve();
+      });
+
+      ffmpeg.on('error', () => {
+        fs.copyFileSync(placeholderImagePath, cacheFilePath);
+        resolve();
+      });
+    });
+
+    videoFileWriteStream.on('error', () => {
+      fs.copyFileSync(placeholderImagePath, cacheFilePath);
+      resolve();
+    });
+  }).finally(() => {
+    if (fs.existsSync(tempLocalVideoPath)) {
+      fs.unlink(tempLocalVideoPath, (err) => {
+        if (err) console.error('Error deleting temp video file:', err);
+      });
+    }
+
+    if (fs.existsSync(tempThumbnailPath)) {
+      fs.unlink(tempThumbnailPath, (err) => {
+        if (err) console.error('Error deleting temp thumbnail file:', err);
+      });
+    }
+  });
+}
+
+app.post('/sftp/create-directory', authenticateJWT, (req, res) => {
+  const { path: basePath, directoryName } = req.body;
+
+  if (!directoryName || !basePath) {
+    return res.status(400).json({ message: 'Invalid directory name or path' });
+  }
+
+  const newDirectoryPath = basePath.endsWith('/') ? basePath + directoryName : basePath + '/' + directoryName;
+
+  const conn = new Client();
+  conn.on('ready', () => {
+    conn.sftp((err, sftp) => {
+      if (err) {
+        console.error('SFTP session error:', err);
+        res.status(500).json({ message: 'Failed to start SFTP session' });
+        return;
+      }
+
+      sftp.stat(newDirectoryPath, (err, stats) => {
+        if (err && err.code === 2) {
+          sftp.mkdir(newDirectoryPath, (err) => {
+            if (err) {
+              console.error('Error creating directory:', err);
+              res.status(500).json({ message: 'Failed to create directory' });
+            } else {
+              res.json({ message: 'Directory created successfully', path: newDirectoryPath });
+            }
+            conn.end();
+          });
+        } else if (stats) {
+          res.status(400).json({ message: 'A directory with that name already exists' });
+          conn.end();
+        } else {
+          console.error('Error checking directory existence:', err);
+          res.status(500).json({ message: 'Failed to check directory existence' });
+          conn.end();
+        }
+      });
+    });
+  }).on('error', (err) => {
+    console.error('Connection error:', err);
+    res.status(500).json({ message: 'Failed to connect to SFTP server' });
+  }).connect(sftpConnectionDetails);
+});
+
 const server = app.listen(port, () => {
   console.log(`Server listening at http://localhost:${port}`);
   server.timeout = 0;
@@ -746,6 +1239,7 @@ const server = app.listen(port, () => {
 
     // Add any message handlers or other WebSocket-related code here
   });
+
+  console.log('Starting video thumbnail pre-caching...');
+  precacheVideoThumbnails();
 });
-
-

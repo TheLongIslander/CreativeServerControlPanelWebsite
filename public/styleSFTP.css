@@ -53,6 +53,24 @@ header button:hover {
     background-color: #1c8f89;
 }
 
+/* Specific styles for the Go button */
+#go-button {
+    background-color: #1cbeb6;
+}
+
+#go-button:hover {
+    background-color: #1c8f89;
+}
+
+/* Create directory button */
+#create-directory-button {
+    background-color: #17a2b8;
+}
+
+#create-directory-button:hover {
+    background-color: #117a8b;
+}
+
 /* Logout button specific styles */
 #logout-button {
     background-color: #df2720;
@@ -177,10 +195,56 @@ li {
     background-color: #218838;
 }
 
+.image-preview {
+    width: 100px;
+    height: 100px;
+    object-fit: cover;
+    margin-right: 10px;
+    border-radius: 20px;
+}
+
+.video-thumbnail {
+    width: 150px;
+    height: 100px;
+    object-fit: cover;
+    margin-right: 10px;
+    border-radius: 20px;
+}
+
+.pdf-thumbnail {
+    width: 100px;
+    height: 150px;
+    object-fit: cover;
+    margin-right: 10px;
+    border-radius: 20px;
+}
+
+.loading-message {
+    margin-left: 10px;
+    color: #666;
+    font-size: 14px;
+    font-style: italic;
+    text-align: center;
+}
+
 #progress-container {
     width: 80%;
     margin: 0 auto;
     text-align: center;
+}
+
+.zip-progress-bar {
+    display: none;
+    width: 100%;
+    height: 10px;
+    border-radius: 5px;
+    background-color: #4caf50;
+}
+
+.zip-progress-label {
+    font-size: 0.9em;
+    margin-top: 4px;
+    color: #666;
 }
 
 progress {
@@ -252,6 +316,14 @@ progress::-webkit-progress-value {
         background-color: #e0a800;
     }
 
+    #create-directory-button {
+        background-color: #17a2b8;
+    }
+
+    #create-directory-button:hover {
+        background-color: #117a8b;
+    }
+
     h1 {
         color: #13cf3f;
     }
@@ -289,6 +361,10 @@ progress::-webkit-progress-value {
 
     .spinner {
         border-left-color: #28a745;
+    }
+
+    .zip-progress-label {
+        color: #ccc;
     }
 }
 
@@ -350,4 +426,3 @@ progress::-webkit-progress-value {
         background-color: #000000; /* Pure black background for mobile dark mode */
     }
 }
-

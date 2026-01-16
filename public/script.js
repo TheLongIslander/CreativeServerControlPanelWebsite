@@ -33,7 +33,8 @@ if (!localStorage.getItem('token')) {
         });
 }
   function setupWebSocket() {
-    ws = new WebSocket('wss://' + window.location.host);
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(wsProtocol + '://' + window.location.host);
 
     ws.onopen = function() {
         console.log('WebSocket connection established');
