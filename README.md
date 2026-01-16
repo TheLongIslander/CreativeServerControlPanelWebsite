@@ -1,105 +1,113 @@
-Minecraft Control Panel with SFTP File Management
+# Minecraft Server Control Panel + SFTP Browser
 
-Introduction
+A self-hosted Node/Express web app for managing a Minecraft server and browsing backups over SFTP. Includes server start/stop/restart, hourly backup orchestration with progress, file uploads/downloads, media previews, and activity logging.
 
-This project is a web-based control panel for managing a Minecraft server. It includes features for starting, stopping, and restarting the server, as well as backing it up. Additionally, it has a built-in SFTP file browser for uploading, downloading, and managing files on the server.
+## What this project does
 
-Features
+- Control Minecraft server lifecycle (start/stop/restart) via `screen`.
+- Run hourly backups with rsync + real-time progress via WebSocket.
+- Browse SFTP directories, upload files (including folders), and download files/folders as ZIPs.
+- Generate previews for images, videos, HEIC, and PDFs (with caching).
+- Log server actions and SFTP activity to SQLite.
+- Graceful shutdown: type `stop` in the server terminal to broadcast maintenance and exit.
 
-- Server Control: Start, stop, and restart the Minecraft server.
-- Backup Management: Perform backups of the Minecraft server with progress feedback.
-- Authentication: Secure login and token-based authentication.
-- SFTP File Browser: Upload, download, and manage files on the server.
-- WebSocket Integration: Real-time feedback for server actions and backup progress.
-- Activity Logging: Log server actions and SFTP activity to SQLite databases.
+## Tech stack
 
-Technologies Used
+- Backend: Node.js, Express, ws, ssh2, sqlite3
+- Auth: bcrypt + JWT (token blacklist)
+- Workers: `downloadWorker.js` (zips downloads), `heicWorker.js` (HEIC conversion)
+- Frontend: static HTML/CSS/JS in `public/`
 
-- Node.js & Express: Backend server.
-- WebSocket: Real-time communication.
-- SQLite: Database for token blacklisting and logging.
-- bcrypt: Secure password hashing.
-- jsonwebtoken: Token-based authentication.
-- SSH2: SFTP operations.
-- JSZip: ZIP file handling.
-- unzipper: Unzipping files.
-- Frontend: HTML, CSS, JavaScript.
+## Requirements
 
-Setup and Installation
+### Runtime
+- Node.js (current LTS recommended)
+- An SFTP server reachable with the credentials in `.env`
+- A Minecraft server managed via `screen`
 
-Prerequisites
+### System binaries (used by the server)
+- `screen` (start/stop Minecraft server)
+- `rsync` (backup)
+- `zip` and `unzip` (downloads/uploads)
+- `ffmpeg` (video thumbnails)
+- `find` (download ZIP progress)
+- `GraphicsMagick` or `ImageMagick` + `Ghostscript` (PDF previews via `pdf-image`)
 
-- Node.js and npm installed.
-- A Minecraft server setup.
-- SFTP server details.
+## Configuration
 
-Installation Steps
+Create a `.env` file in the project root:
 
-1. Clone the repository:
-    git clone https://github.com/TheLongIslander/CreativeServerControlPanelWebsite.git
-    cd CreativeServerControlPanelWebsite
+```
+ADMIN_PASSWORD_HASH=...             # bcrypt hash for admin user
+JWT_SECRET=...                      # secret for JWT signing
+SFTP_HOST=...
+SFTP_PORT=...
+SFTP_USERNAME=...
+SFTP_PASSWORD=...
+BACKUP_PATH=/path/to/backup/output
+MINECRAFT_SERVER_PATH=/path/to/server
+START_COMMAND_PATH=/path/to/start-script.sh
+TMP_UPLOAD_SERVER_PATH=/path/to/tmp/uploads
+VIDEO_CACHE_DIR=/optional/cache/dir # defaults to system tmp
+```
 
-2. Install dependencies:
-    npm install
+Notes:
+- The server listens on `http://localhost:8087`.
+- The admin user is hard-coded as `admin` (see `app.js`).
 
-3. Environment Variables:
-    Create a .env file in the root directory and add the following environment variables:
-    ADMIN_PASSWORD_HASH=your_hashed_password
-    JWT_SECRET=your_jwt_secret
-    SFTP_HOST=your_sftp_host
-    SFTP_PORT=your_sftp_port
-    SFTP_USERNAME=your_sftp_username
-    SFTP_PASSWORD=your_sftp_password
-    BACKUP_PATH=/path/to/backup
-    MINECRAFT_SERVER_PATH=/path/to/minecraft/server
-    START_COMMAND_PATH=/path/to/start/command
-    TMP_UPLOAD_SERVER_PATH=/path/to/temp/upload
+## Running
 
-4. Database Setup:
-    - SQLite databases for token blacklist and logging will be created automatically when the server starts.
-
-Running the Server
-
-Start the server with the following command:
+```bash
+npm install
 node app.js
-The server will be available at http://localhost:8087.
+```
 
-Usage
+Open:
+- Login: `http://localhost:8087/`
+- Control panel: `http://localhost:8087/index.html`
+- SFTP browser: `http://localhost:8087/sftp.html`
 
-Authentication
+## Usage overview
 
-1. Login:
-    - Navigate to the login page (/).
-    - Enter the admin username and password to obtain a JWT token.
+### Login
+- Use username `admin` and the password that matches `ADMIN_PASSWORD_HASH`.
+- JWT is stored in `localStorage` for API calls; an `auth_token` cookie is also set for maintenance redirects.
 
-2. Control Panel:
-    - Once logged in, the control panel (/index.html) will be accessible.
-    - The JWT token is stored in localStorage and used for authentication in subsequent requests.
+### Control panel
+- Start, stop, restart the server.
+- Run backups (limited to once per hour).
+- WebSocket pushes backup progress.
 
-Server Control
+### SFTP browser
+- Navigate directories, create directories.
+- Upload files and folders (ZIP files are auto-unzipped into a new directory).
+- Download files or entire folders as ZIP.
+- Preview images, videos, HEIC, PDFs (cached thumbnails).
 
-- Start Server: Click the "Start Server" button to start the Minecraft server.
-- Stop Server: Click the "Stop Server" button to stop the Minecraft server.
-- Restart Server: Click the "Restart Server" button to restart the Minecraft server.
+### Maintenance / graceful shutdown
+- Type `stop` into the server terminal to broadcast maintenance and exit the Node process.
+- Connected clients are redirected to `maintenance.html` before shutdown.
+- If a user visits `/maintenance.html` when not in maintenance mode:
+  - If not logged in: redirected to `/`.
+  - If logged in: redirected to `/index.html`.
 
-Backup
+## Data & logs
 
-- Perform Backup: Click the "Backup Server" button to start a backup. Progress is shown in real-time.
+- `token_blacklist.db` — blacklisted JWTs
+- `server_logs.db` — server start/stop/backup actions
+- `sftp_activity_log.db` — SFTP uploads/downloads
+- `tmp/` and OS temp dirs — download/upload and preview caches
 
-SFTP File Browser
+## Project layout
 
-- List Files: The file browser shows files in the current directory.
-- Change Directory: Enter a path or click on directories to navigate.
-- Upload Files: Select files or directories to upload.
-- Download Files: Click the "Download" button next to a file to download it.
+- `app.js` — main server
+- `utils.js` — time helpers + logging
+- `public/` — UI and assets
+- `downloadWorker.js` — background ZIP creation for downloads
+- `heicWorker.js` — HEIC conversion worker
 
-Logging Out
+## Troubleshooting
 
-- Click the "Logout" button to end the session and invalidate the JWT token.
-
-Additional Notes
-
-- The utils.js file contains utility functions for logging and time handling.
-- WebSocket connections provide real-time updates for server actions and backups.
-- The SFTP file browser supports recursive directory uploads and zip file extraction.
-
+- If a remote directory is deleted while viewing it, the UI will automatically move up to the closest valid path.
+- If previews fail, verify `ffmpeg` and `GraphicsMagick/ImageMagick + Ghostscript` are installed.
+- If backups fail, confirm `rsync` and the `BACKUP_PATH` permissions.
