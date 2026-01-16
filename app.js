@@ -25,7 +25,7 @@ let wss;
 
 const { getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens, logServerAction, logSFTPServerAction } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
-const port = 3000;
+const port = 8087;
 const users = {
   admin: {
     username: "admin",
@@ -86,6 +86,47 @@ const db = new sqlite3.Database('./token_blacklist.db', sqlite3.OPEN_READWRITE |
 
 const sftpStat = promisify((sftp, path, callback) => sftp.stat(path, callback));
 const sftpReadStream = (sftp, remotePath) => sftp.createReadStream(remotePath);
+const normalizeSftpPath = (targetPath) => {
+  if (!targetPath || targetPath.trim() === '') {
+    return '/';
+  }
+  let normalized = path.posix.normalize(targetPath);
+  if (!normalized.startsWith('/')) {
+    normalized = `/${normalized}`;
+  }
+  return normalized;
+};
+
+async function findClosestExistingDirectory(sftp, targetPath) {
+  let current = normalizeSftpPath(targetPath);
+
+  while (true) {
+    try {
+      const stats = await sftpStat(sftp, current);
+      if (stats && typeof stats.isDirectory === 'function') {
+        if (stats.isDirectory()) {
+          return current;
+        }
+      } else {
+        return current;
+      }
+
+      if (current === '/') {
+        return '/';
+      }
+      current = path.posix.dirname(current);
+    } catch (err) {
+      if (err && err.code === 2) {
+        if (current === '/') {
+          return '/';
+        }
+        current = path.posix.dirname(current);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
@@ -356,7 +397,7 @@ function broadcastBackupProgress(message) {
 }
 // Endpoint to list files in a directory
 app.get('/sftp/list', authenticateJWT, (req, res) => {
-  const dirPath = req.query.path || '/'; // Default path is the root directory
+  const dirPath = normalizeSftpPath(req.query.path || '/'); // Default path is the root directory
 
   const conn = new Client();
   conn.on('ready', () => {
@@ -364,13 +405,30 @@ app.get('/sftp/list', authenticateJWT, (req, res) => {
           if (err) {
               console.error('SFTP session error:', err);
               res.status(500).send('Failed to start SFTP session');
+              conn.end();
               return;
           }
 
-          sftp.readdir(dirPath, (err, list) => {
+          sftp.readdir(dirPath, async (err, list) => {
               if (err) {
-                  console.error('Directory read error:', err);
-                  res.status(500).send('Failed to read directory');
+                  const isMissingDirectory = err && (err.code === 2 || (err.message && err.message.toLowerCase().includes('no such file')));
+                  if (isMissingDirectory) {
+                    try {
+                      const fallbackPath = await findClosestExistingDirectory(sftp, dirPath);
+                      res.status(404).json({
+                        message: 'Directory no longer exists',
+                        deletedPath: dirPath,
+                        fallbackPath
+                      });
+                    } catch (fallbackError) {
+                      console.error('Directory recovery error:', fallbackError);
+                      res.status(500).send('Failed to recover directory');
+                    }
+                  } else {
+                    console.error('Directory read error:', err);
+                    res.status(500).send('Failed to read directory');
+                  }
+                  conn.end();
                   return;
               }
               const filteredList = list.filter(item => !item.filename.startsWith('.'));

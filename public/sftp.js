@@ -4,6 +4,7 @@ let activityTimeout;
 let refreshInterval;
 let typingInProgress = false;
 let currentDisplayedPath = null;
+let lastMissingPathAlerted = null;
 
 function setupWebSocket() {
     if (window.ws && window.ws.readyState !== WebSocket.CLOSED) {
@@ -186,12 +187,24 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
             'Authorization': 'Bearer ' + token
         }
     })
-        .then(response => {
+        .then(async response => {
             if (response.status === 403) {
                 alert('Session has expired, please log in again.');
                 localStorage.removeItem('token');
                 window.location.href = '/';
                 throw new Error('Session expired');
+            }
+            if (response.status === 404) {
+                const data = await response.json().catch(() => null);
+                if (data && data.fallbackPath) {
+                    const targetPath = data.fallbackPath === path ? '/' : data.fallbackPath;
+                    if (lastMissingPathAlerted !== data.deletedPath) {
+                        alert(`Directory was deleted remotely. Moving you to ${targetPath}.`);
+                        lastMissingPathAlerted = data.deletedPath;
+                    }
+                    fetchFiles(targetPath, true, true);
+                    return null;
+                }
             }
             if (!response.ok) {
                 throw new Error('Failed to fetch files');
@@ -199,6 +212,9 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
             return response.json();
         })
         .then(files => {
+            if (!files) {
+                return;
+            }
             const fileList = document.getElementById('file-list');
             const existingItems = Array.from(fileList.children);
             const existingFileMap = {};
