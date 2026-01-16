@@ -22,6 +22,8 @@ const { Worker } = require('worker_threads');
 const sharp = require('sharp');
 const { PDFImage } = require('pdf-image');
 let wss;
+let shuttingDown = false;
+let maintenanceMode = false;
 
 const { getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens, logServerAction, logSFTPServerAction } = require('./utils');  // Adjust the path as necessary based on your file structure
 const app = express();
@@ -97,6 +99,20 @@ const normalizeSftpPath = (targetPath) => {
   return normalized;
 };
 
+function getCookieValue(req, name) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) {
+    return null;
+  }
+  const parts = cookieHeader.split(';').map(part => part.trim());
+  for (const part of parts) {
+    if (part.startsWith(`${name}=`)) {
+      return decodeURIComponent(part.slice(name.length + 1));
+    }
+  }
+  return null;
+}
+
 async function findClosestExistingDirectory(sftp, targetPath) {
   let current = normalizeSftpPath(targetPath);
 
@@ -131,6 +147,23 @@ async function findClosestExistingDirectory(sftp, targetPath) {
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
+app.get('/maintenance.html', (req, res) => {
+  if (maintenanceMode) {
+    return res.sendFile(path.join(__dirname, 'public', 'maintenance.html'));
+  }
+
+  const token = getCookieValue(req, 'auth_token');
+  if (!token) {
+    return res.redirect('/');
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err) => {
+    if (err) {
+      return res.redirect('/');
+    }
+    return res.redirect('/index.html');
+  });
+});
 app.use(express.static('public')); // Serve static files from 'public' directory
 // Serve static files from 'assets' directory
 // Middleware to parse URL-encoded bodies (as sent by HTML forms)
@@ -140,7 +173,7 @@ app.use(express.json({ limit: '50gb' })); // Parse JSON bodies
 app.use(fileUpload({
   useTempFiles: true,
   tempFileDir: process.env.TMP_UPLOAD_SERVER_PATH,  // Adjust this to your preferred temporary directory
-  limits: { fileSize: 50 * 1024 * 1024 * 1024 }  // Set the limit to 2GB
+  limits: { fileSize: 50 * 1024 * 1024 * 1024 }
 }));
 app.use((err, req, res, next) => {
   if (err && err.code === 'LIMIT_FILE_SIZE') {
@@ -226,6 +259,11 @@ app.post('/login', async (req, res) => {
     if (match) {
       // Create and assign a token
       const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
+      res.cookie('auth_token', token, {
+        httpOnly: true,
+        sameSite: 'Strict',
+        secure: req.secure
+      });
       res.json({ message: "Authentication successful!", token });
       logServerAction('Logged In');
     } else {
@@ -242,6 +280,11 @@ app.post('/logout', authenticateJWT, (req, res) => {
       res.status(500).send("Failed to blacklist token");
       return console.error(err.message);
     }
+    res.clearCookie('auth_token', {
+      httpOnly: true,
+      sameSite: 'Strict',
+      secure: req.secure
+    });
     console.log('Logged out');
     logServerAction('Logged Out');
     cleanupExpiredTokens();
@@ -1301,3 +1344,59 @@ const server = app.listen(port, () => {
   console.log('Starting video thumbnail pre-caching...');
   precacheVideoThumbnails();
 });
+
+function broadcastMaintenance(reason) {
+  if (!wss || !wss.clients) {
+    return;
+  }
+  const message = JSON.stringify({ type: 'maintenance', reason: reason || 'Server shutting down for maintenance' });
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+function shutdownGracefully(trigger) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  maintenanceMode = true;
+  console.log(`Shutdown initiated (${trigger}).`);
+
+  broadcastMaintenance('Server shutting down for maintenance');
+
+  setTimeout(() => {
+    if (wss) {
+      wss.clients.forEach(client => {
+        try {
+          client.close(1001, 'Server shutting down');
+        } catch (err) {
+          console.error('Error closing WebSocket client:', err);
+        }
+      });
+      wss.close(() => {});
+    }
+
+    server.close(() => {
+      console.log('HTTP server closed. Exiting.');
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      console.warn('Forcing shutdown.');
+      process.exit(1);
+    }, 3000);
+  }, 1500);
+}
+
+if (process.stdin.isTTY) {
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (data) => {
+    const command = data.trim().toLowerCase();
+    if (command === 'stop') {
+      shutdownGracefully('terminal command');
+    }
+  });
+}

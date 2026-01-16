@@ -1,3 +1,37 @@
+let ws;
+
+function setupWebSocket() {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(wsProtocol + '://' + window.location.host);
+
+    ws.onmessage = function (event) {
+        let message;
+        try {
+            message = JSON.parse(event.data);
+        } catch (error) {
+            console.error('[ERROR] Failed to parse WebSocket message:', error.message, event.data);
+            return;
+        }
+
+        if (message.type === 'maintenance') {
+            window.location.href = '/maintenance.html';
+        }
+    };
+
+    ws.onclose = function() {
+        setTimeout(setupWebSocket, 1000);
+    };
+
+    ws.onerror = function(err) {
+        console.error('Socket encountered error: ', err.message, 'Closing socket');
+        ws.close();
+    };
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    setupWebSocket();
+});
+
 document.getElementById('login-form').addEventListener('submit', function(e) {
     e.preventDefault();
     

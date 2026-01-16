@@ -41,7 +41,19 @@ if (!localStorage.getItem('token')) {
     };
 
     ws.onmessage = function (event) {
-        const message = JSON.parse(event.data);
+        let message;
+        try {
+            message = JSON.parse(event.data);
+        } catch (error) {
+            console.error('[ERROR] Failed to parse WebSocket message:', error.message, event.data);
+            return;
+        }
+
+        if (message.type === 'maintenance') {
+            window.location.href = '/maintenance.html';
+            return;
+        }
+
         if (message.type === 'progress') {
           updateBackupProgress(message.value); // Update the progress bar with this value
         } else if (message.type === 'complete') {

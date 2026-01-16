@@ -23,6 +23,11 @@ function setupWebSocket() {
             return;
         }
 
+        if (message.type === 'maintenance') {
+            window.location.href = '/maintenance.html';
+            return;
+        }
+
         if (!message.requestId) {
             return;
         }
