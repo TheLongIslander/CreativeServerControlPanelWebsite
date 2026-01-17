@@ -1,3 +1,8 @@
+/*
+ * Purpose: Control panel UI logic for server actions, backups, and maintenance redirects.
+ * Functions: setupWebSocket, checkServerStatus, updateBackupProgress, setBackupState,
+ *            handleFetchResponse, and action button handlers.
+ */
 if (!localStorage.getItem('token')) {
     alert('You are not authenticated.');
     window.location.href = '/'; // Redirect back to login

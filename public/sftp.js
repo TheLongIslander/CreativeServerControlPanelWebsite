@@ -1,3 +1,8 @@
+/*
+ * Purpose: SFTP browser UI logic for navigation, uploads/downloads, previews, and maintenance redirects.
+ * Functions: setupWebSocket, fetchFiles, createDirectory, openDirectory, uploadFiles,
+ *            preview helpers, and UI event handlers.
+ */
 const downloadWindows = {};
 const progressStateMap = {};
 let activityTimeout;

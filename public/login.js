@@ -1,3 +1,7 @@
+/*
+ * Purpose: Login page logic and maintenance redirect via WebSocket.
+ * Functions: setupWebSocket, login submit handler.
+ */
 let ws;
 
 function setupWebSocket() {

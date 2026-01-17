@@ -1,3 +1,8 @@
+/*
+ * Purpose: Logging and time utilities backed by SQLite.
+ * Functions: getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens,
+ *            logServerAction, logSFTPServerAction.
+ */
 // utils.js
 const jwt = require('jsonwebtoken');
 const sqlite3 = require('sqlite3').verbose();

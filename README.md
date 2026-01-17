@@ -15,7 +15,7 @@ A self-hosted Node/Express web app for managing a Minecraft server and browsing 
 
 - Backend: Node.js, Express, ws, ssh2, sqlite3
 - Auth: bcrypt + JWT (token blacklist)
-- Workers: `downloadWorker.js` (zips downloads), `heicWorker.js` (HEIC conversion)
+- Workers: `backend/workers/downloadWorker.js` (zips downloads), `backend/workers/heicWorker.js` (HEIC conversion)
 - Frontend: static HTML/CSS/JS in `public/`
 
 ## Requirements
@@ -100,11 +100,14 @@ Open:
 
 ## Project layout
 
-- `app.js` — main server
-- `utils.js` — time helpers + logging
+- `app.js` — main server entrypoint
+- `backend/` — server modules (routes, services, middleware, workers, utils)
+- `backend/routes/` — HTTP endpoints
+- `backend/services/` — shared services (maintenance, server control)
+- `backend/middleware/` — auth middleware
+- `backend/utils/` — logging + helpers
+- `backend/workers/` — background workers
 - `public/` — UI and assets
-- `downloadWorker.js` — background ZIP creation for downloads
-- `heicWorker.js` — HEIC conversion worker
 
 ## Troubleshooting
 

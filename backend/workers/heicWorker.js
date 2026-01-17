@@ -1,3 +1,6 @@
+/*
+ * Purpose: Worker that converts HEIC buffers into resized JPEG thumbnails.
+ */
 const { parentPort } = require('worker_threads');
 const heicConvert = require('heic-convert');
 const sharp = require('sharp');

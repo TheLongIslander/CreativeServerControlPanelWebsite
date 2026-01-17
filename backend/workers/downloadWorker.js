@@ -1,3 +1,8 @@
+/*
+ * Purpose: Worker that downloads files/folders via SFTP and produces ZIPs with progress.
+ * Functions: sftpStat, getTotalSize, countFiles, zipDirectory, zipFile, downloadFile,
+ *            downloadWithProgress.
+ */
 const { parentPort, workerData } = require('worker_threads');
 const { Client } = require('ssh2');
 const path = require('path');
