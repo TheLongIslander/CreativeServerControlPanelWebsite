@@ -76,6 +76,29 @@ function formatDate(value) {
     return date.toLocaleString();
 }
 
+function buildTempPasswordRow(tempPassword) {
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('temp-password-row');
+
+    const code = document.createElement('span');
+    code.classList.add('temp-password-code');
+    code.textContent = tempPassword;
+
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.classList.add('copy-button');
+    const label = document.createElement('span');
+    label.classList.add('copy-label');
+    label.textContent = 'Copy';
+    copyButton.appendChild(label);
+    copyButton.addEventListener('click', () => copyToClipboard(tempPassword, copyButton, wrapper));
+
+    wrapper.appendChild(code);
+    wrapper.appendChild(copyButton);
+
+    return wrapper;
+}
+
 async function fetchUsers() {
     const token = localStorage.getItem('token');
     const res = await fetch('/admin/users', {
@@ -106,9 +129,10 @@ function renderUsers(users) {
     tbody.innerHTML = '';
 
     users.forEach(user => {
-        const row = document.createElement('tr');
-
         const isProtected = user.username.toLowerCase() === 'admin' || user.id === currentUser.id;
+
+        const row = document.createElement('tr');
+        row.classList.add('user-row');
 
         const statusCell = document.createElement('td');
         if (user.disabled) {
@@ -121,28 +145,47 @@ function renderUsers(users) {
 
         const tempCell = document.createElement('td');
         if (user.mustResetPassword && user.tempPassword) {
-            const wrapper = document.createElement('div');
-            wrapper.classList.add('temp-password');
-            const code = document.createElement('span');
-            code.textContent = user.tempPassword;
-            const copyBtn = document.createElement('button');
-            copyBtn.textContent = 'Copy';
-            copyBtn.addEventListener('click', () => copyToClipboard(user.tempPassword));
-            wrapper.appendChild(code);
-            wrapper.appendChild(copyBtn);
-            tempCell.appendChild(wrapper);
+            tempCell.appendChild(buildTempPasswordRow(user.tempPassword));
         } else {
             tempCell.textContent = 'User onboarded';
         }
 
+        const usernameCell = document.createElement('td');
+        const usernameButton = document.createElement('button');
+        usernameButton.type = 'button';
+        usernameButton.classList.add('user-toggle');
+        usernameButton.setAttribute('aria-expanded', 'false');
+        usernameButton.innerHTML = `<span>${user.username}</span><span class="chevron">▸</span>`;
+        usernameCell.appendChild(usernameButton);
+
+        const lastLoginCell = document.createElement('td');
+        lastLoginCell.textContent = formatDate(user.lastLoginAt);
+
+        row.appendChild(usernameCell);
+        row.appendChild(statusCell);
+        row.appendChild(tempCell);
+        row.appendChild(lastLoginCell);
+        tbody.appendChild(row);
+
+        const actionsRow = document.createElement('tr');
+        actionsRow.classList.add('user-actions-row', 'hidden');
         const actionsCell = document.createElement('td');
-        actionsCell.classList.add('actions-cell');
+        actionsCell.colSpan = 4;
+
+        const actionsPanel = document.createElement('div');
+        actionsPanel.classList.add('actions-panel');
 
         if (isProtected) {
-            actionsCell.textContent = 'Protected';
+            const protectedTag = document.createElement('span');
+            protectedTag.classList.add('protected-tag');
+            protectedTag.textContent = 'Protected account';
+            actionsPanel.appendChild(protectedTag);
         } else {
             const toggleBtn = document.createElement('button');
             toggleBtn.textContent = user.disabled ? 'Enable' : 'Disable';
+            if (!user.disabled) {
+                toggleBtn.classList.add('warning');
+            }
             toggleBtn.addEventListener('click', () => toggleDisabled(user));
 
             const resetBtn = document.createElement('button');
@@ -154,23 +197,25 @@ function renderUsers(users) {
             deleteBtn.classList.add('danger');
             deleteBtn.addEventListener('click', () => deleteUser(user));
 
-            actionsCell.appendChild(toggleBtn);
-            actionsCell.appendChild(resetBtn);
-            actionsCell.appendChild(deleteBtn);
+            actionsPanel.appendChild(toggleBtn);
+            actionsPanel.appendChild(resetBtn);
+            actionsPanel.appendChild(deleteBtn);
         }
 
-        const usernameCell = document.createElement('td');
-        usernameCell.textContent = user.username;
+        actionsCell.appendChild(actionsPanel);
+        actionsRow.appendChild(actionsCell);
+        tbody.appendChild(actionsRow);
 
-        const lastLoginCell = document.createElement('td');
-        lastLoginCell.textContent = formatDate(user.lastLoginAt);
-
-        row.appendChild(usernameCell);
-        row.appendChild(statusCell);
-        row.appendChild(tempCell);
-        row.appendChild(lastLoginCell);
-        row.appendChild(actionsCell);
-        tbody.appendChild(row);
+        usernameButton.addEventListener('click', () => {
+            const isOpen = !actionsRow.classList.contains('hidden');
+            actionsRow.classList.toggle('hidden');
+            usernameButton.setAttribute('aria-expanded', String(!isOpen));
+            if (!isOpen) {
+                usernameButton.classList.add('expanded');
+            } else {
+                usernameButton.classList.remove('expanded');
+            }
+        });
     });
 }
 
@@ -237,7 +282,14 @@ async function resetTempPassword(user) {
     }
 
     if (data && data.tempPassword) {
-        alert(`New temporary password: ${data.tempPassword}`);
+        const message = document.getElementById('create-message');
+        if (message) {
+            message.innerHTML = '';
+            const text = document.createElement('span');
+            text.textContent = `Temp password reset for ${user.username}:`;
+            message.appendChild(text);
+            message.appendChild(buildTempPasswordRow(data.tempPassword));
+        }
     }
     refreshUsers();
 }
@@ -292,12 +344,32 @@ async function logout() {
     redirectToLogin();
 }
 
-async function copyToClipboard(text) {
+async function copyToClipboard(text, button, container) {
     try {
         await navigator.clipboard.writeText(text);
-        alert('Copied to clipboard.');
+        if (button) {
+            button.dataset.state = 'Copied';
+            button.classList.add('copied');
+            if (container) {
+                container.classList.add('copied');
+            }
+            window.setTimeout(() => {
+                button.classList.remove('copied');
+                delete button.dataset.state;
+                if (container) {
+                    container.classList.remove('copied');
+                }
+            }, 1200);
+        }
     } catch (err) {
-        alert('Copy failed. Please copy manually.');
+        if (button) {
+            button.dataset.state = 'Failed';
+            button.classList.add('error');
+            window.setTimeout(() => {
+                button.classList.remove('error');
+                delete button.dataset.state;
+            }, 1200);
+        }
     }
 }
 
@@ -313,7 +385,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     const message = document.getElementById('create-message');
     form.addEventListener('submit', async function(event) {
         event.preventDefault();
-        message.textContent = '';
+        message.innerHTML = '';
 
         const usernameInput = document.getElementById('new-username');
         const username = usernameInput.value.trim();
@@ -324,7 +396,10 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         try {
             const user = await createUser(username);
-            message.textContent = `User created. Temp password: ${user.tempPassword}`;
+            const text = document.createElement('span');
+            text.textContent = `User created. Temp password:`;
+            message.appendChild(text);
+            message.appendChild(buildTempPasswordRow(user.tempPassword));
             usernameInput.value = '';
             refreshUsers();
         } catch (err) {

@@ -20,7 +20,7 @@ const createAdminUserRoutes = require('./backend/routes/adminUsers');
 const createMaintenanceService = require('./backend/services/maintenance');
 
 const app = express();
-const port = 3000;
+const port = Number(process.env.PORT) || 8087;
 let wss;
 let server;
 
