@@ -129,6 +129,19 @@ async function fetchUsers() {
     return res.json();
 }
 
+function getStatusLabel(user) {
+    if (user.disabled) {
+        return 'Disabled';
+    }
+    if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
+        return `Locked until ${formatDate(user.lockedUntil)}`;
+    }
+    if (user.mustResetPassword) {
+        return 'Onboarding required';
+    }
+    return 'User onboarded';
+}
+
 function renderUsers(users) {
     const tbody = document.getElementById('users-table-body');
     tbody.innerHTML = '';
@@ -140,13 +153,7 @@ function renderUsers(users) {
         row.classList.add('user-row');
 
         const statusCell = document.createElement('td');
-        if (user.disabled) {
-            statusCell.textContent = 'Disabled';
-        } else if (user.mustResetPassword) {
-            statusCell.textContent = 'Onboarding required';
-        } else {
-            statusCell.textContent = 'User onboarded';
-        }
+        statusCell.textContent = getStatusLabel(user);
 
         const tempCell = document.createElement('td');
         if (user.mustResetPassword && user.tempPassword) {
@@ -168,8 +175,16 @@ function renderUsers(users) {
         lastLoginButton.type = 'button';
         lastLoginButton.classList.add('login-history-link');
         lastLoginButton.textContent = formatDate(user.lastLoginAt);
-        lastLoginButton.addEventListener('click', () => openLoginHistory(user));
+        if (user.lastLoginAt) {
+            lastLoginButton.addEventListener('click', () => openLoginHistory(user));
+        } else {
+            lastLoginButton.disabled = true;
+            lastLoginButton.classList.add('disabled-link');
+        }
         lastLoginCell.appendChild(lastLoginButton);
+
+        const lastResetCell = document.createElement('td');
+        lastResetCell.textContent = formatDate(user.lastPasswordResetAt);
 
         const createdCell = document.createElement('td');
         createdCell.textContent = formatDate(user.createdAt);
@@ -178,13 +193,14 @@ function renderUsers(users) {
         row.appendChild(statusCell);
         row.appendChild(tempCell);
         row.appendChild(lastLoginCell);
+        row.appendChild(lastResetCell);
         row.appendChild(createdCell);
         tbody.appendChild(row);
 
         const actionsRow = document.createElement('tr');
         actionsRow.classList.add('user-actions-row', 'hidden');
         const actionsCell = document.createElement('td');
-        actionsCell.colSpan = 5;
+        actionsCell.colSpan = 6;
 
         const actionsPanel = document.createElement('div');
         actionsPanel.classList.add('actions-panel');
@@ -206,6 +222,11 @@ function renderUsers(users) {
             resetBtn.textContent = user.mustResetPassword ? 'Reset Temp Password' : 'Reset Password';
             resetBtn.addEventListener('click', () => resetTempPassword(user));
 
+            const forceLogoutBtn = document.createElement('button');
+            forceLogoutBtn.textContent = 'Force Logout';
+            forceLogoutBtn.classList.add('neutral');
+            forceLogoutBtn.addEventListener('click', () => forceLogout(user));
+
             const deleteBtn = document.createElement('button');
             deleteBtn.textContent = 'Delete';
             deleteBtn.classList.add('danger');
@@ -213,6 +234,14 @@ function renderUsers(users) {
 
             actionsPanel.appendChild(toggleBtn);
             actionsPanel.appendChild(resetBtn);
+            if (user.lockedUntil && new Date(user.lockedUntil) > new Date()) {
+                const unlockBtn = document.createElement('button');
+                unlockBtn.textContent = 'Unlock';
+                unlockBtn.classList.add('neutral');
+                unlockBtn.addEventListener('click', () => unlockUser(user));
+                actionsPanel.appendChild(unlockBtn);
+            }
+            actionsPanel.appendChild(forceLogoutBtn);
             actionsPanel.appendChild(deleteBtn);
         }
 
@@ -380,6 +409,48 @@ async function resetTempPassword(user) {
     refreshUsers();
 }
 
+async function forceLogout(user) {
+    if (!window.confirm(`Force logout ${user.username}?`)) {
+        return;
+    }
+
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/admin/users/${user.id}/force-logout`, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    });
+
+    if (!res.ok) {
+        alert('Failed to force logout.');
+        return;
+    }
+
+    refreshUsers();
+}
+
+async function unlockUser(user) {
+    if (!window.confirm(`Unlock ${user.username}?`)) {
+        return;
+    }
+
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/admin/users/${user.id}/unlock`, {
+        method: 'POST',
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    });
+
+    if (!res.ok) {
+        alert('Failed to unlock user.');
+        return;
+    }
+
+    refreshUsers();
+}
+
 async function deleteUser(user) {
     if (!window.confirm('Are you sure you want to delete this user?')) {
         return;
@@ -466,6 +537,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     setupAccountMenu();
     refreshUsers();
+    document.getElementById('audit-log-button').addEventListener('click', () => {
+        window.location.href = '/admin-audit.html';
+    });
 
     const form = document.getElementById('create-user-form');
     const message = document.getElementById('create-message');

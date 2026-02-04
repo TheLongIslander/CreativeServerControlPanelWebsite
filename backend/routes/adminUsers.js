@@ -1,7 +1,8 @@
 /*
  * Purpose: Admin-only user management endpoints.
- * Routes: GET /admin/users, GET /admin/users/:id/logins, POST /admin/users,
- *         PATCH /admin/users/:id, POST /admin/users/:id/reset-temp-password,
+ * Routes: GET /admin/users, GET /admin/users/:id/logins, GET /admin/audit,
+ *         POST /admin/users, PATCH /admin/users/:id,
+ *         POST /admin/users/:id/reset-temp-password, POST /admin/users/:id/force-logout,
  *         DELETE /admin/users/:id
  */
 const express = require('express');
@@ -35,6 +36,10 @@ module.exports = function createAdminUserRoutes() {
         mustResetPassword: Boolean(user.must_reset_password),
         tempPassword: user.must_reset_password ? (decrypted || 'Unavailable') : null,
         lastLoginAt: user.last_login_at,
+        lastFailedLoginAt: user.last_failed_login_at,
+        failedLoginCount: user.failed_login_count,
+        lockedUntil: user.locked_until,
+        lastPasswordResetAt: user.last_password_reset_at,
         createdAt: user.created_at,
         updatedAt: user.updated_at
         };
@@ -73,6 +78,26 @@ module.exports = function createAdminUserRoutes() {
     }
   });
 
+  router.get('/admin/audit', async (req, res) => {
+    try {
+      const { actor, target, action, ip, from, to, limit } = req.query;
+      const parsedLimit = Math.min(parseInt(limit, 10) || 200, 500);
+      const events = await usersDb.listAuditEvents({
+        actor,
+        target,
+        action,
+        ip,
+        from,
+        to,
+        limit: parsedLimit
+      });
+      res.json(events);
+    } catch (err) {
+      console.error('Failed to load audit log:', err);
+      res.status(500).send('Failed to load audit log');
+    }
+  });
+
   router.post('/admin/users', async (req, res) => {
     const username = (req.body.username || '').trim();
     const normalized = normalizeUsername(username);
@@ -98,6 +123,17 @@ module.exports = function createAdminUserRoutes() {
         passwordHash: hash,
         tempPasswordPlain: tempPassword
       });
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: result.id,
+          action: 'admin.user.create',
+          metadata: { username },
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log user create:', logErr.message);
+      }
 
       res.status(201).json({
         id: result.id,
@@ -136,6 +172,17 @@ module.exports = function createAdminUserRoutes() {
 
       if (typeof req.body.disabled === 'boolean') {
         await usersDb.setUserDisabled({ userId, disabled: req.body.disabled });
+        try {
+          await usersDb.logAuditEvent({
+            actorUserId: req.user.id,
+            targetUserId: userId,
+            action: req.body.disabled ? 'admin.user.disable' : 'admin.user.enable',
+            metadata: null,
+            ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          });
+        } catch (logErr) {
+          console.warn('Failed to log user disable/enable:', logErr.message);
+        }
       }
 
       res.json({ message: 'User updated' });
@@ -170,6 +217,17 @@ module.exports = function createAdminUserRoutes() {
         passwordHash: hash,
         tempPasswordPlain: tempPassword
       });
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: userId,
+          action: 'admin.user.reset_password',
+          metadata: null,
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log password reset:', logErr.message);
+      }
 
       res.json({ message: 'Temporary password reset', tempPassword });
     } catch (err) {
@@ -197,10 +255,97 @@ module.exports = function createAdminUserRoutes() {
       }
 
       await usersDb.deleteUser(userId);
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: userId,
+          action: 'admin.user.delete',
+          metadata: { username: target.username },
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log delete:', logErr.message);
+      }
       res.json({ message: 'User deleted' });
     } catch (err) {
       console.error('Failed to delete user:', err);
       res.status(500).send('Failed to delete user');
+    }
+  });
+
+  router.post('/admin/users/:id/force-logout', async (req, res) => {
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+
+    try {
+      const target = await usersDb.getUserById(userId);
+      if (!target) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      if (target.username_normalized === 'admin') {
+        return res.status(400).json({ message: 'Admin account cannot be modified here' });
+      }
+      if (target.id === req.user.id) {
+        return res.status(400).json({ message: 'You cannot modify your own account' });
+      }
+
+      await usersDb.incrementTokenVersion(userId);
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: userId,
+          action: 'admin.user.force_logout',
+          metadata: null,
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log force logout:', logErr.message);
+      }
+
+      res.json({ message: 'User logged out' });
+    } catch (err) {
+      console.error('Failed to force logout:', err);
+      res.status(500).send('Failed to force logout');
+    }
+  });
+
+  router.post('/admin/users/:id/unlock', async (req, res) => {
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+
+    try {
+      const target = await usersDb.getUserById(userId);
+      if (!target) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      if (target.username_normalized === 'admin') {
+        return res.status(400).json({ message: 'Admin account cannot be modified here' });
+      }
+      if (target.id === req.user.id) {
+        return res.status(400).json({ message: 'You cannot modify your own account' });
+      }
+
+      await usersDb.clearLoginFailures(userId);
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: userId,
+          action: 'admin.user.unlock',
+          metadata: null,
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log unlock:', logErr.message);
+      }
+
+      res.json({ message: 'User unlocked' });
+    } catch (err) {
+      console.error('Failed to unlock user:', err);
+      res.status(500).send('Failed to unlock user');
     }
   });
 

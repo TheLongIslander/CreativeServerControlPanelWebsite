@@ -68,6 +68,20 @@ async function initUsersDb() {
     )
   `);
 
+  await run(`
+    CREATE TABLE IF NOT EXISTS user_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_user_id INTEGER,
+      target_user_id INTEGER,
+      action TEXT NOT NULL,
+      metadata TEXT,
+      ip_address TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(actor_user_id) REFERENCES users(id),
+      FOREIGN KEY(target_user_id) REFERENCES users(id)
+    )
+  `);
+
   const columns = await all('PRAGMA table_info(users)');
   const existing = new Set(columns.map(col => col.name));
 
@@ -87,6 +101,10 @@ async function initUsersDb() {
   await addColumn('disabled', 'INTEGER', '0');
   await addColumn('token_version', 'INTEGER', '0');
   await addColumn('last_login_at', 'TEXT');
+  await addColumn('last_failed_login_at', 'TEXT');
+  await addColumn('failed_login_count', 'INTEGER', '0');
+  await addColumn('locked_until', 'TEXT');
+  await addColumn('last_password_reset_at', 'TEXT');
   await addColumn('created_at', 'TEXT');
   await addColumn('updated_at', 'TEXT');
 
@@ -130,6 +148,12 @@ async function initUsersDb() {
 
   await run(`
     UPDATE users
+    SET failed_login_count = 0
+    WHERE failed_login_count IS NULL
+  `);
+
+  await run(`
+    UPDATE users
     SET created_at = COALESCE(created_at, DATETIME('now')),
         updated_at = COALESCE(updated_at, DATETIME('now'))
     WHERE created_at IS NULL OR updated_at IS NULL
@@ -164,6 +188,7 @@ async function ensureAdminUser() {
         disabled,
         token_version,
         last_login_at,
+        last_password_reset_at,
         created_at,
         updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -177,6 +202,7 @@ async function ensureAdminUser() {
       0,
       0,
       null,
+      now,
       now,
       now
     ]);
@@ -196,12 +222,14 @@ async function ensureAdminUser() {
           temp_password_enc = NULL,
           disabled = 0,
           token_version = ?,
+          last_password_reset_at = ?,
           updated_at = ?
       WHERE id = ?
     `, [
       hash,
       'admin',
       tokenVersion,
+      shouldUpdateHash ? now : existing.last_password_reset_at,
       now,
       existing.id
     ]);
@@ -222,7 +250,8 @@ async function getUserByUsernameNormalized(usernameNormalized) {
 async function listUsers() {
   return all(`
     SELECT id, username, username_normalized, role, must_reset_password, temp_password_enc, disabled,
-           token_version, last_login_at, created_at, updated_at
+           token_version, last_login_at, last_failed_login_at, failed_login_count, locked_until,
+           last_password_reset_at, created_at, updated_at
     FROM users
     ORDER BY username_normalized ASC
   `);
@@ -245,6 +274,65 @@ async function getUserLoginHistory(userId) {
   `, [userId]);
 }
 
+async function logAuditEvent({ actorUserId, targetUserId, action, metadata, ipAddress }) {
+  const now = new Date().toISOString();
+  const payload = metadata ? JSON.stringify(metadata) : null;
+  await run(`
+    INSERT INTO user_audit_log (actor_user_id, target_user_id, action, metadata, ip_address, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `, [actorUserId || null, targetUserId || null, action, payload, ipAddress || null, now]);
+}
+
+async function listAuditEvents({ actor, target, action, ip, from, to, limit = 200 } = {}) {
+  const where = [];
+  const params = [];
+
+  if (actor) {
+    where.push('a.username LIKE ?');
+    params.push(`%${actor}%`);
+  }
+  if (target) {
+    where.push('t.username LIKE ?');
+    params.push(`%${target}%`);
+  }
+  if (action) {
+    where.push('l.action LIKE ?');
+    params.push(`%${action}%`);
+  }
+  if (ip) {
+    where.push('l.ip_address LIKE ?');
+    params.push(`%${ip}%`);
+  }
+  if (from) {
+    where.push('l.created_at >= ?');
+    params.push(from);
+  }
+  if (to) {
+    where.push('l.created_at <= ?');
+    params.push(to);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  params.push(limit);
+
+  return all(`
+    SELECT l.id,
+           l.action,
+           l.metadata,
+           l.ip_address,
+           l.created_at,
+           a.username AS actor_username,
+           t.username AS target_username
+    FROM user_audit_log l
+    LEFT JOIN users a ON a.id = l.actor_user_id
+    LEFT JOIN users t ON t.id = l.target_user_id
+    ${whereClause}
+    ORDER BY l.created_at DESC
+    LIMIT ?
+  `, params);
+}
+
 async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
   const normalized = normalizeUsername(username);
   const now = new Date().toISOString();
@@ -261,6 +349,7 @@ async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
       disabled,
       token_version,
       last_login_at,
+      last_password_reset_at,
       created_at,
       updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -274,6 +363,7 @@ async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
     0,
     0,
     null,
+    now,
     now,
     now
   ]);
@@ -294,9 +384,10 @@ async function setUserPassword({ userId, passwordHash }) {
         must_reset_password = 0,
         temp_password_enc = NULL,
         token_version = token_version + 1,
+        last_password_reset_at = ?,
         updated_at = ?
     WHERE id = ?
-  `, [passwordHash, now, userId]);
+  `, [passwordHash, now, now, userId]);
 }
 
 async function setTempPasswordForUser({ userId, passwordHash, tempPasswordPlain }) {
@@ -308,9 +399,44 @@ async function setTempPasswordForUser({ userId, passwordHash, tempPasswordPlain 
         must_reset_password = 1,
         temp_password_enc = ?,
         token_version = token_version + 1,
+        last_password_reset_at = ?,
         updated_at = ?
     WHERE id = ?
-  `, [passwordHash, enc, now, userId]);
+  `, [passwordHash, enc, now, now, userId]);
+}
+
+async function recordLoginFailure({ userId, failedCount, lockedUntil }) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET failed_login_count = ?,
+        locked_until = ?,
+        last_failed_login_at = ?,
+        updated_at = ?
+    WHERE id = ?
+  `, [failedCount, lockedUntil, now, now, userId]);
+}
+
+async function clearLoginFailures(userId) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET failed_login_count = 0,
+        locked_until = NULL,
+        last_failed_login_at = NULL,
+        updated_at = ?
+    WHERE id = ?
+  `, [now, userId]);
+}
+
+async function incrementTokenVersion(userId) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET token_version = token_version + 1,
+        updated_at = ?
+    WHERE id = ?
+  `, [now, userId]);
 }
 
 async function setUserDisabled({ userId, disabled }) {
@@ -346,11 +472,16 @@ module.exports = {
   listUsers,
   logUserLogin,
   getUserLoginHistory,
+  logAuditEvent,
+  listAuditEvents,
   createUser,
   setUserLastLogin,
   setUserPassword,
   setTempPasswordForUser,
   setUserDisabled,
   setUserRole,
-  deleteUser
+  deleteUser,
+  recordLoginFailure,
+  clearLoginFailures,
+  incrementTokenVersion
 };

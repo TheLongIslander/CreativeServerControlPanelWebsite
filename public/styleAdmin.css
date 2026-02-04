@@ -192,6 +192,68 @@ tr:last-child td {
     box-shadow: none;
 }
 
+.login-history-link.disabled-link {
+    color: var(--muted);
+    text-decoration: none;
+    cursor: not-allowed;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.section-header h2 {
+    margin: 0;
+}
+
+.audit-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: var(--shadow);
+}
+
+.filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.filter-group label {
+    font-size: 0.85rem;
+    color: var(--muted);
+}
+
+.filter-group input {
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+}
+
+.filter-actions {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+}
+
+.neutral {
+    background-color: #2f3a46;
+}
+
+.neutral:hover {
+    background-color: #202833;
+}
+
 .user-toggle .chevron {
     font-size: 0.9rem;
     opacity: 0.7;
@@ -233,6 +295,14 @@ tr:last-child td {
 
 .actions-panel .warning:hover {
     background-color: #dca502;
+}
+
+.actions-panel .neutral {
+    background-color: #2f3a46;
+}
+
+.actions-panel .neutral:hover {
+    background-color: #202833;
 }
 
 .actions-panel .danger {
