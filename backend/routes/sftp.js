@@ -8,6 +8,7 @@ const path = require('path');
 const { promisify } = require('util');
 const { Client } = require('ssh2');
 const authenticateJWT = require('../middleware/authenticate');
+const requireOnboarded = require('../middleware/requireOnboarded');
 const sftpConnectionDetails = require('../config/sftp');
 
 const sftpStat = promisify((sftp, targetPath, callback) => sftp.stat(targetPath, callback));
@@ -58,8 +59,9 @@ async function findClosestExistingDirectory(sftp, targetPath) {
 
 module.exports = function createSftpRoutes() {
   const router = express.Router();
+  router.use(authenticateJWT, requireOnboarded);
 
-  router.get('/sftp/list', authenticateJWT, (req, res) => {
+  router.get('/sftp/list', (req, res) => {
     const dirPath = normalizeSftpPath(req.query.path || '/');
 
     const conn = new Client();
@@ -112,13 +114,13 @@ module.exports = function createSftpRoutes() {
     }).connect(sftpConnectionDetails);
   });
 
-  router.post('/change-directory', authenticateJWT, (req, res) => {
+  router.post('/change-directory', (req, res) => {
     const newPath = req.body.path;
     currentPath = newPath;
     res.json({ path: currentPath });
   });
 
-  router.post('/open-directory', authenticateJWT, (req, res) => {
+  router.post('/open-directory', (req, res) => {
     const newPath = req.body.path;
     if (!newPath.startsWith('/')) {
       currentPath = path.join(currentPath, newPath);
@@ -128,7 +130,7 @@ module.exports = function createSftpRoutes() {
     res.json({ path: currentPath });
   });
 
-  router.post('/sftp/create-directory', authenticateJWT, (req, res) => {
+  router.post('/sftp/create-directory', (req, res) => {
     const { path: basePath, directoryName } = req.body;
 
     if (!directoryName || !basePath) {

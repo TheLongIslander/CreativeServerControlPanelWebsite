@@ -1,0 +1,196 @@
+const jwt = require('jsonwebtoken');
+const sqlite3 = require('sqlite3').verbose();
+const bcrypt = require('bcrypt');
+
+// Initialize the SQLite database for tokens and users
+const db = new sqlite3.Database('./token_blacklist.db', sqlite3.OPEN_READWRITE, (err) => {
+    if (err) {
+        return console.error('Error opening database:', err.message);
+    }
+    console.log('Connected to the SQLite database.');
+});
+
+const logDB = new sqlite3.Database('./server_logs.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+        console.error('Error when creating the database', err);
+    } else {
+        console.log('Database created!');
+        logDB.run(`CREATE TABLE IF NOT EXISTS server_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )`);
+    }
+});
+
+const activityDb = new sqlite3.Database('./sftp_activity_log.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+        console.error(err.message);
+    }
+    activityDb.run(`
+      CREATE TABLE IF NOT EXISTS sftp_activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        action TEXT,
+        file_path TEXT,
+        timestamp TEXT,
+        ip_address TEXT
+      )
+    `, (err) => {
+      if (err) {
+        console.error(err.message);
+      }
+    });
+});
+
+// Initialize SQLite database for users
+const userDB = new sqlite3.Database('./users.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+        console.error('Error opening the user database:', err.message);
+    } else {
+        console.log('User database connected!');
+        userDB.run(`
+          CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password TEXT, -- hashed password
+            role TEXT DEFAULT 'user', -- role can be 'admin' or 'user'
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          )
+        `, (err) => {
+            if (err) {
+                console.error('Error creating user table:', err.message);
+            } else {
+                console.log('User table created successfully');
+            }
+        });
+    }
+});
+
+// Helper function to create a new user
+async function createUser(username, password, role = 'user') {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    return new Promise((resolve, reject) => {
+        userDB.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', [username, hashedPassword, role], function(err) {
+            if (err) {
+                return reject(err);
+            }
+            resolve({ id: this.lastID, username, role });
+        });
+    });
+}
+
+// Helper function to retrieve a user by username
+function getUserByUsername(username) {
+    return new Promise((resolve, reject) => {
+        userDB.get('SELECT * FROM users WHERE username = ?', [username], (err, row) => {
+            if (err) {
+                return reject(err);
+            }
+            resolve(row);
+        });
+    });
+}
+
+// Helper function to authenticate a user (check if the password matches)
+async function authenticateUser(username, password) {
+    const user = await getUserByUsername(username);
+    if (user) {
+        const match = await bcrypt.compare(password, user.password);
+        if (match) {
+            return { id: user.id, username: user.username, role: user.role };
+        }
+    }
+    return null;
+}
+
+// Helper function to list all users (for admin use)
+function listUsers() {
+    return new Promise((resolve, reject) => {
+        userDB.all('SELECT id, username, role, created_at FROM users', (err, rows) => {
+            if (err) {
+                return reject(err);
+            }
+            resolve(rows);
+        });
+    });
+}
+
+function getEasternTime() {
+    const date = new Date();
+    return date.toLocaleString('en-US', { timeZone: 'America/New_York' });
+}
+
+function getFormattedDate() {
+    const date = new Date();
+    const day = date.getDate();
+    const month = date.toLocaleString('en-US', { month: 'long', timeZone: 'America/New_York' });
+    const year = date.getFullYear();
+    let suffix = 'th';
+    if (day % 10 === 1 && day !== 11) suffix = 'st';
+    else if (day % 10 === 2 && day !== 12) suffix = 'nd';
+    else if (day % 10 === 3 && day !== 13) suffix = 'rd';
+
+    return `${month} ${day}${suffix}, ${year}`;
+}
+
+function getEasternDateHour() {
+    const date = new Date();
+    return date.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: 'numeric', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function cleanupExpiredTokens() {
+    console.log("Running cleanup...");
+    db.all('SELECT token FROM blacklisted_tokens', [], (err, rows) => {
+        if (err) {
+            return console.error(err.message);
+        }
+        rows.forEach(row => {
+            const decoded = jwt.decode(row.token, { complete: true });
+            if (decoded && decoded.payload.exp * 1000 < Date.now()) {
+                db.run('DELETE FROM blacklisted_tokens WHERE token = ?', [row.token], (err) => {
+                    if (err) {
+                        console.error('Failed to delete expired token:', err.message);
+                    }
+                });
+            }
+        });
+    });
+}
+
+function logServerAction(action) {
+    const timestamp = getEasternTime(); // This will fetch the time in Eastern Time
+    logDB.run('INSERT INTO server_logs (action, timestamp) VALUES (?, ?)', [action, timestamp], (err) => {
+        if (err) {
+            return console.error('Error logging to database:', err.message);
+        }
+        console.log(`Logged action "${action}" at ${timestamp}`);
+    });
+}
+
+function logSFTPServerAction(username, action, filePath, ipAddress) {
+    const timestamp = getEasternTime(); // Fetch the time in Eastern Time
+    console.log(`Attempting to log action: ${action} by ${username} on ${filePath} at ${timestamp} from IP ${ipAddress}`); // Debug log
+    activityDb.run(`
+        INSERT INTO sftp_activity_log (username, action, file_path, timestamp, ip_address)
+        VALUES (?, ?, ?, ?, ?)
+    `, [username, action, filePath, timestamp, ipAddress], (err) => {
+        if (err) {
+            return console.error('Error logging to database:', err.message);
+        }
+        console.log(`Logged SFTP action "${action}" by ${username} on ${filePath} at ${timestamp} from IP ${ipAddress}`);
+    });
+}
+
+module.exports = {
+    getEasternTime,
+    getFormattedDate,
+    getEasternDateHour,
+    cleanupExpiredTokens,
+    logServerAction,
+    logSFTPServerAction,
+    createUser,
+    authenticateUser,
+    getUserByUsername,
+    listUsers
+};

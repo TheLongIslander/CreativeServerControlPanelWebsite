@@ -5,6 +5,7 @@
 const express = require('express');
 const { exec } = require('child_process');
 const authenticateJWT = require('../middleware/authenticate');
+const requireOnboarded = require('../middleware/requireOnboarded');
 const state = require('../state');
 const { getEasternTime, logServerAction } = require('../utils/logger');
 const { startServer } = require('../services/serverControl');
@@ -16,7 +17,7 @@ module.exports = function createServerRoutes() {
     res.json({ running: state.serverRunning });
   });
 
-  router.post('/start', authenticateJWT, (req, res) => {
+  router.post('/start', authenticateJWT, requireOnboarded, (req, res) => {
     const subprocess = exec(`sh ${process.env.START_COMMAND_PATH}`);
 
     subprocess.stdout.on('data', (data) => {
@@ -38,7 +39,7 @@ module.exports = function createServerRoutes() {
     logServerAction('Server Started');
   });
 
-  router.post('/stop', authenticateJWT, (req, res) => {
+  router.post('/stop', authenticateJWT, requireOnboarded, (req, res) => {
     exec('screen -S MinecraftSession -p 0 -X stuff "stop"$(printf "\\r")', (error) => {
       if (error) {
         console.error(`exec error: ${error}`);
@@ -51,7 +52,7 @@ module.exports = function createServerRoutes() {
     });
   });
 
-  router.post('/restart', authenticateJWT, (req, res) => {
+  router.post('/restart', authenticateJWT, requireOnboarded, (req, res) => {
     if (!state.serverRunning) {
       res.status(400).send('Server is not currently running.');
       return;

@@ -44,20 +44,65 @@ main {
     justify-content: center;
 }
 
-#logout-button {
-    position: absolute;
-    top: 0; /* Adjust as needed */
-    right: 20px;
+#account-button {
     padding: 10px 20px;
-    background-color: #f44336; /* Red */
+    background-color: #3b3b3b;
     color: white;
     border: none;
     border-radius: 20px;
     cursor: pointer;
 }
 
+#account-button:hover {
+    background-color: #2b2b2b;
+}
+
+.account-container {
+    position: absolute;
+    top: 0;
+    right: 20px;
+}
+
+.account-dropdown {
+    position: absolute;
+    right: 0;
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 14px;
+    padding: 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    z-index: 10;
+}
+
+.account-dropdown button {
+    width: 180px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    box-shadow: none;
+}
+
+#logout-button {
+    background-color: #f44336;
+}
+
 #logout-button:hover {
-    background-color: #da190b; /* Darker red */
+    background-color: #da190b;
+}
+
+#admin-management-button {
+    background-color: #008CBA;
+}
+
+#admin-management-button:hover {
+    background-color: #005f73;
+}
+
+.hidden {
+    display: none;
 }
 
 #sftp-button {
@@ -178,6 +223,11 @@ button:disabled {
         background-color: #666;
         /* Default button background in dark mode */
         color: #fff;
+    }
+
+    .account-dropdown {
+        background: #1d1d1d;
+        border-color: #333;
     }
 
     #start-server {

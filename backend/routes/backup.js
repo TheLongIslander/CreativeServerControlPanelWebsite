@@ -9,6 +9,7 @@ const { execSync, spawn } = require('child_process');
 const WebSocket = require('ws');
 const recursive = require('recursive-readdir');
 const authenticateJWT = require('../middleware/authenticate');
+const requireOnboarded = require('../middleware/requireOnboarded');
 const state = require('../state');
 const { getEasternTime, getFormattedDate, getEasternDateHour, logServerAction } = require('../utils/logger');
 const { startServer } = require('../services/serverControl');
@@ -16,7 +17,7 @@ const { startServer } = require('../services/serverControl');
 module.exports = function createBackupRoutes({ getWss }) {
   const router = express.Router();
 
-  router.post('/backup', authenticateJWT, async (req, res) => {
+  router.post('/backup', authenticateJWT, requireOnboarded, async (req, res) => {
     const now = new Date();
     const currentHour = getEasternDateHour();
 

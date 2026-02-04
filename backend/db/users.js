@@ -1,0 +1,320 @@
+/*
+ * Purpose: SQLite-backed user storage and admin seeding.
+ */
+const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
+const { encryptText } = require('../utils/encryption');
+const { normalizeUsername } = require('../utils/username');
+
+const dbPath = path.join(__dirname, '..', '..', 'users.db');
+const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+  if (err) {
+    console.error('Error opening users database:', err.message);
+  }
+});
+
+function run(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(this);
+    });
+  });
+}
+
+function get(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(row);
+    });
+  });
+}
+
+function all(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(rows);
+    });
+  });
+}
+
+async function initUsersDb() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL,
+      password_hash TEXT NOT NULL
+    )
+  `);
+
+  const columns = await all('PRAGMA table_info(users)');
+  const existing = new Set(columns.map(col => col.name));
+
+  const addColumn = async (name, type, defaultValue) => {
+    if (existing.has(name)) {
+      return;
+    }
+    const defaultClause = defaultValue !== undefined ? ` DEFAULT ${defaultValue}` : '';
+    await run(`ALTER TABLE users ADD COLUMN ${name} ${type}${defaultClause}`);
+  };
+
+  await addColumn('password_hash', 'TEXT');
+  await addColumn('username_normalized', 'TEXT', "''");
+  await addColumn('role', 'TEXT', "'user'");
+  await addColumn('must_reset_password', 'INTEGER', '1');
+  await addColumn('temp_password_enc', 'TEXT');
+  await addColumn('disabled', 'INTEGER', '0');
+  await addColumn('token_version', 'INTEGER', '0');
+  await addColumn('last_login_at', 'TEXT');
+  await addColumn('created_at', 'TEXT');
+  await addColumn('updated_at', 'TEXT');
+
+  await run(`
+    UPDATE users
+    SET username_normalized = LOWER(username)
+    WHERE username_normalized IS NULL OR username_normalized = ''
+  `);
+
+  if (existing.has('password') && !existing.has('password_hash')) {
+    await run(`
+      UPDATE users
+      SET password_hash = password
+      WHERE password_hash IS NULL OR password_hash = ''
+    `);
+  }
+
+  await run(`
+    UPDATE users
+    SET role = 'user'
+    WHERE role IS NULL OR role = ''
+  `);
+
+  await run(`
+    UPDATE users
+    SET must_reset_password = 1
+    WHERE must_reset_password IS NULL
+  `);
+
+  await run(`
+    UPDATE users
+    SET disabled = 0
+    WHERE disabled IS NULL
+  `);
+
+  await run(`
+    UPDATE users
+    SET token_version = 0
+    WHERE token_version IS NULL
+  `);
+
+  try {
+    await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_normalized ON users(username_normalized)');
+  } catch (err) {
+    console.error('Failed to create username_normalized index:', err.message);
+  }
+}
+
+async function ensureAdminUser() {
+  const adminUsername = 'admin';
+  const normalized = normalizeUsername(adminUsername);
+  const now = new Date().toISOString();
+  const hash = process.env.ADMIN_PASSWORD_HASH;
+  if (!hash) {
+    throw new Error('ADMIN_PASSWORD_HASH is not set');
+  }
+
+  const existing = await get('SELECT * FROM users WHERE username_normalized = ?', [normalized]);
+  if (!existing) {
+    await run(`
+      INSERT INTO users (
+        username,
+        username_normalized,
+        password_hash,
+        role,
+        must_reset_password,
+        temp_password_enc,
+        disabled,
+        token_version,
+        last_login_at,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      adminUsername,
+      normalized,
+      hash,
+      'admin',
+      0,
+      null,
+      0,
+      0,
+      null,
+      now,
+      now
+    ]);
+    return { created: true };
+  }
+
+  const shouldUpdateHash = existing.password_hash !== hash;
+  const shouldUpdateRole = existing.role !== 'admin';
+  const shouldEnable = existing.disabled !== 0;
+  if (shouldUpdateHash || shouldUpdateRole || shouldEnable || existing.must_reset_password !== 0) {
+    const tokenVersion = shouldUpdateHash ? existing.token_version + 1 : existing.token_version;
+    await run(`
+      UPDATE users
+      SET password_hash = ?,
+          role = ?,
+          must_reset_password = 0,
+          temp_password_enc = NULL,
+          disabled = 0,
+          token_version = ?,
+          updated_at = ?
+      WHERE id = ?
+    `, [
+      hash,
+      'admin',
+      tokenVersion,
+      now,
+      existing.id
+    ]);
+    return { updated: true, tokenVersion };
+  }
+
+  return { unchanged: true };
+}
+
+async function getUserById(id) {
+  return get('SELECT * FROM users WHERE id = ?', [id]);
+}
+
+async function getUserByUsernameNormalized(usernameNormalized) {
+  return get('SELECT * FROM users WHERE username_normalized = ?', [usernameNormalized]);
+}
+
+async function listUsers() {
+  return all(`
+    SELECT id, username, username_normalized, role, must_reset_password, temp_password_enc, disabled,
+           token_version, last_login_at, created_at, updated_at
+    FROM users
+    ORDER BY username_normalized ASC
+  `);
+}
+
+async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
+  const normalized = normalizeUsername(username);
+  const now = new Date().toISOString();
+  const enc = tempPasswordPlain ? encryptText(tempPasswordPlain) : null;
+
+  const result = await run(`
+    INSERT INTO users (
+      username,
+      username_normalized,
+      password_hash,
+      role,
+      must_reset_password,
+      temp_password_enc,
+      disabled,
+      token_version,
+      last_login_at,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    username,
+    normalized,
+    passwordHash,
+    role || 'user',
+    1,
+    enc,
+    0,
+    0,
+    null,
+    now,
+    now
+  ]);
+
+  return { id: result.lastID, tempPasswordPlain };
+}
+
+async function setUserLastLogin(id) {
+  const now = new Date().toISOString();
+  await run('UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?', [now, now, id]);
+}
+
+async function setUserPassword({ userId, passwordHash }) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET password_hash = ?,
+        must_reset_password = 0,
+        temp_password_enc = NULL,
+        token_version = token_version + 1,
+        updated_at = ?
+    WHERE id = ?
+  `, [passwordHash, now, userId]);
+}
+
+async function setTempPasswordForUser({ userId, passwordHash, tempPasswordPlain }) {
+  const now = new Date().toISOString();
+  const enc = tempPasswordPlain ? encryptText(tempPasswordPlain) : null;
+  await run(`
+    UPDATE users
+    SET password_hash = ?,
+        must_reset_password = 1,
+        temp_password_enc = ?,
+        token_version = token_version + 1,
+        updated_at = ?
+    WHERE id = ?
+  `, [passwordHash, enc, now, userId]);
+}
+
+async function setUserDisabled({ userId, disabled }) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET disabled = ?,
+        token_version = token_version + 1,
+        updated_at = ?
+    WHERE id = ?
+  `, [disabled ? 1 : 0, now, userId]);
+}
+
+async function setUserRole({ userId, role }) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET role = ?,
+        updated_at = ?
+    WHERE id = ?
+  `, [role, now, userId]);
+}
+
+async function deleteUser(userId) {
+  await run('DELETE FROM users WHERE id = ?', [userId]);
+}
+
+module.exports = {
+  initUsersDb,
+  ensureAdminUser,
+  getUserById,
+  getUserByUsernameNormalized,
+  listUsers,
+  createUser,
+  setUserLastLogin,
+  setUserPassword,
+  setTempPasswordForUser,
+  setUserDisabled,
+  setUserRole,
+  deleteUser
+};

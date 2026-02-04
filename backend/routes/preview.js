@@ -15,6 +15,7 @@ const sharp = require('sharp');
 const { PDFImage } = require('pdf-image');
 const { Client } = require('ssh2');
 const authenticateJWT = require('../middleware/authenticate');
+const requireOnboarded = require('../middleware/requireOnboarded');
 const sftpConnectionDetails = require('../config/sftp');
 
 const cacheDir = path.join(os.tmpdir(), 'image_cache');
@@ -90,7 +91,7 @@ function scheduleTask(data) {
 function createPreviewRoutes() {
   const router = express.Router();
 
-  router.get('/download-preview', authenticateJWT, (req, res) => {
+  router.get('/download-preview', authenticateJWT, requireOnboarded, (req, res) => {
     const filePath = req.query.path;
 
     const conn = new Client();
