@@ -7,3 +7,4 @@ sftp_activity_log.db
 tmp/
 token_blacklist.db
 bycrypt.js
+users.db

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manage Account</title>
+    <link rel="stylesheet" href="styleAdmin.css">
+    <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <header>
+        <button id="back-button" onclick="location.href='index.html'">Back to Control Panel</button>
+        <div class="account-container">
+            <button id="account-button">Account</button>
+            <div id="account-dropdown" class="account-dropdown hidden">
+                <button id="logout-button">Logout</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <h1>Manage Account</h1>
+
+        <section class="create-user">
+            <h2>Change Password</h2>
+            <form id="change-password-form">
+                <label for="current-password">Current Password</label>
+                <input type="password" id="current-password" required>
+                <label for="new-password">New Password</label>
+                <input type="password" id="new-password" required>
+                <label for="confirm-new-password">Confirm New Password</label>
+                <input type="password" id="confirm-new-password" required>
+                <button type="submit">Update Password</button>
+                <div id="password-message" class="create-message"></div>
+            </form>
+        </section>
+
+        <section class="users-list">
+            <div class="section-header">
+                <h2>Passkeys</h2>
+                <button id="add-passkey-button" type="button">Add Passkey</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="passkeys-table">
+                    <thead>
+                        <tr>
+                            <th>Credential</th>
+                            <th>Created</th>
+                            <th>Last Used</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="passkeys-table-body"></tbody>
+                </table>
+            </div>
+            <p id="passkeys-empty" class="empty-state hidden">No passkeys registered yet.</p>
+        </section>
+    </main>
+
+    <script src="webauthn.js"></script>
+    <script src="account.js"></script>
+</body>
+</html>

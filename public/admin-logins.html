@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login History</title>
+    <link rel="stylesheet" href="styleAdmin.css">
+    <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <header>
+        <button id="back-button" onclick="location.href='admin.html'">Back to Admin</button>
+        <div class="account-container">
+            <button id="account-button">Account</button>
+            <div id="account-dropdown" class="account-dropdown hidden">
+                <button id="manage-account-button">Manage Account</button>
+                <button id="logout-button">Logout</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <h1 id="history-title">Login History</h1>
+        <section class="users-list">
+            <div class="table-wrapper">
+                <table id="logins-table">
+                    <thead>
+                        <tr>
+                            <th>Login Time</th>
+                            <th>IP Address</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logins-table-body"></tbody>
+                </table>
+            </div>
+            <p id="logins-empty" class="empty-state hidden">No login history yet.</p>
+        </section>
+    </main>
+
+    <script src="admin-logins.js"></script>
+</body>
+</html>

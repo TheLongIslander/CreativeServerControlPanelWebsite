@@ -7,6 +7,7 @@ const WebSocket = require('ws');
 const fileUpload = require('express-fileupload');
 const state = require('./backend/state');
 const { logServerAction, cleanupExpiredTokens } = require('./backend/utils/logger');
+const usersDb = require('./backend/db/users');
 const createPageRoutes = require('./backend/routes/pages');
 const createAuthRoutes = require('./backend/routes/auth');
 const createServerRoutes = require('./backend/routes/server');
@@ -15,19 +16,14 @@ const createSftpRoutes = require('./backend/routes/sftp');
 const createDownloadRoutes = require('./backend/routes/download');
 const createUploadRoutes = require('./backend/routes/upload');
 const { createPreviewRoutes, precacheVideoThumbnails } = require('./backend/routes/preview');
+const createAdminUserRoutes = require('./backend/routes/adminUsers');
+const createWebAuthnRoutes = require('./backend/routes/webauthn');
 const createMaintenanceService = require('./backend/services/maintenance');
 
 const app = express();
-const port = 8087;
+const port = Number(process.env.PORT) || 8087;
 let wss;
 let server;
-
-const users = {
-  admin: {
-    username: 'admin',
-    password: process.env.ADMIN_PASSWORD_HASH
-  }
-};
 
 const maintenanceService = createMaintenanceService({
   getWss: () => wss,
@@ -53,7 +49,9 @@ app.use(createPageRoutes({ state }));
 app.use(express.static('public'));
 app.use('/assets', express.static('assets'));
 
-app.use(createAuthRoutes({ users, logServerAction, cleanupExpiredTokens }));
+app.use(createAuthRoutes({ logServerAction, cleanupExpiredTokens }));
+app.use(createAdminUserRoutes());
+app.use(createWebAuthnRoutes());
 app.use(createServerRoutes());
 app.use(createBackupRoutes({ getWss: () => wss }));
 app.use(createSftpRoutes());
@@ -61,17 +59,27 @@ app.use(createDownloadRoutes({ getWss: () => wss }));
 app.use(createUploadRoutes());
 app.use(createPreviewRoutes());
 
-server = app.listen(port, () => {
-  console.log(`Server listening at http://localhost:${port}`);
-  server.timeout = 0;
+async function startServer() {
+  await usersDb.initUsersDb();
+  await usersDb.ensureAdminUser();
 
-  wss = new WebSocket.Server({ server });
-  wss.on('connection', () => {
-    console.log('Client connected to WebSocket.');
+  server = app.listen(port, () => {
+    console.log(`Server listening at http://localhost:${port}`);
+    server.timeout = 0;
+
+    wss = new WebSocket.Server({ server });
+    wss.on('connection', () => {
+      console.log('Client connected to WebSocket.');
+    });
+
+    console.log('Starting video thumbnail pre-caching...');
+    precacheVideoThumbnails();
   });
+}
 
-  console.log('Starting video thumbnail pre-caching...');
-  precacheVideoThumbnails();
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
 
 if (process.stdin.isTTY) {

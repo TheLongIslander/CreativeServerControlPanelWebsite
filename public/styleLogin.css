@@ -61,6 +61,91 @@ button:hover {
     background-color: #45a049;
 }
 
+.secondary-button {
+    margin: 12px auto 0 auto;
+    background-color: #0f8fba;
+    display: block;
+    width: 100%;
+    max-width: 320px;
+}
+
+.secondary-button:hover {
+    background-color: #0a6a8b;
+}
+
+.forgot-password {
+    margin-top: 12px;
+    color: #666;
+    font-size: 0.95rem;
+}
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.modal {
+    background: #fff;
+    color: #333;
+    border-radius: 12px;
+    padding: 24px;
+    width: min(420px, 92vw);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.modal h3 {
+    margin: 0 0 8px 0;
+    font-size: 1.2rem;
+}
+
+.modal p {
+    margin: 0 0 18px 0;
+    color: #666;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.modal-actions .secondary-button {
+    margin: 0;
+    width: auto;
+}
+
+.modal-overlay.is-visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+}
+
+.modal-overlay.is-visible .modal {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .modal-overlay,
+    .modal {
+        transition: none;
+    }
+}
+
 /* Dark mode styles */
 @media (prefers-color-scheme: dark) {
     body {
@@ -86,7 +171,20 @@ button:hover {
         background: #222;
         color: #ccc;
         border-color: #555;
-    }   
+    }
+
+    .forgot-password {
+        color: #aaa;
+    }
+
+    .modal {
+        background: #2b2b2b;
+        color: #eee;
+    }
+
+    .modal p {
+        color: #b8b8b8;
+    }
 }
 
 /* Responsive adjustments for screens less than 768px wide */

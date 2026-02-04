@@ -3,18 +3,98 @@
  * Functions: setupWebSocket, checkServerStatus, updateBackupProgress, setBackupState,
  *            handleFetchResponse, and action button handlers.
  */
-if (!localStorage.getItem('token')) {
-    alert('You are not authenticated.');
-    window.location.href = '/'; // Redirect back to login
-  }
-  let isBackingUp = false;
-  let ws;
-  document.addEventListener('DOMContentLoaded', function() {
+let isBackingUp = false;
+let ws;
+
+function redirectToLogin() {
+    localStorage.removeItem('token');
+    window.location.href = '/';
+}
+
+function redirectToSetPassword() {
+    window.location.href = '/set-password.html';
+}
+
+async function loadCurrentUser() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        alert('You are not authenticated.');
+        redirectToLogin();
+        return null;
+    }
+
+    const res = await fetch('/me', {
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    });
+
+    if (!res.ok) {
+        alert('Session expired. Please log in again.');
+        redirectToLogin();
+        return null;
+    }
+
+    const user = await res.json();
+    if (user.mustResetPassword) {
+        redirectToSetPassword();
+        return null;
+    }
+
+    return user;
+}
+
+function setupAccountMenu(user) {
+    const accountButton = document.getElementById('account-button');
+    const dropdown = document.getElementById('account-dropdown');
+    const adminButton = document.getElementById('admin-management-button');
+    const logoutButton = document.getElementById('logout-button');
+    const manageButton = document.getElementById('manage-account-button');
+
+    if (user) {
+        accountButton.dataset.username = user.username || '';
+    }
+
+    if (user && user.role === 'admin') {
+        adminButton.classList.remove('hidden');
+        adminButton.addEventListener('click', () => {
+            window.location.href = '/admin.html';
+        });
+    } else {
+        adminButton.classList.add('hidden');
+    }
+
+    accountButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        dropdown.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', () => {
+        if (!dropdown.classList.contains('hidden')) {
+            dropdown.classList.add('hidden');
+        }
+    });
+
+    logoutButton.addEventListener('click', function() {
+        logout();
+    });
+
+    manageButton.addEventListener('click', function() {
+        window.location.href = '/account.html';
+    });
+}
+
+document.addEventListener('DOMContentLoaded', async function() {
+    const user = await loadCurrentUser();
+    if (!user) {
+        return;
+    }
+    setupAccountMenu(user);
     setupWebSocket();
     checkServerStatus();
-  });
-  
-  function checkServerStatus() {
+});
+
+function checkServerStatus() {
     fetch('/status')
         .then(response => response.json())
         .then(data => {
@@ -119,7 +199,11 @@ function setBackupState(isBacking) {
     }
 }
 function handleFetchResponse(response) {
-    if (response.status === 403) {
+    if (response.status === 428) {
+        alert('You must set a new password before continuing.');
+        redirectToSetPassword();
+        return null;
+    } else if (response.status === 401 || response.status === 403) {
         alert('Session has expired, please log in again.');
         localStorage.removeItem('token'); // Clear the token as it's no longer valid
         window.location.href = '/'; // Redirect to login
@@ -131,6 +215,7 @@ function handleFetchResponse(response) {
     }
     return response; // Continue processing for other status codes
 }
+
   document.getElementById('start-server').addEventListener('click', function() {
     const token = localStorage.getItem('token');
     if (!token) {
@@ -261,7 +346,7 @@ document.getElementById('restart-server').addEventListener('click', function() {
         }, 6000); // Additional 3 seconds added to the existing delay
     });
 });
-document.getElementById('logout-button').addEventListener('click', function() {
+function logout() {
     const token = localStorage.getItem('token');
     if (!token) {
         alert('No active session.');
@@ -282,12 +367,12 @@ document.getElementById('logout-button').addEventListener('click', function() {
         } else {
             console.log('Server responded with an error during logout.');
         }
-        localStorage.removeItem('token'); // Ensure the token is removed after server acknowledgment
-        window.location.href = '/'; // Redirect to the login page
+        localStorage.removeItem('token');
+        window.location.href = '/';
         alert('You have been logged out.');
     })
     .catch(error => {
         console.error('Error during logout:', error);
         alert('Error logging out.');
     });
-});
+}

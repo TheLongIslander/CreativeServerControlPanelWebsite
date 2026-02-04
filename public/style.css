@@ -44,20 +44,158 @@ main {
     justify-content: center;
 }
 
-#logout-button {
-    position: absolute;
-    top: 0; /* Adjust as needed */
-    right: 20px;
+#account-button {
     padding: 10px 20px;
-    background-color: #f44336; /* Red */
+    background-color: #3b3b3b;
     color: white;
     border: none;
     border-radius: 20px;
     cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    line-height: 1.1;
+}
+
+#account-button:hover {
+    background-color: #2b2b2b;
+}
+
+#account-button::after {
+    content: attr(data-username);
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 500;
+}
+
+.account-container {
+    position: absolute;
+    top: 0;
+    right: 20px;
+}
+
+.account-dropdown {
+    position: absolute;
+    right: 0;
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 14px;
+    padding: 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    z-index: 10;
+}
+
+.account-dropdown button {
+    width: 180px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    box-shadow: none;
+}
+
+#logout-button {
+    background-color: #f44336;
 }
 
 #logout-button:hover {
-    background-color: #da190b; /* Darker red */
+    background-color: #da190b;
+}
+
+#admin-management-button {
+    background-color: #008CBA;
+}
+
+#admin-management-button:hover {
+    background-color: #005f73;
+}
+
+#manage-account-button {
+    background-color: #0f8fba;
+}
+
+#manage-account-button:hover {
+    background-color: #0a6a8b;
+}
+
+.hidden {
+    display: none;
+}
+
+.modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+}
+
+.modal-content {
+    position: relative;
+    background: linear-gradient(160deg, #f9fbff 0%, #eef3f8 100%);
+    border: 1px solid #dde3ea;
+    padding: 26px 28px;
+    border-radius: 20px;
+    width: min(460px, 92vw);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 1;
+}
+
+.modal-content input {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #cfd6de;
+    background: #ffffff;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.modal-message {
+    color: #666;
+    min-height: 20px;
+}
+
+#cancel-reset {
+    background-color: #6b7280;
+}
+
+#cancel-reset:hover {
+    background-color: #4b5563;
+}
+
+#confirm-reset {
+    background-color: #0f8fba;
+}
+
+#confirm-reset:hover {
+    background-color: #0a6a8b;
+}
+
+body.modal-open header {
+    opacity: 0;
+    pointer-events: none;
 }
 
 #sftp-button {
@@ -180,6 +318,11 @@ button:disabled {
         color: #fff;
     }
 
+    .account-dropdown {
+        background: #1d1d1d;
+        border-color: #333;
+    }
+
     #start-server {
         background-color: #198754; /* Bootstrap green */
     }
@@ -211,6 +354,22 @@ button:disabled {
 
     #progress-percentage {
         color: white; /* White color text for dark mode */
+    }
+
+    .modal-content {
+        background: linear-gradient(160deg, #1e232b 0%, #14171d 100%);
+        border-color: #2a2f38;
+        color: #e5e7eb;
+    }
+
+    .modal-content input {
+        background: #0f1115;
+        border-color: #2a2f38;
+        color: #e5e7eb;
+    }
+
+    .modal-message {
+        color: #aaa;
     }
 }
 

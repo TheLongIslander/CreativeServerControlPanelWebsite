@@ -11,13 +11,15 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { Client } = require('ssh2');
 const authenticateJWT = require('../middleware/authenticate');
+const requireOnboarded = require('../middleware/requireOnboarded');
 const sftpConnectionDetails = require('../config/sftp');
 const { logSFTPServerAction } = require('../utils/logger');
 
 module.exports = function createUploadRoutes() {
   const router = express.Router();
+  router.use(authenticateJWT, requireOnboarded);
 
-  router.post('/upload', authenticateJWT, (req, res) => {
+  router.post('/upload', (req, res) => {
     let files = req.files.files;
     const destinationPath = req.body.path;
     const lastModifiedRaw = req.body.lastModified;

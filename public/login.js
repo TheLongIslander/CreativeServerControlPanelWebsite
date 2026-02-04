@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 document.getElementById('login-form').addEventListener('submit', function(e) {
     e.preventDefault();
-    
+
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
 
@@ -49,22 +49,50 @@ document.getElementById('login-form').addEventListener('submit', function(e) {
         },
         body: JSON.stringify({ username, password })
     })
-    .then(response => response.json())
-    .then(data => 
-        {
-        if (data.token) 
-        {
-            // Store the token in localStorage
+    .then(async response => {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+            const message = (data && data.message) ? data.message : 'Login failed';
+            throw new Error(message);
+        }
+        return data;
+    })
+    .then(data => {
+        if (data && data.token) {
             localStorage.setItem('token', data.token);
-            // Redirect to the control panel page
-            window.location.href = '/index.html';
-        } 
-        else 
-        {
-            alert('Login failed: Incorrect Password');
+            if (data.mustResetPassword) {
+                window.location.href = '/set-password.html';
+            } else {
+                window.location.href = '/index.html';
+            }
+        } else {
+            alert('Login failed');
         }
     })
     .catch(err => {
-        alert('Login failed');
+        alert('Login failed: ' + err.message);
     });
 });
+
+const passkeyButton = document.getElementById('passkey-button');
+if (window.PublicKeyCredential) {
+    passkeyButton.addEventListener('click', async function() {
+        try {
+            const data = await window.webauthn.startPasskeyAuthentication();
+            if (data && data.token) {
+                localStorage.setItem('token', data.token);
+                if (data.mustResetPassword) {
+                    window.location.href = '/set-password.html';
+                } else {
+                    window.location.href = '/index.html';
+                }
+            } else {
+                alert('Passkey login failed.');
+            }
+        } catch (err) {
+            alert('Passkey login failed: ' + err.message);
+        }
+    });
+} else {
+    passkeyButton.style.display = 'none';
+}

@@ -6,10 +6,11 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const jwt = require('jsonwebtoken');
 const WebSocket = require('ws');
 const { Worker } = require('worker_threads');
 const { logSFTPServerAction } = require('../utils/logger');
+const authenticateJWT = require('../middleware/authenticate');
+const requireOnboarded = require('../middleware/requireOnboarded');
 
 const downloads = {};
 const tempDownloadLinks = new Map();
@@ -17,64 +18,61 @@ const tempDownloadLinks = new Map();
 module.exports = function createDownloadRoutes({ getWss }) {
   const router = express.Router();
 
-  router.post('/download', (req, res) => {
-    const { token, path: filePath, requestId: frontendRequestId } = req.body;
+  router.post('/download', authenticateJWT, requireOnboarded, (req, res) => {
+    const { path: filePath, requestId: frontendRequestId } = req.body;
     const formattedIpAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const requestId = frontendRequestId || generateUniqueId();
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-      if (err) {
-        logSFTPServerAction('unknown', 'download', filePath, formattedIpAddress);
-        return res.sendStatus(403);
-      }
+    if (!downloads[requestId]) {
+      const worker = new Worker(path.join(__dirname, '..', 'workers', 'downloadWorker.js'), {
+        workerData: {
+          filePath,
+          user: {
+            id: req.user.id,
+            username: req.user.username,
+            role: req.user.role
+          },
+          requestId,
+          formattedIpAddress
+        }
+      });
 
-      const requestId = frontendRequestId || generateUniqueId();
+      downloads[requestId] = { worker, status: 'in-progress', filePath: null };
 
-      if (!downloads[requestId]) {
-        const worker = new Worker(path.join(__dirname, '..', 'workers', 'downloadWorker.js'), {
-          workerData: {
-            filePath,
-            user,
-            requestId,
-            formattedIpAddress
+      worker.on('message', message => {
+        if (message.type === 'progress') {
+          broadcastDownloadProgress(getWss, requestId, message.progress);
+        } else if (message.type === 'done') {
+          downloads[requestId].status = 'ready';
+          downloads[requestId].filePath = message.filePath;
+          tempDownloadLinks.set(requestId, message.filePath);
+          broadcastDownloadProgress(getWss, requestId, 100);
+
+          const wss = getWss();
+          if (wss) {
+            wss.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ type: 'complete', requestId }));
+              }
+            });
           }
-        });
+        }
+      });
 
-        downloads[requestId] = { worker, status: 'in-progress', filePath: null };
+      worker.on('error', workerErr => {
+        console.error(`[Worker ${requestId}] error:`, workerErr);
+        downloads[requestId].status = 'error';
+      });
 
-        worker.on('message', message => {
-          if (message.type === 'progress') {
-            broadcastDownloadProgress(getWss, requestId, message.progress);
-          } else if (message.type === 'done') {
-            downloads[requestId].status = 'ready';
-            downloads[requestId].filePath = message.filePath;
-            tempDownloadLinks.set(requestId, message.filePath);
-            broadcastDownloadProgress(getWss, requestId, 100);
+      worker.on('exit', code => {
+        if (code !== 0) {
+          console.error(`[Worker ${requestId}] exited with code ${code}`);
+        }
+      });
+    }
 
-            const wss = getWss();
-            if (wss) {
-              wss.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                  client.send(JSON.stringify({ type: 'complete', requestId }));
-                }
-              });
-            }
-          }
-        });
-
-        worker.on('error', workerErr => {
-          console.error(`[Worker ${requestId}] error:`, workerErr);
-          downloads[requestId].status = 'error';
-        });
-
-        worker.on('exit', code => {
-          if (code !== 0) {
-            console.error(`[Worker ${requestId}] exited with code ${code}`);
-          }
-        });
-      }
-
-      res.json({ requestId, message: 'Download queued' });
-    });
+    logSFTPServerAction(req.user.username, 'download', filePath, formattedIpAddress);
+    res.json({ requestId, message: 'Download queued' });
   });
 
   router.get('/downloads/:requestId', (req, res) => {

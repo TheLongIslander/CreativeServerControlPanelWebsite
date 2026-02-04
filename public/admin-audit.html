@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Audit Log</title>
+    <link rel="stylesheet" href="styleAdmin.css">
+    <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <header>
+        <button id="back-button" onclick="location.href='admin.html'">Back to Admin</button>
+        <div class="account-container">
+            <button id="account-button">Account</button>
+            <div id="account-dropdown" class="account-dropdown hidden">
+                <button id="manage-account-button">Manage Account</button>
+                <button id="logout-button">Logout</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <h1>Audit Log</h1>
+        <section class="users-list">
+            <div class="audit-filters">
+                <div class="filter-group">
+                    <label for="filter-actor">Actor</label>
+                    <input type="text" id="filter-actor" placeholder="admin">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-target">Target</label>
+                    <input type="text" id="filter-target" placeholder="username">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-action">Action</label>
+                    <input type="text" id="filter-action" placeholder="admin.user.create">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-ip">IP</label>
+                    <input type="text" id="filter-ip" placeholder="192.168.">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-from">From</label>
+                    <input type="datetime-local" id="filter-from">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-to">To</label>
+                    <input type="datetime-local" id="filter-to">
+                </div>
+                <div class="filter-group">
+                    <label for="filter-limit">Limit</label>
+                    <input type="number" id="filter-limit" min="10" max="500" value="200">
+                </div>
+                <div class="filter-actions">
+                    <button id="apply-filters" type="button">Apply</button>
+                    <button id="clear-filters" type="button" class="neutral">Clear</button>
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table id="audit-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Actor</th>
+                            <th>Action</th>
+                            <th>Target</th>
+                            <th>Details</th>
+                            <th>IP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body"></tbody>
+                </table>
+            </div>
+            <p id="audit-empty" class="empty-state hidden">No audit events yet.</p>
+        </section>
+    </main>
+
+    <script src="admin-audit.js"></script>
+</body>
+</html>

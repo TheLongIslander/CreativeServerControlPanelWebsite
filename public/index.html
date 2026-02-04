@@ -9,7 +9,14 @@
 </head>
 <body>
     <header>
-        <button id="logout-button">Logout</button>
+        <div class="account-container">
+            <button id="account-button">Account</button>
+            <div id="account-dropdown" class="account-dropdown hidden">
+                <button id="manage-account-button">Manage Account</button>
+                <button id="admin-management-button" class="hidden">Admin Management</button>
+                <button id="logout-button">Logout</button>
+            </div>
+        </div>
         <button id="sftp-button"   class="sftp-button" onclick="location.href='sftp.html'">Server Backups Browser</button>
     </header>
     <div class="content">

@@ -10,6 +10,99 @@ let refreshInterval;
 let typingInProgress = false;
 let currentDisplayedPath = null;
 let lastMissingPathAlerted = null;
+let currentUser = null;
+
+function redirectToLogin() {
+    localStorage.removeItem('token');
+    window.location.href = '/';
+}
+
+function redirectToSetPassword() {
+    window.location.href = '/set-password.html';
+}
+
+async function loadCurrentUser() {
+    const token = localStorage.getItem('token');
+    if (!token) {
+        alert('You are not authenticated.');
+        redirectToLogin();
+        return null;
+    }
+
+    const res = await fetch('/me', {
+        headers: {
+            'Authorization': 'Bearer ' + token
+        }
+    });
+
+    if (!res.ok) {
+        alert('Session expired. Please log in again.');
+        redirectToLogin();
+        return null;
+    }
+
+    const user = await res.json();
+    if (user.mustResetPassword) {
+        redirectToSetPassword();
+        return null;
+    }
+
+    return user;
+}
+
+function setupAccountMenu(user) {
+    const accountButton = document.getElementById('account-button');
+    const dropdown = document.getElementById('account-dropdown');
+    const adminButton = document.getElementById('admin-management-button');
+    const logoutButton = document.getElementById('logout-button');
+    const manageButton = document.getElementById('manage-account-button');
+
+    if (user) {
+        accountButton.dataset.username = user.username || '';
+    }
+
+    if (user && user.role === 'admin') {
+        adminButton.classList.remove('hidden');
+        adminButton.addEventListener('click', () => {
+            window.location.href = '/admin.html';
+        });
+    } else {
+        adminButton.classList.add('hidden');
+    }
+
+    accountButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        dropdown.classList.toggle('hidden');
+    });
+
+    document.addEventListener('click', () => {
+        if (!dropdown.classList.contains('hidden')) {
+            dropdown.classList.add('hidden');
+        }
+    });
+
+    logoutButton.addEventListener('click', () => {
+        logout();
+    });
+
+    manageButton.addEventListener('click', () => {
+        window.location.href = '/account.html';
+    });
+}
+
+function handleAuthResponse(response) {
+    if (response.status === 428) {
+        alert('You must set a new password before continuing.');
+        redirectToSetPassword();
+        throw new Error('PASSWORD_RESET_REQUIRED');
+    }
+    if (response.status === 401 || response.status === 403) {
+        alert('Session has expired, please log in again.');
+        redirectToLogin();
+        throw new Error('SESSION_EXPIRED');
+    }
+    return response;
+}
 
 function setupWebSocket() {
     if (window.ws && window.ws.readyState !== WebSocket.CLOSED) {
@@ -78,14 +171,14 @@ function getInitialPath() {
 }
 
 // Ensure the WebSocket is only initialized once on DOMContentLoaded
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', async function () {
+    currentUser = await loadCurrentUser();
+    if (!currentUser) {
+        return;
+    }
+    setupAccountMenu(currentUser);
     setupWebSocket();
     fetchFiles(getInitialPath(), false, true);
-
-    const logoutButton = document.getElementById('logout-button');
-    logoutButton.addEventListener('click', function () {
-        logout();
-    });
 
     const pathInput = document.getElementById('path-input');
     pathInput.addEventListener('keypress', function (event) {
@@ -198,12 +291,7 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
         }
     })
         .then(async response => {
-            if (response.status === 403) {
-                alert('Session has expired, please log in again.');
-                localStorage.removeItem('token');
-                window.location.href = '/';
-                throw new Error('Session expired');
-            }
+            handleAuthResponse(response);
             if (response.status === 404) {
                 const data = await response.json().catch(() => null);
                 if (data && data.fallbackPath) {
@@ -330,6 +418,7 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
                                 body: JSON.stringify({ token, path: filePath, requestId })
                             });
 
+                            handleAuthResponse(res);
                             if (!res.ok) {
                                 throw new Error(res.statusText);
                             }
@@ -395,6 +484,7 @@ function createDirectory(directoryName) {
         })
     })
         .then(response => {
+            handleAuthResponse(response);
             if (!response.ok) {
                 return response.json().then(data => {
                     throw new Error(data.message || 'Error creating directory. Please try again.');
@@ -489,12 +579,7 @@ function logout() {
 }
 
 function handleFetchResponse(response) {
-    if (response.status === 403) {
-        alert('Session has expired, please log in again.');
-        localStorage.removeItem('token');
-        window.location.href = '/';
-        return null;
-    }
+    handleAuthResponse(response);
 
     if (!response.ok) {
         throw new Error('Failed to fetch data');
@@ -502,6 +587,7 @@ function handleFetchResponse(response) {
 
     return response;
 }
+
 
 function changeDirectory() {
     const path = document.getElementById('path-input').value;
@@ -696,7 +782,10 @@ function createImagePreview(file, path) {
             'Authorization': 'Bearer ' + localStorage.getItem('token')
         }
     })
-        .then(response => response.blob())
+        .then(response => {
+            handleAuthResponse(response);
+            return response.blob();
+        })
         .then(blob => {
             const url = URL.createObjectURL(blob);
             imageElement.src = url;
@@ -717,7 +806,10 @@ function createVideoPreview(file, path) {
             'Authorization': 'Bearer ' + localStorage.getItem('token')
         }
     })
-        .then(response => response.blob())
+        .then(response => {
+            handleAuthResponse(response);
+            return response.blob();
+        })
         .then(blob => {
             const url = URL.createObjectURL(blob);
             videoThumbnail.src = url;
@@ -738,7 +830,10 @@ function createPDFPreview(file, path) {
             'Authorization': 'Bearer ' + localStorage.getItem('token')
         }
     })
-        .then(response => response.blob())
+        .then(response => {
+            handleAuthResponse(response);
+            return response.blob();
+        })
         .then(blob => {
             const url = URL.createObjectURL(blob);
             pdfThumbnail.src = url;
