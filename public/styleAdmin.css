@@ -436,27 +436,28 @@ tr:last-child td {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
 }
 
 .modal-content {
     position: relative;
-    background: var(--card);
+    background: linear-gradient(160deg, rgba(25, 32, 40, 0.92), rgba(15, 20, 28, 0.98));
     border: 1px solid var(--border);
-    padding: 20px;
-    border-radius: 16px;
-    width: min(420px, 90vw);
+    padding: 26px 28px;
+    border-radius: 20px;
+    width: min(460px, 92vw);
     box-shadow: var(--shadow);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     z-index: 1;
 }
 
 .modal-content input {
-    padding: 10px 12px;
-    border-radius: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
     border: 1px solid var(--border);
-    background: transparent;
+    background: #0f1115;
     color: var(--text);
 }
 
@@ -469,6 +470,43 @@ tr:last-child td {
 .modal-message {
     color: var(--muted);
     min-height: 20px;
+}
+
+#cancel-reset {
+    background-color: #6b7280;
+}
+
+#cancel-reset:hover {
+    background-color: #4b5563;
+}
+
+#confirm-reset {
+    background-color: var(--accent);
+}
+
+#confirm-reset:hover {
+    background-color: var(--accent-strong);
+}
+
+#logout-button {
+    background-color: var(--danger);
+}
+
+#logout-button:hover {
+    background-color: var(--danger-strong);
+}
+
+#reset-password-button {
+    background-color: var(--accent);
+}
+
+#reset-password-button:hover {
+    background-color: var(--accent-strong);
+}
+
+body.modal-open header {
+    opacity: 0;
+    pointer-events: none;
 }
 
 .empty-state {

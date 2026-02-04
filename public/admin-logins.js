@@ -129,12 +129,14 @@ function openPasswordModal() {
     const modal = document.getElementById('password-modal');
     const message = document.getElementById('password-message');
     message.textContent = '';
+    document.body.classList.add('modal-open');
     modal.classList.remove('hidden');
 }
 
 function closePasswordModal() {
     const modal = document.getElementById('password-modal');
     modal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
     document.getElementById('current-password').value = '';
     document.getElementById('new-password').value = '';
     document.getElementById('confirm-new-password').value = '';
