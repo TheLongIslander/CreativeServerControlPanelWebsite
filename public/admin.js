@@ -48,6 +48,7 @@ function setupAccountMenu() {
     const accountButton = document.getElementById('account-button');
     const dropdown = document.getElementById('account-dropdown');
     const logoutButton = document.getElementById('logout-button');
+    const resetButton = document.getElementById('reset-password-button');
 
     accountButton.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -62,6 +63,10 @@ function setupAccountMenu() {
 
     logoutButton.addEventListener('click', () => {
         logout();
+    });
+
+    resetButton.addEventListener('click', () => {
+        openPasswordModal();
     });
 }
 
@@ -159,18 +164,27 @@ function renderUsers(users) {
         usernameCell.appendChild(usernameButton);
 
         const lastLoginCell = document.createElement('td');
-        lastLoginCell.textContent = formatDate(user.lastLoginAt);
+        const lastLoginButton = document.createElement('button');
+        lastLoginButton.type = 'button';
+        lastLoginButton.classList.add('login-history-link');
+        lastLoginButton.textContent = formatDate(user.lastLoginAt);
+        lastLoginButton.addEventListener('click', () => openLoginHistory(user));
+        lastLoginCell.appendChild(lastLoginButton);
+
+        const createdCell = document.createElement('td');
+        createdCell.textContent = formatDate(user.createdAt);
 
         row.appendChild(usernameCell);
         row.appendChild(statusCell);
         row.appendChild(tempCell);
         row.appendChild(lastLoginCell);
+        row.appendChild(createdCell);
         tbody.appendChild(row);
 
         const actionsRow = document.createElement('tr');
         actionsRow.classList.add('user-actions-row', 'hidden');
         const actionsCell = document.createElement('td');
-        actionsCell.colSpan = 4;
+        actionsCell.colSpan = 5;
 
         const actionsPanel = document.createElement('div');
         actionsPanel.classList.add('actions-panel');
@@ -189,7 +203,7 @@ function renderUsers(users) {
             toggleBtn.addEventListener('click', () => toggleDisabled(user));
 
             const resetBtn = document.createElement('button');
-            resetBtn.textContent = 'Reset Temp Password';
+            resetBtn.textContent = user.mustResetPassword ? 'Reset Temp Password' : 'Reset Password';
             resetBtn.addEventListener('click', () => resetTempPassword(user));
 
             const deleteBtn = document.createElement('button');
@@ -217,6 +231,78 @@ function renderUsers(users) {
             }
         });
     });
+}
+
+function openPasswordModal() {
+    const modal = document.getElementById('password-modal');
+    const message = document.getElementById('password-message');
+    message.textContent = '';
+    modal.classList.remove('hidden');
+}
+
+function closePasswordModal() {
+    const modal = document.getElementById('password-modal');
+    modal.classList.add('hidden');
+    document.getElementById('current-password').value = '';
+    document.getElementById('new-password').value = '';
+    document.getElementById('confirm-new-password').value = '';
+}
+
+async function submitPasswordChange() {
+    const message = document.getElementById('password-message');
+    message.textContent = '';
+
+    const currentPassword = document.getElementById('current-password').value;
+    const newPassword = document.getElementById('new-password').value;
+    const confirm = document.getElementById('confirm-new-password').value;
+
+    if (!currentPassword || !newPassword) {
+        message.textContent = 'All fields are required.';
+        return;
+    }
+    if (newPassword !== confirm) {
+        message.textContent = 'Passwords do not match.';
+        return;
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+        redirectToLogin();
+        return;
+    }
+
+    try {
+        const res = await fetch('/change-password', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ currentPassword, newPassword })
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+            const errMessage = data && data.message ? data.message : 'Failed to update password.';
+            message.textContent = errMessage;
+            return;
+        }
+
+        if (data && data.token) {
+            localStorage.setItem('token', data.token);
+        }
+        message.textContent = 'Password updated.';
+        setTimeout(() => closePasswordModal(), 600);
+    } catch (err) {
+        message.textContent = 'Failed to update password.';
+    }
+}
+
+function openLoginHistory(user) {
+    const params = new URLSearchParams();
+    params.set('userId', user.id);
+    params.set('username', user.username);
+    window.location.href = `/admin-logins.html?${params.toString()}`;
 }
 
 async function createUser(username) {
@@ -406,4 +492,8 @@ document.addEventListener('DOMContentLoaded', async function() {
             message.textContent = err.message;
         }
     });
+
+    document.getElementById('cancel-reset').addEventListener('click', closePasswordModal);
+    document.getElementById('confirm-reset').addEventListener('click', submitPasswordChange);
+    document.querySelector('#password-modal .modal-backdrop').addEventListener('click', closePasswordModal);
 });

@@ -49,6 +49,7 @@ function setupAccountMenu(user) {
     const dropdown = document.getElementById('account-dropdown');
     const adminButton = document.getElementById('admin-management-button');
     const logoutButton = document.getElementById('logout-button');
+    const resetButton = document.getElementById('reset-password-button');
 
     if (user && user.role === 'admin') {
         adminButton.classList.remove('hidden');
@@ -73,6 +74,10 @@ function setupAccountMenu(user) {
     logoutButton.addEventListener('click', function() {
         logout();
     });
+
+    resetButton.addEventListener('click', function() {
+        openPasswordModal();
+    });
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
@@ -83,6 +88,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupAccountMenu(user);
     setupWebSocket();
     checkServerStatus();
+
+    document.getElementById('cancel-reset').addEventListener('click', closePasswordModal);
+    document.getElementById('confirm-reset').addEventListener('click', submitPasswordChange);
+    document.querySelector('#password-modal .modal-backdrop').addEventListener('click', closePasswordModal);
 });
 
 function checkServerStatus() {
@@ -205,6 +214,71 @@ function handleFetchResponse(response) {
         return null; // Stop further processing and do not throw a session expired message
     }
     return response; // Continue processing for other status codes
+}
+
+function openPasswordModal() {
+    const modal = document.getElementById('password-modal');
+    const message = document.getElementById('password-message');
+    message.textContent = '';
+    modal.classList.remove('hidden');
+}
+
+function closePasswordModal() {
+    const modal = document.getElementById('password-modal');
+    modal.classList.add('hidden');
+    document.getElementById('current-password').value = '';
+    document.getElementById('new-password').value = '';
+    document.getElementById('confirm-new-password').value = '';
+}
+
+async function submitPasswordChange() {
+    const message = document.getElementById('password-message');
+    message.textContent = '';
+
+    const currentPassword = document.getElementById('current-password').value;
+    const newPassword = document.getElementById('new-password').value;
+    const confirm = document.getElementById('confirm-new-password').value;
+
+    if (!currentPassword || !newPassword) {
+        message.textContent = 'All fields are required.';
+        return;
+    }
+    if (newPassword !== confirm) {
+        message.textContent = 'Passwords do not match.';
+        return;
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+        redirectToLogin();
+        return;
+    }
+
+    try {
+        const res = await fetch('/change-password', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            },
+            body: JSON.stringify({ currentPassword, newPassword })
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+            const errMessage = data && data.message ? data.message : 'Failed to update password.';
+            message.textContent = errMessage;
+            return;
+        }
+
+        if (data && data.token) {
+            localStorage.setItem('token', data.token);
+        }
+        message.textContent = 'Password updated.';
+        setTimeout(() => closePasswordModal(), 600);
+    } catch (err) {
+        message.textContent = 'Failed to update password.';
+    }
 }
   document.getElementById('start-server').addEventListener('click', function() {
     const token = localStorage.getItem('token');

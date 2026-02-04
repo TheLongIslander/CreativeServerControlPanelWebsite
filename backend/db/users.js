@@ -58,6 +58,16 @@ async function initUsersDb() {
     )
   `);
 
+  await run(`
+    CREATE TABLE IF NOT EXISTS user_login_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      logged_in_at TEXT NOT NULL,
+      ip_address TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  `);
+
   const columns = await all('PRAGMA table_info(users)');
   const existing = new Set(columns.map(col => col.name));
 
@@ -116,6 +126,13 @@ async function initUsersDb() {
     UPDATE users
     SET token_version = 0
     WHERE token_version IS NULL
+  `);
+
+  await run(`
+    UPDATE users
+    SET created_at = COALESCE(created_at, DATETIME('now')),
+        updated_at = COALESCE(updated_at, DATETIME('now'))
+    WHERE created_at IS NULL OR updated_at IS NULL
   `);
 
   try {
@@ -209,6 +226,23 @@ async function listUsers() {
     FROM users
     ORDER BY username_normalized ASC
   `);
+}
+
+async function logUserLogin({ userId, ipAddress }) {
+  const now = new Date().toISOString();
+  await run(`
+    INSERT INTO user_login_history (user_id, logged_in_at, ip_address)
+    VALUES (?, ?, ?)
+  `, [userId, now, ipAddress || null]);
+}
+
+async function getUserLoginHistory(userId) {
+  return all(`
+    SELECT logged_in_at, ip_address
+    FROM user_login_history
+    WHERE user_id = ?
+    ORDER BY logged_in_at DESC
+  `, [userId]);
 }
 
 async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
@@ -310,6 +344,8 @@ module.exports = {
   getUserById,
   getUserByUsernameNormalized,
   listUsers,
+  logUserLogin,
+  getUserLoginHistory,
   createUser,
   setUserLastLogin,
   setUserPassword,

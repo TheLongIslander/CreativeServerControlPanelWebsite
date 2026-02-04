@@ -105,6 +105,56 @@ main {
     display: none;
 }
 
+.modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.modal-content {
+    position: relative;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    padding: 20px;
+    border-radius: 16px;
+    width: min(420px, 90vw);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 1;
+}
+
+.modal-content input {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #ddd;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.modal-message {
+    color: #666;
+    min-height: 20px;
+}
+
 #sftp-button {
     position: absolute;
     top: 0; /* Adjust as needed */
@@ -261,6 +311,22 @@ button:disabled {
 
     #progress-percentage {
         color: white; /* White color text for dark mode */
+    }
+
+    .modal-content {
+        background: #1d1d1d;
+        border-color: #333;
+        color: #ccc;
+    }
+
+    .modal-content input {
+        background: #111;
+        border-color: #333;
+        color: #ccc;
+    }
+
+    .modal-message {
+        color: #aaa;
     }
 }
 

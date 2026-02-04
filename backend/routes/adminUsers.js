@@ -1,7 +1,8 @@
 /*
  * Purpose: Admin-only user management endpoints.
- * Routes: GET /admin/users, POST /admin/users, PATCH /admin/users/:id,
- *         POST /admin/users/:id/reset-temp-password, DELETE /admin/users/:id
+ * Routes: GET /admin/users, GET /admin/users/:id/logins, POST /admin/users,
+ *         PATCH /admin/users/:id, POST /admin/users/:id/reset-temp-password,
+ *         DELETE /admin/users/:id
  */
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -42,6 +43,33 @@ module.exports = function createAdminUserRoutes() {
     } catch (err) {
       console.error('Failed to list users:', err);
       res.status(500).send('Failed to list users');
+    }
+  });
+
+  router.get('/admin/users/:id/logins', async (req, res) => {
+    const userId = Number(req.params.id);
+    if (!Number.isInteger(userId)) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+
+    try {
+      const user = await usersDb.getUserById(userId);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      const history = await usersDb.getUserLoginHistory(userId);
+      res.json({
+        user: {
+          id: user.id,
+          username: user.username,
+          createdAt: user.created_at,
+          lastLoginAt: user.last_login_at
+        },
+        logins: history
+      });
+    } catch (err) {
+      console.error('Failed to load login history:', err);
+      res.status(500).send('Failed to load login history');
     }
   });
 

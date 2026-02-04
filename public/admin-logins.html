@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin Management</title>
+    <title>Login History</title>
     <link rel="stylesheet" href="styleAdmin.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
     <header>
-        <button id="back-button" onclick="location.href='index.html'">Back to Control Panel</button>
+        <button id="back-button" onclick="location.href='admin.html'">Back to Admin</button>
         <div class="account-container">
             <button id="account-button">Account</button>
             <div id="account-dropdown" class="account-dropdown hidden">
@@ -20,34 +20,20 @@
     </header>
 
     <main>
-        <h1>Admin Management</h1>
-
-        <section class="create-user">
-            <h2>Create User</h2>
-            <form id="create-user-form">
-                <label for="new-username">Username</label>
-                <input type="text" id="new-username" required>
-                <button type="submit">Create User</button>
-                <div id="create-message" class="create-message"></div>
-            </form>
-        </section>
-
+        <h1 id="history-title">Login History</h1>
         <section class="users-list">
-            <h2>Users</h2>
             <div class="table-wrapper">
-                <table id="users-table">
+                <table id="logins-table">
                     <thead>
                         <tr>
-                            <th>Username</th>
-                            <th>Status</th>
-                            <th>Temp Password</th>
-                            <th>Last Login</th>
-                            <th>Created</th>
+                            <th>Login Time</th>
+                            <th>IP Address</th>
                         </tr>
                     </thead>
-                    <tbody id="users-table-body"></tbody>
+                    <tbody id="logins-table-body"></tbody>
                 </table>
             </div>
+            <p id="logins-empty" class="empty-state hidden">No login history yet.</p>
         </section>
     </main>
 
@@ -69,6 +55,6 @@
         </div>
     </div>
 
-    <script src="admin.js"></script>
+    <script src="admin-logins.js"></script>
 </body>
 </html>
