@@ -21,7 +21,7 @@ function generateTempPassword() {
 
 module.exports = function createAdminUserRoutes() {
   const router = express.Router();
-  router.use(authenticateJWT, requireOnboarded, requireAdmin);
+  router.use('/admin', authenticateJWT, requireOnboarded, requireAdmin);
 
   router.get('/admin/users', async (req, res) => {
     try {

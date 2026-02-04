@@ -40,11 +40,15 @@ async function loadCurrentUser() {
     return user;
 }
 
-function setupAccountMenu() {
+function setupAccountMenu(user) {
     const accountButton = document.getElementById('account-button');
     const dropdown = document.getElementById('account-dropdown');
     const logoutButton = document.getElementById('logout-button');
-    const resetButton = document.getElementById('reset-password-button');
+    const manageButton = document.getElementById('manage-account-button');
+
+    if (user) {
+        accountButton.dataset.username = user.username || '';
+    }
 
     accountButton.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -61,8 +65,8 @@ function setupAccountMenu() {
         logout();
     });
 
-    resetButton.addEventListener('click', () => {
-        openPasswordModal();
+    manageButton.addEventListener('click', () => {
+        window.location.href = '/account.html';
     });
 }
 
@@ -196,72 +200,6 @@ function renderAuditLog(events) {
     });
 }
 
-function openPasswordModal() {
-    const modal = document.getElementById('password-modal');
-    const message = document.getElementById('password-message');
-    message.textContent = '';
-    document.body.classList.add('modal-open');
-    modal.classList.remove('hidden');
-}
-
-function closePasswordModal() {
-    const modal = document.getElementById('password-modal');
-    modal.classList.add('hidden');
-    document.body.classList.remove('modal-open');
-    document.getElementById('current-password').value = '';
-    document.getElementById('new-password').value = '';
-    document.getElementById('confirm-new-password').value = '';
-}
-
-async function submitPasswordChange() {
-    const message = document.getElementById('password-message');
-    message.textContent = '';
-
-    const currentPassword = document.getElementById('current-password').value;
-    const newPassword = document.getElementById('new-password').value;
-    const confirm = document.getElementById('confirm-new-password').value;
-
-    if (!currentPassword || !newPassword) {
-        message.textContent = 'All fields are required.';
-        return;
-    }
-    if (newPassword !== confirm) {
-        message.textContent = 'Passwords do not match.';
-        return;
-    }
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-        redirectToLogin();
-        return;
-    }
-
-    try {
-        const res = await fetch('/change-password', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + token
-            },
-            body: JSON.stringify({ currentPassword, newPassword })
-        });
-
-        const data = await res.json().catch(() => null);
-        if (!res.ok) {
-            const errMessage = data && data.message ? data.message : 'Failed to update password.';
-            message.textContent = errMessage;
-            return;
-        }
-
-        if (data && data.token) {
-            localStorage.setItem('token', data.token);
-        }
-        message.textContent = 'Password updated.';
-        setTimeout(() => closePasswordModal(), 600);
-    } catch (err) {
-        message.textContent = 'Failed to update password.';
-    }
-}
 
 async function logout() {
     const token = localStorage.getItem('token');
@@ -285,7 +223,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!user) {
         return;
     }
-    setupAccountMenu();
+    setupAccountMenu(currentUser);
 
     async function loadAudit() {
         try {
@@ -316,7 +254,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadAudit();
     });
 
-    document.getElementById('cancel-reset').addEventListener('click', closePasswordModal);
-    document.getElementById('confirm-reset').addEventListener('click', submitPasswordChange);
-    document.querySelector('#password-modal .modal-backdrop').addEventListener('click', closePasswordModal);
 });

@@ -82,6 +82,37 @@ async function initUsersDb() {
     )
   `);
 
+  await run(`
+    CREATE TABLE IF NOT EXISTS webauthn_credentials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      credential_id TEXT NOT NULL UNIQUE,
+      public_key TEXT NOT NULL,
+      counter INTEGER NOT NULL DEFAULT 0,
+      transports TEXT,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS webauthn_challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      type TEXT NOT NULL,
+      challenge TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  `);
+
+  try {
+    await run('CREATE INDEX IF NOT EXISTS idx_webauthn_user_id ON webauthn_credentials(user_id)');
+  } catch (err) {
+    console.error('Failed to create webauthn index:', err.message);
+  }
+
   const columns = await all('PRAGMA table_info(users)');
   const existing = new Set(columns.map(col => col.name));
 
@@ -333,6 +364,84 @@ async function listAuditEvents({ actor, target, action, ip, from, to, limit = 20
   `, params);
 }
 
+async function listWebAuthnCredentials(userId) {
+  return all(`
+    SELECT credential_id, created_at, last_used_at
+    FROM webauthn_credentials
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+  `, [userId]);
+}
+
+async function getWebAuthnCredentialById(credentialId) {
+  return get(`
+    SELECT *
+    FROM webauthn_credentials
+    WHERE credential_id = ?
+  `, [credentialId]);
+}
+
+async function createWebAuthnCredential({ userId, credentialId, publicKey, counter, transports }) {
+  const now = new Date().toISOString();
+  await run(`
+    INSERT INTO webauthn_credentials (
+      user_id, credential_id, public_key, counter, transports, created_at, last_used_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `, [userId, credentialId, publicKey, counter || 0, transports || null, now, now]);
+}
+
+async function updateWebAuthnCounter(credentialId, counter) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE webauthn_credentials
+    SET counter = ?, last_used_at = ?
+    WHERE credential_id = ?
+  `, [counter, now, credentialId]);
+}
+
+async function touchWebAuthnCredential(credentialId) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE webauthn_credentials
+    SET last_used_at = ?
+    WHERE credential_id = ?
+  `, [now, credentialId]);
+}
+
+async function deleteWebAuthnCredential({ userId, credentialId }) {
+  await run(`
+    DELETE FROM webauthn_credentials
+    WHERE credential_id = ? AND user_id = ?
+  `, [credentialId, userId]);
+}
+
+async function setWebAuthnChallenge({ userId, type, challenge, expiresAt }) {
+  const now = new Date().toISOString();
+  await run(`DELETE FROM webauthn_challenges WHERE expires_at < ?`, [now]);
+  if (userId) {
+    await run(`
+      DELETE FROM webauthn_challenges
+      WHERE user_id = ? AND type = ?
+    `, [userId, type]);
+  }
+  await run(`
+    INSERT INTO webauthn_challenges (user_id, type, challenge, expires_at)
+    VALUES (?, ?, ?, ?)
+  `, [userId || null, type, challenge, expiresAt]);
+}
+
+async function getWebAuthnChallengeByValue({ challenge, type }) {
+  return get(`
+    SELECT *
+    FROM webauthn_challenges
+    WHERE challenge = ? AND type = ?
+  `, [challenge, type]);
+}
+
+async function clearWebAuthnChallengeById(id) {
+  await run('DELETE FROM webauthn_challenges WHERE id = ?', [id]);
+}
+
 async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
   const normalized = normalizeUsername(username);
   const now = new Date().toISOString();
@@ -352,7 +461,7 @@ async function createUser({ username, role, passwordHash, tempPasswordPlain }) {
       last_password_reset_at,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
     username,
     normalized,
@@ -474,6 +583,15 @@ module.exports = {
   getUserLoginHistory,
   logAuditEvent,
   listAuditEvents,
+  listWebAuthnCredentials,
+  getWebAuthnCredentialById,
+  createWebAuthnCredential,
+  updateWebAuthnCounter,
+  touchWebAuthnCredential,
+  deleteWebAuthnCredential,
+  setWebAuthnChallenge,
+  getWebAuthnChallengeByValue,
+  clearWebAuthnChallengeById,
   createUser,
   setUserLastLogin,
   setUserPassword,

@@ -95,10 +95,22 @@ header button:hover {
 
 #account-button {
     background-color: #343a40;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    line-height: 1.1;
 }
 
 #account-button:hover {
     background-color: #23272b;
+}
+
+#account-button::after {
+    content: attr(data-username);
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 500;
 }
 
 .account-dropdown {
@@ -544,10 +556,10 @@ progress::-webkit-progress-value {
         background-color: #000000; /* Pure black background for mobile dark mode */
     }
 }
-#reset-password-button {
+#manage-account-button {
     background-color: #0f8fba;
 }
 
-#reset-password-button:hover {
+#manage-account-button:hover {
     background-color: #0a6a8b;
 }

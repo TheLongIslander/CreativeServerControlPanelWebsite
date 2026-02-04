@@ -36,6 +36,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     const form = document.getElementById('set-password-form');
     const message = document.getElementById('message');
+    const passkeyModal = document.getElementById('passkey-modal');
+    const passkeySkip = document.getElementById('passkey-skip');
+    const passkeyAccept = document.getElementById('passkey-accept');
 
     form.addEventListener('submit', async function(event) {
         event.preventDefault();
@@ -76,9 +79,29 @@ document.addEventListener('DOMContentLoaded', async function() {
                 localStorage.setItem('token', data.token);
             }
 
-            window.location.href = '/index.html';
+            passkeyModal.classList.add('is-visible');
+            passkeyModal.setAttribute('aria-hidden', 'false');
         } catch (err) {
             message.textContent = 'Failed to update password.';
         }
+    });
+
+    passkeySkip.addEventListener('click', () => {
+        window.location.href = '/index.html';
+    });
+
+    passkeyAccept.addEventListener('click', async () => {
+        if (!window.PublicKeyCredential) {
+            alert('Passkeys are not supported on this device.');
+            window.location.href = '/index.html';
+            return;
+        }
+        try {
+            const token = localStorage.getItem('token');
+            await window.webauthn.startPasskeyRegistration(token);
+        } catch (err) {
+            alert(err.message || 'Passkey setup failed.');
+        }
+        window.location.href = '/index.html';
     });
 });

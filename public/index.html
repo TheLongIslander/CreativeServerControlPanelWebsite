@@ -12,7 +12,7 @@
         <div class="account-container">
             <button id="account-button">Account</button>
             <div id="account-dropdown" class="account-dropdown hidden">
-                <button id="reset-password-button">Reset Password</button>
+                <button id="manage-account-button">Manage Account</button>
                 <button id="admin-management-button" class="hidden">Admin Management</button>
                 <button id="logout-button">Logout</button>
             </div>
@@ -30,23 +30,6 @@
                 <div id="progress-bar"></div>
             </div>
             <div id="progress-percentage">0%</div>
-        </div>
-    </div>
-    <div id="password-modal" class="modal hidden">
-        <div class="modal-backdrop"></div>
-        <div class="modal-content">
-            <h3>Reset Password</h3>
-            <label for="current-password">Current Password</label>
-            <input type="password" id="current-password" required>
-            <label for="new-password">New Password</label>
-            <input type="password" id="new-password" required>
-            <label for="confirm-new-password">Confirm New Password</label>
-            <input type="password" id="confirm-new-password" required>
-            <div class="modal-actions">
-                <button id="cancel-reset" type="button">Cancel</button>
-                <button id="confirm-reset" type="button">Update Password</button>
-            </div>
-            <p id="password-message" class="modal-message"></p>
         </div>
     </div>
     <script src="script.js"></script>

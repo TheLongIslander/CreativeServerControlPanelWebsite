@@ -73,3 +73,26 @@ document.getElementById('login-form').addEventListener('submit', function(e) {
         alert('Login failed: ' + err.message);
     });
 });
+
+const passkeyButton = document.getElementById('passkey-button');
+if (window.PublicKeyCredential) {
+    passkeyButton.addEventListener('click', async function() {
+        try {
+            const data = await window.webauthn.startPasskeyAuthentication();
+            if (data && data.token) {
+                localStorage.setItem('token', data.token);
+                if (data.mustResetPassword) {
+                    window.location.href = '/set-password.html';
+                } else {
+                    window.location.href = '/index.html';
+                }
+            } else {
+                alert('Passkey login failed.');
+            }
+        } catch (err) {
+            alert('Passkey login failed: ' + err.message);
+        }
+    });
+} else {
+    passkeyButton.style.display = 'none';
+}

@@ -17,6 +17,7 @@ const createDownloadRoutes = require('./backend/routes/download');
 const createUploadRoutes = require('./backend/routes/upload');
 const { createPreviewRoutes, precacheVideoThumbnails } = require('./backend/routes/preview');
 const createAdminUserRoutes = require('./backend/routes/adminUsers');
+const createWebAuthnRoutes = require('./backend/routes/webauthn');
 const createMaintenanceService = require('./backend/services/maintenance');
 
 const app = express();
@@ -50,6 +51,7 @@ app.use('/assets', express.static('assets'));
 
 app.use(createAuthRoutes({ logServerAction, cleanupExpiredTokens }));
 app.use(createAdminUserRoutes());
+app.use(createWebAuthnRoutes());
 app.use(createServerRoutes());
 app.use(createBackupRoutes({ getWss: () => wss }));
 app.use(createSftpRoutes());
