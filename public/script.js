@@ -84,12 +84,496 @@ function setupAccountMenu(user) {
     });
 }
 
+const PROGRESS_BULGE = {
+    viewW: 1000,
+    viewH: 20,
+    capSegments: 180,
+    midSegments: 220,
+    amp: 4.5,
+    sigma: 90,
+    hoverStrength: 0.7
+};
+
+function capsuleHalfHeight(x, width, radius) {
+    if (x < radius) {
+        return Math.sqrt(Math.max(0, radius * radius - Math.pow(x - radius, 2)));
+    }
+    if (x > width - radius) {
+        return Math.sqrt(Math.max(0, radius * radius - Math.pow(x - (width - radius), 2)));
+    }
+    return radius;
+}
+
+function progressHalfHeight(x, centerX, strength) {
+    const { viewW, viewH, amp, sigma } = PROGRESS_BULGE;
+    const radius = viewH / 2;
+    const clampedX = Math.min(Math.max(x, 0), viewW);
+    const dx = clampedX - centerX;
+    const bump = (amp * strength) * Math.exp(-(dx * dx) / (2 * sigma * sigma));
+    const baseHalf = capsuleHalfHeight(clampedX, viewW, radius);
+    return baseHalf + bump;
+}
+
+function getProgressSampleXs() {
+    if (PROGRESS_BULGE._sampleXs) {
+        return PROGRESS_BULGE._sampleXs;
+    }
+
+    const { viewW, viewH, capSegments, midSegments } = PROGRESS_BULGE;
+    const radius = viewH / 2;
+    const xs = [];
+
+    const leftCapSteps = Math.max(6, capSegments);
+    const rightCapSteps = Math.max(6, capSegments);
+    const midSteps = Math.max(12, midSegments);
+
+    for (let i = 0; i <= leftCapSteps; i += 1) {
+        xs.push((i / leftCapSteps) * radius);
+    }
+
+    const midSpan = Math.max(0, viewW - 2 * radius);
+    for (let i = 1; i <= midSteps; i += 1) {
+        xs.push(radius + (i / midSteps) * midSpan);
+    }
+
+    for (let i = 1; i <= rightCapSteps; i += 1) {
+        xs.push(viewW - radius + (i / rightCapSteps) * radius);
+    }
+
+    PROGRESS_BULGE._sampleXs = xs;
+    return xs;
+}
+
+function buildProgressBulgePath(centerX, strength, extra = 0) {
+    const { viewW, viewH } = PROGRESS_BULGE;
+    const radius = viewH / 2;
+    const cy = radius;
+    const top = [];
+    const bottom = [];
+
+    const xs = getProgressSampleXs();
+    for (let i = 0; i < xs.length; i += 1) {
+        const x = Math.min(Math.max(xs[i], 0), viewW);
+        const half = progressHalfHeight(x, centerX, strength) + extra;
+        top.push([x, cy - half]);
+        bottom.push([x, cy + half]);
+    }
+
+    let d = `M ${top[0][0].toFixed(2)} ${top[0][1].toFixed(2)}`;
+    for (let i = 1; i < top.length; i += 1) {
+        d += ` L ${top[i][0].toFixed(2)} ${top[i][1].toFixed(2)}`;
+    }
+    for (let i = bottom.length - 1; i >= 0; i -= 1) {
+        d += ` L ${bottom[i][0].toFixed(2)} ${bottom[i][1].toFixed(2)}`;
+    }
+    d += ' Z';
+    return d;
+}
+
+function buildProgressFillPath(centerX, strength, progress) {
+    const { viewW, viewH } = PROGRESS_BULGE;
+    const progressValue = Math.max(0, Math.min(100, Number(progress) || 0));
+    const progressX = (progressValue / 100) * viewW;
+
+    if (progressValue <= 0.1) {
+        return '';
+    }
+    if (progressValue >= 99.9) {
+        return buildProgressBulgePath(centerX, strength);
+    }
+
+    const radius = viewH / 2;
+    const cy = radius;
+    let capRadius = progressHalfHeight(progressX, centerX, strength);
+    capRadius = Math.min(capRadius, progressX);
+    let capStartX = Math.max(0, progressX - capRadius);
+    for (let i = 0; i < 3; i += 1) {
+        capRadius = progressHalfHeight(capStartX, centerX, strength);
+        capRadius = Math.min(capRadius, progressX);
+        capStartX = Math.max(0, progressX - capRadius);
+    }
+
+    const top = [];
+    const bottom = [];
+
+    const xs = getProgressSampleXs();
+    for (let i = 0; i < xs.length; i += 1) {
+        const x = xs[i];
+        if (x > capStartX) {
+            break;
+        }
+        const half = progressHalfHeight(x, centerX, strength);
+        top.push([x, cy - half]);
+        bottom.push([x, cy + half]);
+    }
+
+    if (!top.length || Math.abs(top[top.length - 1][0] - capStartX) > 0.01) {
+        top.push([capStartX, cy - capRadius]);
+        bottom.push([capStartX, cy + capRadius]);
+    }
+
+    const arcPoints = [];
+    const arcSteps = 36;
+    if (capRadius > 0.01) {
+        for (let i = 1; i <= arcSteps; i += 1) {
+            const theta = (-Math.PI / 2) + (i / arcSteps) * Math.PI;
+            const x = capStartX + capRadius * Math.cos(theta);
+            const y = cy + capRadius * Math.sin(theta);
+            arcPoints.push([x, y]);
+        }
+    }
+
+    let d = `M ${top[0][0].toFixed(2)} ${top[0][1].toFixed(2)}`;
+    for (let i = 1; i < top.length; i += 1) {
+        d += ` L ${top[i][0].toFixed(2)} ${top[i][1].toFixed(2)}`;
+    }
+    arcPoints.forEach(([x, y]) => {
+        d += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    });
+    for (let i = bottom.length - 1; i >= 0; i -= 1) {
+        d += ` L ${bottom[i][0].toFixed(2)} ${bottom[i][1].toFixed(2)}`;
+    }
+    d += ' Z';
+    return d;
+}
+
+function setupProgressBulge() {
+    const container = document.getElementById('progress-container');
+    if (!container) {
+        return;
+    }
+
+    if (container._progressVisual) {
+        return;
+    }
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.classList.add('progress-visual');
+    svg.setAttribute('viewBox', `0 0 ${PROGRESS_BULGE.viewW} ${PROGRESS_BULGE.viewH}`);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const defs = document.createElementNS(ns, 'defs');
+    const gradient = document.createElementNS(ns, 'linearGradient');
+    gradient.setAttribute('id', 'progressGradient');
+    gradient.setAttribute('x1', '0');
+    gradient.setAttribute('y1', '0');
+    gradient.setAttribute('x2', '0');
+    gradient.setAttribute('y2', '1');
+
+    const stops = [
+        { offset: '0%', color: '#4CAF50', opacity: '0.95' },
+        { offset: '60%', color: '#4CAF50', opacity: '0.75' },
+        { offset: '100%', color: '#388E3C', opacity: '0.95' }
+    ];
+
+    stops.forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        gradient.appendChild(stop);
+    });
+
+    const gloss = document.createElementNS(ns, 'radialGradient');
+    gloss.setAttribute('id', 'progressGloss');
+    gloss.setAttribute('gradientUnits', 'userSpaceOnUse');
+    gloss.setAttribute('cx', String(PROGRESS_BULGE.viewW / 2));
+    gloss.setAttribute('cy', String(PROGRESS_BULGE.viewH * 0.5));
+    gloss.setAttribute('r', String(PROGRESS_BULGE.viewW * 0.05));
+    const glossStops = [
+        { offset: '0%', color: '#ffffff', opacity: '0.42' },
+        { offset: '55%', color: '#ffffff', opacity: '0.12' },
+        { offset: '100%', color: '#ffffff', opacity: '0' }
+    ];
+    glossStops.forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        gloss.appendChild(stop);
+    });
+
+    defs.appendChild(gradient);
+    defs.appendChild(gloss);
+    svg.appendChild(defs);
+
+    const basePathD = buildProgressBulgePath(PROGRESS_BULGE.viewW / 2, 0);
+    const trackOutline = document.createElementNS(ns, 'path');
+    trackOutline.classList.add('progress-track-outline');
+    trackOutline.setAttribute('d', basePathD);
+
+    const trackGloss = document.createElementNS(ns, 'path');
+    trackGloss.classList.add('progress-track-gloss');
+    trackGloss.setAttribute('d', basePathD);
+    trackGloss.setAttribute('fill', 'url(#progressGloss)');
+
+    const trackFill = document.createElementNS(ns, 'path');
+    trackFill.classList.add('progress-track-fill');
+    trackFill.setAttribute('d', basePathD);
+
+    const fillPath = document.createElementNS(ns, 'path');
+    fillPath.classList.add('progress-fill');
+    fillPath.setAttribute('d', basePathD);
+
+    const fillGloss = document.createElementNS(ns, 'path');
+    fillGloss.classList.add('progress-fill-gloss');
+    fillGloss.setAttribute('d', basePathD);
+    fillGloss.setAttribute('fill', 'url(#progressGloss)');
+
+    svg.appendChild(trackOutline);
+    svg.appendChild(trackFill);
+    svg.appendChild(trackGloss);
+    svg.appendChild(fillPath);
+    svg.appendChild(fillGloss);
+
+    container.insertBefore(svg, container.firstChild);
+
+    container._progressVisual = svg;
+    container._progressTrackOutline = trackOutline;
+    container._progressTrackFill = trackFill;
+    container._progressTrackGloss = trackGloss;
+    container._progressFill = fillPath;
+    container._progressFillGloss = fillGloss;
+    container._progressGloss = gloss;
+    container._progressValue = 0;
+    container._progressCenter = PROGRESS_BULGE.viewW / 2;
+    container._progressStrength = 0;
+    refreshProgressVisual(container);
+}
+
+function refreshProgressVisual(container) {
+    if (!container || !container._progressTrackOutline || !container._progressTrackFill || !container._progressFill) {
+        return;
+    }
+
+    const centerX = container._progressCenter ?? (PROGRESS_BULGE.viewW / 2);
+    const strength = container._progressStrength ?? 0;
+    const progressValue = container._progressValue ?? 0;
+
+    const trackPath = buildProgressBulgePath(centerX, strength);
+    const outlinePath = buildProgressBulgePath(centerX, strength, 1.5);
+    container._progressTrackOutline.setAttribute('d', outlinePath);
+    container._progressTrackFill.setAttribute('d', trackPath);
+    if (container._progressTrackGloss) {
+        container._progressTrackGloss.setAttribute('d', trackPath);
+    }
+
+    const fillPath = buildProgressFillPath(centerX, strength, progressValue);
+    container._progressFill.setAttribute('d', fillPath);
+    container._progressFill.style.opacity = fillPath ? '1' : '0';
+    if (container._progressFillGloss) {
+        container._progressFillGloss.setAttribute('d', fillPath);
+    }
+}
+
+function setProgressLighting(x, y, intensity = 1) {
+    const container = document.getElementById('progress-container');
+    if (!container || !container._progressGloss) {
+        return;
+    }
+    const rect = container.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+        return;
+    }
+    const cx = (x / rect.width) * PROGRESS_BULGE.viewW;
+    const cy = (y / rect.height) * PROGRESS_BULGE.viewH;
+    container._progressGloss.setAttribute('cx', cx.toFixed(2));
+    container._progressGloss.setAttribute('cy', cy.toFixed(2));
+    container.style.setProperty('--light', intensity.toFixed(2));
+    container.classList.add('progress-lit');
+}
+
+function clearProgressLighting() {
+    const container = document.getElementById('progress-container');
+    if (!container || !container._progressGloss) {
+        return;
+    }
+    container.style.setProperty('--light', '0');
+    container.classList.remove('progress-lit');
+}
+
+function startProgressAnimation(container) {
+    if (!container || container._progressAnimating) {
+        return;
+    }
+
+    const step = () => {
+        const target = container._progressTarget ?? 0;
+        const currentValue = container._progressCurrent ?? container._progressValue ?? 0;
+        const diff = target - currentValue;
+        const smoothing = 0.18;
+        const nextValue = Math.abs(diff) < 0.05 ? target : currentValue + diff * smoothing;
+
+        container._progressCurrent = nextValue;
+        container._progressValue = nextValue;
+        refreshProgressVisual(container);
+
+        if (Math.abs(diff) < 0.05) {
+            container._progressAnimating = false;
+            container._progressAnimFrame = null;
+            return;
+        }
+
+        container._progressAnimFrame = requestAnimationFrame(step);
+    };
+
+    container._progressAnimating = true;
+    container._progressAnimFrame = requestAnimationFrame(step);
+}
+
+function setProgressBulge(centerPx, strength) {
+    const container = document.getElementById('progress-container');
+    if (!container || !container._progressTrackOutline || !container._progressTrackFill || !container._progressFill) {
+        return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    if (!containerRect.width) {
+        return;
+    }
+
+    const clampedTrackX = Math.min(Math.max(centerPx, 0), containerRect.width);
+    const trackCx = (clampedTrackX / containerRect.width) * PROGRESS_BULGE.viewW;
+    container._progressCenter = trackCx;
+    container._progressStrength = Math.min(0.7, Math.max(0, strength));
+    refreshProgressVisual(container);
+}
+
+function setupPointerLighting() {
+    const targets = [
+        ...document.querySelectorAll('button'),
+        document.getElementById('progress-container')
+    ].filter(Boolean);
+
+    const progressContainer = document.getElementById('progress-container');
+    if (progressContainer && !progressContainer._progressLeaveHandler) {
+        const handler = () => {
+            setProgressBulge(0, 0);
+            clearProgressLighting();
+        };
+        progressContainer.addEventListener('pointerleave', handler);
+        progressContainer.addEventListener('pointercancel', handler);
+        progressContainer._progressLeaveHandler = handler;
+    }
+
+    const resetTarget = (target) => {
+        target.classList.remove('is-lit');
+        const isProgress = target.id === 'progress-container';
+        target.style.setProperty('--mx', '50%');
+        target.style.setProperty('--my', isProgress ? '50%' : '20%');
+        target.style.setProperty('--pop', '0');
+        target.style.setProperty('--tx', '0px');
+        target.style.setProperty('--ty', '0px');
+        target.style.setProperty('--sx', '0px');
+        target.style.setProperty('--sy', '0px');
+        target.style.setProperty('--skx', '0deg');
+        target.style.setProperty('--sky', '0deg');
+        target.style.setProperty('--scale', '1');
+        if (isProgress) {
+            setProgressBulge(0, 0);
+            clearProgressLighting();
+            // No default highlight when not hovering.
+        }
+    };
+
+    targets.forEach(resetTarget);
+
+    let currentTarget = null;
+
+    const updateTarget = (event) => {
+        const el = document.elementFromPoint(event.clientX, event.clientY);
+        const target = el ? el.closest('button, #progress-container') : null;
+
+        if (currentTarget && currentTarget !== target) {
+            resetTarget(currentTarget);
+        }
+
+        if (!target) {
+            clearProgressLighting();
+            currentTarget = null;
+            return;
+        }
+
+        if (currentTarget && currentTarget.id === 'progress-container' && target.id !== 'progress-container') {
+            clearProgressLighting();
+        }
+
+        const rect = target.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const nx = (x - rect.width / 2) / (rect.width / 2);
+        const ny = (y - rect.height / 2) / (rect.height / 2);
+        const isProgress = target.id === 'progress-container';
+        const dist = Math.min(Math.sqrt(nx * nx + ny * ny), 1);
+        const lightPop = Math.max(0, 1 - dist);
+        const pop = isProgress ? lightPop * 0.55 : lightPop;
+        const translateMax = isProgress ? 0 : 14;
+        const shadowMax = isProgress ? 0 : 20;
+        const skewMax = isProgress ? 0 : 3;
+        const scaleMax = isProgress ? 1 : 1.03;
+        const tx = nx * translateMax * pop;
+        const ty = ny * translateMax * pop;
+        const sx = -nx * shadowMax * pop;
+        const sy = -ny * shadowMax * pop;
+        const skx = (ny * skewMax * pop).toFixed(2);
+        const sky = (-nx * skewMax * pop).toFixed(2);
+        const scale = (1 + (scaleMax - 1) * pop).toFixed(3);
+
+        target.style.setProperty('--mx', `${x}px`);
+        target.style.setProperty('--my', `${y}px`);
+        target.style.setProperty('--pop', pop.toFixed(3));
+        target.style.setProperty('--tx', `${tx.toFixed(2)}px`);
+        target.style.setProperty('--ty', `${ty.toFixed(2)}px`);
+        target.style.setProperty('--sx', `${sx.toFixed(2)}px`);
+        target.style.setProperty('--sy', `${sy.toFixed(2)}px`);
+        target.style.setProperty('--skx', `${skx}deg`);
+        target.style.setProperty('--sky', `${sky}deg`);
+        target.style.setProperty('--scale', scale);
+
+        if (isProgress) {
+            const bar = document.getElementById('progress-bar');
+            if (bar) {
+                const containerRect = target.getBoundingClientRect();
+                const withinX = event.clientX >= containerRect.left && event.clientX <= containerRect.right;
+                const withinY = event.clientY >= containerRect.top && event.clientY <= containerRect.bottom;
+                if (withinX && withinY) {
+                    const cx = event.clientX - containerRect.left;
+                    setProgressBulge(cx, PROGRESS_BULGE.hoverStrength);
+                    setProgressLighting(cx, event.clientY - containerRect.top, lightPop * 0.8);
+                } else {
+                    setProgressBulge(0, 0);
+                    clearProgressLighting();
+                }
+            }
+        } else {
+            clearProgressLighting();
+        }
+        target.classList.add('is-lit');
+        currentTarget = target;
+    };
+
+    const clearTarget = () => {
+        if (currentTarget) {
+            resetTarget(currentTarget);
+            currentTarget = null;
+        }
+    };
+
+    document.addEventListener('pointermove', updateTarget);
+    document.addEventListener('pointerdown', updateTarget);
+    document.addEventListener('pointerleave', clearTarget);
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     const user = await loadCurrentUser();
     if (!user) {
         return;
     }
     setupAccountMenu(user);
+    setupProgressBulge();
+    setupPointerLighting();
     setupWebSocket();
     checkServerStatus();
 });
@@ -163,20 +647,30 @@ function updateBackupProgress(progress) {
     const progressBar = document.getElementById('progress-bar');
     const progressPercentage = document.getElementById('progress-percentage'); // Make sure this ID matches the element in HTML
     const progressContainer = document.getElementById('progress-container'); // Make sure this ID matches the container element in HTML
+    const numericProgress = Number(progress) || 0;
 
     // Show the progress bar when the backup starts
-    if (progress > 0) {
+    if (numericProgress > 0) {
         progressContainer.style.display = 'block';
     }
-    if (progress > 0 )
+    if (numericProgress > 0 )
     {
         progressPercentage.style.display = 'block';
     }
-    progressBar.style.width = progress + '%';
-    progressPercentage.textContent = progress + '%'; // Set the percentage text
+    progressBar.style.width = numericProgress + '%';
+    progressPercentage.textContent = Math.round(numericProgress) + '%'; // Set the percentage text
+    if (progressContainer) {
+        progressContainer._progressTarget = numericProgress;
+        if (progressContainer._progressCurrent == null) {
+            progressContainer._progressCurrent = numericProgress;
+            progressContainer._progressValue = numericProgress;
+            refreshProgressVisual(progressContainer);
+        }
+        startProgressAnimation(progressContainer);
+    }
 
     // Hide the progress bar when the backup is complete
-    if (progress == 100) {
+    if (numericProgress == 100) {
         setTimeout(() => {
             progressContainer.style.display = 'none';
             progressPercentage.style.display = 'none';
@@ -196,6 +690,17 @@ function setBackupState(isBacking) {
         const progressBar = document.getElementById('progress-bar');
         progressBar.style.width = '0%'; // Reset the progress bar width
         progressBar.textContent = '0%'; // Reset the text
+        if (progressContainer) {
+            if (progressContainer._progressAnimFrame) {
+                cancelAnimationFrame(progressContainer._progressAnimFrame);
+                progressContainer._progressAnimFrame = null;
+            }
+            progressContainer._progressAnimating = false;
+            progressContainer._progressTarget = 0;
+            progressContainer._progressCurrent = 0;
+            progressContainer._progressValue = 0;
+            refreshProgressVisual(progressContainer);
+        }
     }
 }
 function handleFetchResponse(response) {

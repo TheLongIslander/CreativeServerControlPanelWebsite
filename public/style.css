@@ -54,8 +54,8 @@ main {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
-    line-height: 1.1;
+    gap: 0;
+    line-height: 1.2;
 }
 
 #account-button:hover {
@@ -65,13 +65,23 @@ main {
 #account-button::after {
     content: attr(data-username);
     font-size: 0.7rem;
-    color: rgba(255, 255, 255, 0.65);
+    color: rgba(255, 255, 255, 0.75);
     font-weight: 500;
+    display: block;
+    margin-top: 2px;
+    line-height: 1;
+    position: static;
+    height: auto;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    background: none;
+    opacity: 1;
 }
 
 .account-container {
     position: absolute;
-    top: 0;
+    top: 6px;
     right: 20px;
 }
 
@@ -200,10 +210,9 @@ body.modal-open header {
 
 #sftp-button {
     position: absolute;
-    top: 0; /* Adjust as needed */
+    top: 6px; /* Adjust as needed */
     left: 20px;
     background-color: #008CBA; /* Blue */
-    border: none; /* Remove border */
     color: white; /* Text color */
     cursor: pointer; /* Pointer cursor */
     border-radius: 20px; /* Match border-radius with the logout button */
@@ -215,7 +224,17 @@ body.modal-open header {
 
 /* Button styling remains the same */
 button {
-    border: none;
+    --mx: 50%;
+    --my: 20%;
+    --pop: 0;
+    --tx: 0px;
+    --ty: 0px;
+    --sx: 0px;
+    --sy: 0px;
+    --skx: 0deg;
+    --sky: 0deg;
+    --scale: 1;
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 20px;
     color: white;
     padding: 15px 32px;
@@ -225,8 +244,76 @@ button {
     font-size: 16px;
     margin: 4px 2px;
     cursor: pointer;
-    transition: background-color 0.3s ease, box-shadow 0.3s ease;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    box-shadow:
+        0 8px 14px rgba(0, 0, 0, 0.24),
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        inset 0 -2px 6px rgba(0, 0, 0, 0.35);
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.25),
+        0 2px 4px rgba(0, 0, 0, 0.35);
+    position: relative;
+    overflow: hidden;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease, transform 0.12s ease, filter 0.2s ease;
+    filter: brightness(calc(1 + 0.03 * var(--pop))) saturate(calc(1.12 + 0.06 * var(--pop)));
+}
+
+button::before {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    border-radius: 18px;
+    background:
+        radial-gradient(
+            120px 80px at var(--mx) var(--my),
+            rgba(255, 255, 255, 0.55),
+            rgba(255, 255, 255, 0) 60%
+        ),
+        linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.18),
+            rgba(255, 255, 255, 0) 70%
+        );
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+button.is-lit::before,
+button:hover::before {
+    opacity: calc(0.25 + 0.5 * var(--pop));
+}
+
+button::after {
+    content: "";
+    position: absolute;
+    left: 1px;
+    right: 1px;
+    bottom: 1px;
+    height: 45%;
+    border-radius: 18px;
+    background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0) 0%,
+        rgba(0, 0, 0, 0.3) 100%
+    );
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+button.is-lit,
+button:hover {
+    box-shadow:
+        calc(var(--sx)) calc(var(--sy) + 8px) calc(14px + 8px * var(--pop)) rgba(0, 0, 0, calc(0.24 + 0.12 * var(--pop))),
+        inset 0 1px 0 rgba(255, 255, 255, calc(0.35 + 0.2 * var(--pop))),
+        inset 0 calc(-2px - 2px * var(--pop)) calc(6px + 4px * var(--pop)) rgba(0, 0, 0, calc(0.35 + 0.08 * var(--pop)));
+    transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale));
+}
+
+button:active {
+    transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale)) translateY(1px);
+    box-shadow:
+        0 4px 10px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        inset 0 -2px 6px rgba(0, 0, 0, 0.4);
 }
 
 #start-server {
@@ -266,6 +353,38 @@ button:disabled {
     color: #666666; /* Dark gray */
     cursor: not-allowed;
     box-shadow: none;
+    background-image: none;
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.25),
+        0 2px 3px rgba(0, 0, 0, 0.25);
+    filter: none;
+    transform: none;
+    --pop: 0;
+}
+
+button:disabled::before {
+    background: radial-gradient(
+        140px 90px at var(--mx) var(--my),
+        rgba(0, 0, 0, 0.45),
+        rgba(0, 0, 0, 0) 65%
+    );
+    opacity: 0;
+}
+
+button:disabled::after {
+    opacity: 0;
+}
+
+button:disabled.is-lit::before,
+button:disabled:hover::before {
+    opacity: 0.55;
+}
+
+button:disabled.is-lit,
+button:disabled:hover {
+    box-shadow: none;
+    filter: none;
+    transform: none;
 }
 
 #progress-area {
@@ -275,30 +394,109 @@ button:disabled {
 }
 
 #progress-container {
+    --mx: 50%;
+    --my: 50%;
+    --pop: 0;
+    --tx: 0px;
+    --ty: 0px;
+    --sx: 0px;
+    --sy: 0px;
+    --skx: 0deg;
+    --sky: 0deg;
+    --scale: 1;
+    --light: 0;
     display: none; /* Hide the progress bar initially */
-    background-color: #ddd;
+    background-color: transparent;
     border-radius: 20px;
-    overflow: hidden;
+    overflow: visible;
     height: 20px;
     margin: 0 auto 10px auto; /* Center the container and add space under it */
     position: relative; /* For absolute positioning of percentage text */
     margin-bottom: 20px; /* Add space for the percentage text below */
     width: 100%;
+    border: none;
+    box-shadow: none;
+    transition: transform 0.12s ease, box-shadow 0.3s ease, filter 0.2s ease;
+}
+
+#progress-container .progress-visual {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 2;
+    filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.4));
+    shape-rendering: auto;
+}
+
+#progress-container .progress-track-outline {
+    fill: rgba(255, 255, 255, 0.18);
+}
+
+#progress-container .progress-track-fill {
+    fill: rgba(18, 18, 18, 0.9);
+}
+
+#progress-container .progress-track-gloss {
+    opacity: calc(0.5 * var(--light));
+    pointer-events: none;
+}
+
+#progress-container .progress-fill-gloss {
+    opacity: calc(0.75 * var(--light));
+    pointer-events: none;
+}
+
+#progress-container:not(.progress-lit) .progress-track-gloss,
+#progress-container:not(.progress-lit) .progress-fill-gloss {
+    opacity: 0;
+}
+
+#progress-container .progress-fill {
+    fill: url(#progressGradient);
+}
+
+#progress-container.is-lit,
+#progress-container:hover {
+    filter: brightness(calc(1 + 0.03 * var(--pop)));
+    transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale));
 }
 
 #progress-bar {
     height: 100%;
     width: 0%;
-    background-color: #4CAF50;
+    background: transparent;
+    border-radius: 18px;
+    position: relative;
+    overflow: visible;
+    z-index: 1;
+    box-shadow: none;
     transition: width 0.4s ease;
+    opacity: 0;
+    pointer-events: none;
+}
+
+#progress-bar::before,
+#progress-bar::after {
+    content: none;
+}
+
+#progress-container.is-lit #progress-bar,
+#progress-container:hover #progress-bar {
+    filter: brightness(calc(1 + 0.05 * var(--pop))) saturate(calc(1 + 0.05 * var(--pop)));
 }
 
 #progress-percentage {
     display: none; /* Ensure it is not set to none */
     text-align: center; /* Center the text */
     margin-top: 20px; /* Adjust this value so the text appears just below the progress bar */
-    color: #333; /* Color may need to change based on the theme */
+    color: #e5e7eb; /* Color may need to change based on the theme */
     font-size: 1rem; /* Set an appropriate font size */
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.2),
+        0 2px 4px rgba(0, 0, 0, 0.4);
 }
 
 /* Dark mode styles */
