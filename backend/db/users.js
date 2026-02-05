@@ -138,6 +138,8 @@ async function initUsersDb() {
   await addColumn('last_password_reset_at', 'TEXT');
   await addColumn('created_at', 'TEXT');
   await addColumn('updated_at', 'TEXT');
+  await addColumn('ui_theme', 'TEXT', "'glass'");
+  await addColumn('color_scheme', 'TEXT', "'system'");
 
   await run(`
     UPDATE users
@@ -188,6 +190,18 @@ async function initUsersDb() {
     SET created_at = COALESCE(created_at, DATETIME('now')),
         updated_at = COALESCE(updated_at, DATETIME('now'))
     WHERE created_at IS NULL OR updated_at IS NULL
+  `);
+
+  await run(`
+    UPDATE users
+    SET ui_theme = 'glass'
+    WHERE ui_theme IS NULL OR ui_theme = ''
+  `);
+
+  await run(`
+    UPDATE users
+    SET color_scheme = 'system'
+    WHERE color_scheme IS NULL OR color_scheme = ''
   `);
 
   try {
@@ -276,6 +290,17 @@ async function getUserById(id) {
 
 async function getUserByUsernameNormalized(usernameNormalized) {
   return get('SELECT * FROM users WHERE username_normalized = ?', [usernameNormalized]);
+}
+
+async function setUserAppearance({ userId, uiTheme, colorScheme }) {
+  const now = new Date().toISOString();
+  await run(`
+    UPDATE users
+    SET ui_theme = ?,
+        color_scheme = ?,
+        updated_at = ?
+    WHERE id = ?
+  `, [uiTheme, colorScheme, now, userId]);
 }
 
 async function listUsers() {
@@ -578,6 +603,7 @@ module.exports = {
   ensureAdminUser,
   getUserById,
   getUserByUsernameNormalized,
+  setUserAppearance,
   listUsers,
   logUserLogin,
   getUserLoginHistory,

@@ -128,8 +128,43 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
       role: req.user.role,
       mustResetPassword: Boolean(req.user.must_reset_password),
       disabled: Boolean(req.user.disabled),
-      lastLoginAt: req.user.last_login_at
+      lastLoginAt: req.user.last_login_at,
+      uiTheme: req.user.ui_theme || 'glass',
+      colorScheme: req.user.color_scheme || 'system'
     });
+  });
+
+  router.post('/appearance', authenticateJWT, async (req, res) => {
+    const { uiTheme, colorScheme } = req.body || {};
+    const allowedThemes = new Set(['glass', 'flat']);
+    const allowedSchemes = new Set(['system', 'light', 'dark']);
+
+    if (!allowedThemes.has(uiTheme) || !allowedSchemes.has(colorScheme)) {
+      return res.status(400).json({ message: 'Invalid appearance settings.' });
+    }
+
+    try {
+      await usersDb.setUserAppearance({
+        userId: req.user.id,
+        uiTheme,
+        colorScheme
+      });
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: req.user.id,
+          action: 'user.appearance.updated',
+          metadata: { uiTheme, colorScheme },
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log appearance update:', logErr.message);
+      }
+      return res.json({ uiTheme, colorScheme });
+    } catch (err) {
+      console.error('Appearance update error:', err);
+      return res.status(500).json({ message: 'Failed to update appearance.' });
+    }
   });
 
   router.post('/set-password', authenticateJWT, async (req, res) => {
