@@ -39,10 +39,22 @@ async function loadCurrentUser() {
 function setupAccountMenu(user) {
     const accountButton = document.getElementById('account-button');
     const dropdown = document.getElementById('account-dropdown');
+    const adminButton = document.getElementById('admin-management-button');
     const logoutButton = document.getElementById('logout-button');
 
     if (user) {
         accountButton.dataset.username = user.username || '';
+    }
+
+    if (adminButton) {
+        if (user && user.role === 'admin') {
+            adminButton.classList.remove('hidden');
+            adminButton.addEventListener('click', () => {
+                window.location.href = '/admin.html';
+            });
+        } else {
+            adminButton.classList.add('hidden');
+        }
     }
 
     accountButton.addEventListener('click', (event) => {

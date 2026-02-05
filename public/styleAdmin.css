@@ -123,10 +123,17 @@ button:disabled {
 #back-button {
     background-color: var(--warning);
     color: #1f2937;
+    padding: 15px 32px;
+    border-radius: 20px;
+    font-size: 16px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 #back-button:hover {
     background-color: #dca502;
+    transform: none;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
 
 .table-wrapper {
@@ -414,10 +421,17 @@ tr:last-child td {
     align-items: center;
     gap: 2px;
     line-height: 1.1;
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 16px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 #account-button:hover {
     background-color: #23272b;
+    transform: none;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
 
 #account-button::after {
@@ -440,6 +454,13 @@ tr:last-child td {
     flex-direction: column;
     gap: 8px;
     z-index: 10;
+}
+
+.account-dropdown button {
+    width: 180px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    box-shadow: none;
 }
 
 .hidden {
