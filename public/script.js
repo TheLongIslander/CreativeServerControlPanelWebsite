@@ -295,8 +295,65 @@ function setupProgressBulge() {
         gloss.appendChild(stop);
     });
 
+    const trackGradient = document.createElementNS(ns, 'linearGradient');
+    trackGradient.setAttribute('id', 'progressTrackGradient');
+    trackGradient.setAttribute('x1', '0');
+    trackGradient.setAttribute('y1', '0');
+    trackGradient.setAttribute('x2', '0');
+    trackGradient.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#2f2f2f', opacity: '0.95' },
+        { offset: '45%', color: '#1f1f1f', opacity: '0.95' },
+        { offset: '100%', color: '#121212', opacity: '1' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        trackGradient.appendChild(stop);
+    });
+
+    const trackSpec = document.createElementNS(ns, 'linearGradient');
+    trackSpec.setAttribute('id', 'progressTrackSpec');
+    trackSpec.setAttribute('x1', '0');
+    trackSpec.setAttribute('y1', '0');
+    trackSpec.setAttribute('x2', '0');
+    trackSpec.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#ffffff', opacity: '0.45' },
+        { offset: '35%', color: '#ffffff', opacity: '0.12' },
+        { offset: '70%', color: '#ffffff', opacity: '0' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        trackSpec.appendChild(stop);
+    });
+
+    const fillSpec = document.createElementNS(ns, 'linearGradient');
+    fillSpec.setAttribute('id', 'progressFillSpec');
+    fillSpec.setAttribute('x1', '0');
+    fillSpec.setAttribute('y1', '0');
+    fillSpec.setAttribute('x2', '0');
+    fillSpec.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#ffffff', opacity: '0.5' },
+        { offset: '35%', color: '#ffffff', opacity: '0.18' },
+        { offset: '70%', color: '#ffffff', opacity: '0' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        fillSpec.appendChild(stop);
+    });
+
     defs.appendChild(gradient);
     defs.appendChild(gloss);
+    defs.appendChild(trackGradient);
+    defs.appendChild(trackSpec);
+    defs.appendChild(fillSpec);
     svg.appendChild(defs);
 
     const basePathD = buildProgressBulgePath(PROGRESS_BULGE.viewW / 2, 0);
@@ -312,6 +369,12 @@ function setupProgressBulge() {
     const trackFill = document.createElementNS(ns, 'path');
     trackFill.classList.add('progress-track-fill');
     trackFill.setAttribute('d', basePathD);
+    trackFill.setAttribute('fill', 'url(#progressTrackGradient)');
+
+    const trackSpecPath = document.createElementNS(ns, 'path');
+    trackSpecPath.classList.add('progress-track-spec');
+    trackSpecPath.setAttribute('d', basePathD);
+    trackSpecPath.setAttribute('fill', 'url(#progressTrackSpec)');
 
     const fillPath = document.createElementNS(ns, 'path');
     fillPath.classList.add('progress-fill');
@@ -322,10 +385,17 @@ function setupProgressBulge() {
     fillGloss.setAttribute('d', basePathD);
     fillGloss.setAttribute('fill', 'url(#progressGloss)');
 
+    const fillSpecPath = document.createElementNS(ns, 'path');
+    fillSpecPath.classList.add('progress-fill-spec');
+    fillSpecPath.setAttribute('d', basePathD);
+    fillSpecPath.setAttribute('fill', 'url(#progressFillSpec)');
+
     svg.appendChild(trackOutline);
     svg.appendChild(trackFill);
+    svg.appendChild(trackSpecPath);
     svg.appendChild(trackGloss);
     svg.appendChild(fillPath);
+    svg.appendChild(fillSpecPath);
     svg.appendChild(fillGloss);
 
     container.insertBefore(svg, container.firstChild);
@@ -333,8 +403,10 @@ function setupProgressBulge() {
     container._progressVisual = svg;
     container._progressTrackOutline = trackOutline;
     container._progressTrackFill = trackFill;
+    container._progressTrackSpec = trackSpecPath;
     container._progressTrackGloss = trackGloss;
     container._progressFill = fillPath;
+    container._progressFillSpec = fillSpecPath;
     container._progressFillGloss = fillGloss;
     container._progressGloss = gloss;
     container._progressValue = 0;
@@ -356,6 +428,9 @@ function refreshProgressVisual(container) {
     const outlinePath = buildProgressBulgePath(centerX, strength, 1.5);
     container._progressTrackOutline.setAttribute('d', outlinePath);
     container._progressTrackFill.setAttribute('d', trackPath);
+    if (container._progressTrackSpec) {
+        container._progressTrackSpec.setAttribute('d', trackPath);
+    }
     if (container._progressTrackGloss) {
         container._progressTrackGloss.setAttribute('d', trackPath);
     }
@@ -363,6 +438,10 @@ function refreshProgressVisual(container) {
     const fillPath = buildProgressFillPath(centerX, strength, progressValue);
     container._progressFill.setAttribute('d', fillPath);
     container._progressFill.style.opacity = fillPath ? '1' : '0';
+    if (container._progressFillSpec) {
+        container._progressFillSpec.setAttribute('d', fillPath);
+        container._progressFillSpec.style.opacity = fillPath ? '1' : '0';
+    }
     if (container._progressFillGloss) {
         container._progressFillGloss.setAttribute('d', fillPath);
     }

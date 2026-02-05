@@ -436,7 +436,12 @@ button:disabled:hover {
 }
 
 #progress-container .progress-track-fill {
-    fill: rgba(18, 18, 18, 0.9);
+    fill: url(#progressTrackGradient);
+}
+
+#progress-container .progress-track-spec {
+    opacity: 0.35;
+    mix-blend-mode: screen;
 }
 
 #progress-container .progress-track-gloss {
@@ -456,6 +461,12 @@ button:disabled:hover {
 
 #progress-container .progress-fill {
     fill: url(#progressGradient);
+}
+
+#progress-container .progress-fill-spec {
+    opacity: 0.45;
+    mix-blend-mode: screen;
+    pointer-events: none;
 }
 
 #progress-container.is-lit,
