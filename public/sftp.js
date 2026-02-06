@@ -11,6 +11,29 @@ let typingInProgress = false;
 let currentDisplayedPath = null;
 let lastMissingPathAlerted = null;
 let currentUser = null;
+let progressThemeObserver = null;
+
+const SFTP_PROGRESS_BULGE = {
+    viewW: 1000,
+    viewH: 20,
+    capSegments: 180,
+    midSegments: 220,
+    amp: 4.5,
+    sigma: 90,
+    hoverStrength: 0.7
+};
+let sftpProgressId = 0;
+
+function isGlassThemeActive() {
+    const stylesheetHref = document.getElementById('theme-stylesheet')?.getAttribute('href') || '';
+    if (stylesheetHref.includes('style.flat.css')) {
+        return false;
+    }
+    if (document.body.dataset.uiTheme === 'flat') {
+        return false;
+    }
+    return true;
+}
 
 function redirectToLogin() {
     localStorage.removeItem('token');
@@ -50,45 +73,6 @@ async function loadCurrentUser() {
     return user;
 }
 
-function setupAccountMenu(user) {
-    const accountButton = document.getElementById('account-button');
-    const dropdown = document.getElementById('account-dropdown');
-    const adminButton = document.getElementById('admin-management-button');
-    const logoutButton = document.getElementById('logout-button');
-    const manageButton = document.getElementById('manage-account-button');
-
-    if (user) {
-        accountButton.dataset.username = user.username || '';
-    }
-
-    if (user && user.role === 'admin') {
-        adminButton.classList.remove('hidden');
-        adminButton.addEventListener('click', () => {
-            window.location.href = '/admin.html';
-        });
-    } else {
-        adminButton.classList.add('hidden');
-    }
-
-    accountButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        dropdown.classList.toggle('hidden');
-    });
-
-    document.addEventListener('click', () => {
-        if (!dropdown.classList.contains('hidden')) {
-            dropdown.classList.add('hidden');
-        }
-    });
-
-    logoutButton.addEventListener('click', () => {
-        logout();
-    });
-
-    manageButton.addEventListener('click', () => {
-        window.location.href = '/account.html';
-    });
-}
 
 function handleAuthResponse(response) {
     if (response.status === 428) {
@@ -102,6 +86,537 @@ function handleAuthResponse(response) {
         throw new Error('SESSION_EXPIRED');
     }
     return response;
+}
+
+function capsuleHalfHeight(x, width, radius) {
+    if (x < radius) {
+        return Math.sqrt(Math.max(0, radius * radius - Math.pow(x - radius, 2)));
+    }
+    if (x > width - radius) {
+        return Math.sqrt(Math.max(0, radius * radius - Math.pow(x - (width - radius), 2)));
+    }
+    return radius;
+}
+
+function progressHalfHeight(x, centerX, strength) {
+    const { viewW, viewH, amp, sigma } = SFTP_PROGRESS_BULGE;
+    const radius = viewH / 2;
+    const clampedX = Math.min(Math.max(x, 0), viewW);
+    const dx = clampedX - centerX;
+    const bump = (amp * strength) * Math.exp(-(dx * dx) / (2 * sigma * sigma));
+    const baseHalf = capsuleHalfHeight(clampedX, viewW, radius);
+    return baseHalf + bump;
+}
+
+function getProgressSampleXs() {
+    if (SFTP_PROGRESS_BULGE._sampleXs) {
+        return SFTP_PROGRESS_BULGE._sampleXs;
+    }
+
+    const { viewW, viewH, capSegments, midSegments } = SFTP_PROGRESS_BULGE;
+    const radius = viewH / 2;
+    const xs = [];
+
+    const leftCapSteps = Math.max(6, capSegments);
+    const rightCapSteps = Math.max(6, capSegments);
+    const midSteps = Math.max(12, midSegments);
+
+    for (let i = 0; i <= leftCapSteps; i += 1) {
+        xs.push((i / leftCapSteps) * radius);
+    }
+
+    const midSpan = Math.max(0, viewW - 2 * radius);
+    for (let i = 1; i <= midSteps; i += 1) {
+        xs.push(radius + (i / midSteps) * midSpan);
+    }
+
+    for (let i = 1; i <= rightCapSteps; i += 1) {
+        xs.push(viewW - radius + (i / rightCapSteps) * radius);
+    }
+
+    SFTP_PROGRESS_BULGE._sampleXs = xs;
+    return xs;
+}
+
+function buildProgressBulgePath(centerX, strength, extra = 0) {
+    const { viewW, viewH } = SFTP_PROGRESS_BULGE;
+    const radius = viewH / 2;
+    const cy = radius;
+    const top = [];
+    const bottom = [];
+
+    const xs = getProgressSampleXs();
+    for (let i = 0; i < xs.length; i += 1) {
+        const x = Math.min(Math.max(xs[i], 0), viewW);
+        const half = progressHalfHeight(x, centerX, strength) + extra;
+        top.push([x, cy - half]);
+        bottom.push([x, cy + half]);
+    }
+
+    let d = `M ${top[0][0].toFixed(2)} ${top[0][1].toFixed(2)}`;
+    for (let i = 1; i < top.length; i += 1) {
+        d += ` L ${top[i][0].toFixed(2)} ${top[i][1].toFixed(2)}`;
+    }
+    for (let i = bottom.length - 1; i >= 0; i -= 1) {
+        d += ` L ${bottom[i][0].toFixed(2)} ${bottom[i][1].toFixed(2)}`;
+    }
+    d += ' Z';
+    return d;
+}
+
+function buildProgressFillPath(centerX, strength, progress) {
+    const { viewW, viewH } = SFTP_PROGRESS_BULGE;
+    const progressValue = Math.max(0, Math.min(100, Number(progress) || 0));
+    const progressX = (progressValue / 100) * viewW;
+
+    if (progressValue <= 0.1) {
+        return '';
+    }
+    if (progressValue >= 99.9) {
+        return buildProgressBulgePath(centerX, strength);
+    }
+
+    const radius = viewH / 2;
+    const cy = radius;
+    let capRadius = progressHalfHeight(progressX, centerX, strength);
+    capRadius = Math.min(capRadius, progressX);
+    let capStartX = Math.max(0, progressX - capRadius);
+    for (let i = 0; i < 3; i += 1) {
+        capRadius = progressHalfHeight(capStartX, centerX, strength);
+        capRadius = Math.min(capRadius, progressX);
+        capStartX = Math.max(0, progressX - capRadius);
+    }
+
+    const top = [];
+    const bottom = [];
+
+    const xs = getProgressSampleXs();
+    for (let i = 0; i < xs.length; i += 1) {
+        const x = xs[i];
+        if (x > capStartX) {
+            break;
+        }
+        const half = progressHalfHeight(x, centerX, strength);
+        top.push([x, cy - half]);
+        bottom.push([x, cy + half]);
+    }
+
+    if (!top.length || Math.abs(top[top.length - 1][0] - capStartX) > 0.01) {
+        top.push([capStartX, cy - capRadius]);
+        bottom.push([capStartX, cy + capRadius]);
+    }
+
+    const arcPoints = [];
+    const arcSteps = 36;
+    if (capRadius > 0.01) {
+        for (let i = 1; i <= arcSteps; i += 1) {
+            const theta = (-Math.PI / 2) + (i / arcSteps) * Math.PI;
+            const x = capStartX + capRadius * Math.cos(theta);
+            const y = cy + capRadius * Math.sin(theta);
+            arcPoints.push([x, y]);
+        }
+    }
+
+    let d = `M ${top[0][0].toFixed(2)} ${top[0][1].toFixed(2)}`;
+    for (let i = 1; i < top.length; i += 1) {
+        d += ` L ${top[i][0].toFixed(2)} ${top[i][1].toFixed(2)}`;
+    }
+    arcPoints.forEach(([x, y]) => {
+        d += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    });
+    for (let i = bottom.length - 1; i >= 0; i -= 1) {
+        d += ` L ${bottom[i][0].toFixed(2)} ${bottom[i][1].toFixed(2)}`;
+    }
+    d += ' Z';
+    return d;
+}
+
+function refreshProgressVisual(container) {
+    if (!container || !container._progressTrackOutline || !container._progressTrackFill || !container._progressFill) {
+        return;
+    }
+
+    const centerX = container._progressCenter ?? (SFTP_PROGRESS_BULGE.viewW / 2);
+    const strength = container._progressStrength ?? 0;
+    const progressValue = container._progressValue ?? 0;
+
+    const trackPath = buildProgressBulgePath(centerX, strength);
+    const outlinePath = buildProgressBulgePath(centerX, strength, 1.5);
+    container._progressTrackOutline.setAttribute('d', outlinePath);
+    container._progressTrackFill.setAttribute('d', trackPath);
+    if (container._progressTrackSpec) {
+        container._progressTrackSpec.setAttribute('d', trackPath);
+    }
+    if (container._progressTrackGloss) {
+        container._progressTrackGloss.setAttribute('d', trackPath);
+    }
+
+    const fillPath = buildProgressFillPath(centerX, strength, progressValue);
+    container._progressFill.setAttribute('d', fillPath);
+    container._progressFill.style.opacity = fillPath ? '1' : '0';
+    if (container._progressFillSpec) {
+        container._progressFillSpec.setAttribute('d', fillPath);
+        container._progressFillSpec.style.opacity = fillPath ? '1' : '0';
+    }
+    if (container._progressFillGloss) {
+        container._progressFillGloss.setAttribute('d', fillPath);
+    }
+}
+
+function setProgressBulge(container, centerPx, strength) {
+    if (!container) {
+        return;
+    }
+    const rect = container.getBoundingClientRect();
+    if (!rect.width) {
+        return;
+    }
+    const clampedTrackX = Math.min(Math.max(centerPx, 0), rect.width);
+    const trackCx = (clampedTrackX / rect.width) * SFTP_PROGRESS_BULGE.viewW;
+    container._progressCenter = trackCx;
+    container._progressStrength = Math.min(0.7, Math.max(0, strength));
+    refreshProgressVisual(container);
+}
+
+function setProgressLighting(container, x, y, intensity = 1) {
+    if (!container || !container._progressGloss) {
+        return;
+    }
+    const rect = container.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+        return;
+    }
+    const cx = (x / rect.width) * SFTP_PROGRESS_BULGE.viewW;
+    const cy = (y / rect.height) * SFTP_PROGRESS_BULGE.viewH;
+    container._progressGloss.setAttribute('cx', cx.toFixed(2));
+    container._progressGloss.setAttribute('cy', cy.toFixed(2));
+    container.style.setProperty('--light', intensity.toFixed(2));
+    container.classList.add('progress-lit');
+}
+
+function clearProgressLighting(container) {
+    if (!container || !container._progressGloss) {
+        return;
+    }
+    container.style.setProperty('--light', '0');
+    container.classList.remove('progress-lit');
+}
+
+function createProgressVisual(container) {
+    if (!container || container._progressVisual) {
+        return;
+    }
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.classList.add('sftp-progress-visual');
+    svg.setAttribute('viewBox', `0 0 ${SFTP_PROGRESS_BULGE.viewW} ${SFTP_PROGRESS_BULGE.viewH}`);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const uid = `sftp-progress-${sftpProgressId++}`;
+    const defs = document.createElementNS(ns, 'defs');
+
+    const gradient = document.createElementNS(ns, 'linearGradient');
+    gradient.setAttribute('id', `${uid}-fill`);
+    gradient.setAttribute('x1', '0');
+    gradient.setAttribute('y1', '0');
+    gradient.setAttribute('x2', '0');
+    gradient.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#4CAF50', opacity: '0.95' },
+        { offset: '60%', color: '#4CAF50', opacity: '0.75' },
+        { offset: '100%', color: '#388E3C', opacity: '0.95' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        gradient.appendChild(stop);
+    });
+
+    const gloss = document.createElementNS(ns, 'radialGradient');
+    gloss.setAttribute('id', `${uid}-gloss`);
+    gloss.setAttribute('gradientUnits', 'userSpaceOnUse');
+    gloss.setAttribute('cx', String(SFTP_PROGRESS_BULGE.viewW / 2));
+    gloss.setAttribute('cy', String(SFTP_PROGRESS_BULGE.viewH * 0.5));
+    gloss.setAttribute('r', String(SFTP_PROGRESS_BULGE.viewW * 0.05));
+    [
+        { offset: '0%', color: '#ffffff', opacity: '0.42' },
+        { offset: '55%', color: '#ffffff', opacity: '0.12' },
+        { offset: '100%', color: '#ffffff', opacity: '0' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        gloss.appendChild(stop);
+    });
+
+    const trackGradient = document.createElementNS(ns, 'linearGradient');
+    trackGradient.setAttribute('id', `${uid}-track`);
+    trackGradient.setAttribute('x1', '0');
+    trackGradient.setAttribute('y1', '0');
+    trackGradient.setAttribute('x2', '0');
+    trackGradient.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#2f2f2f', opacity: '0.95' },
+        { offset: '45%', color: '#1f1f1f', opacity: '0.95' },
+        { offset: '100%', color: '#121212', opacity: '1' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        trackGradient.appendChild(stop);
+    });
+
+    const trackSpec = document.createElementNS(ns, 'linearGradient');
+    trackSpec.setAttribute('id', `${uid}-track-spec`);
+    trackSpec.setAttribute('x1', '0');
+    trackSpec.setAttribute('y1', '0');
+    trackSpec.setAttribute('x2', '0');
+    trackSpec.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#ffffff', opacity: '0.45' },
+        { offset: '35%', color: '#ffffff', opacity: '0.12' },
+        { offset: '70%', color: '#ffffff', opacity: '0' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        trackSpec.appendChild(stop);
+    });
+
+    const fillSpec = document.createElementNS(ns, 'linearGradient');
+    fillSpec.setAttribute('id', `${uid}-fill-spec`);
+    fillSpec.setAttribute('x1', '0');
+    fillSpec.setAttribute('y1', '0');
+    fillSpec.setAttribute('x2', '0');
+    fillSpec.setAttribute('y2', '1');
+    [
+        { offset: '0%', color: '#ffffff', opacity: '0.5' },
+        { offset: '35%', color: '#ffffff', opacity: '0.18' },
+        { offset: '70%', color: '#ffffff', opacity: '0' }
+    ].forEach(({ offset, color, opacity }) => {
+        const stop = document.createElementNS(ns, 'stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-color', color);
+        stop.setAttribute('stop-opacity', opacity);
+        fillSpec.appendChild(stop);
+    });
+
+    defs.appendChild(gradient);
+    defs.appendChild(gloss);
+    defs.appendChild(trackGradient);
+    defs.appendChild(trackSpec);
+    defs.appendChild(fillSpec);
+    svg.appendChild(defs);
+
+    const basePathD = buildProgressBulgePath(SFTP_PROGRESS_BULGE.viewW / 2, 0);
+    const trackOutline = document.createElementNS(ns, 'path');
+    trackOutline.classList.add('sftp-progress-track-outline');
+    trackOutline.setAttribute('d', basePathD);
+
+    const trackGloss = document.createElementNS(ns, 'path');
+    trackGloss.classList.add('sftp-progress-track-gloss');
+    trackGloss.setAttribute('d', basePathD);
+    trackGloss.setAttribute('fill', `url(#${uid}-gloss)`);
+
+    const trackFill = document.createElementNS(ns, 'path');
+    trackFill.classList.add('sftp-progress-track-fill');
+    trackFill.setAttribute('d', basePathD);
+    trackFill.setAttribute('fill', `url(#${uid}-track)`);
+
+    const trackSpecPath = document.createElementNS(ns, 'path');
+    trackSpecPath.classList.add('sftp-progress-track-spec');
+    trackSpecPath.setAttribute('d', basePathD);
+    trackSpecPath.setAttribute('fill', `url(#${uid}-track-spec)`);
+
+    const fillPath = document.createElementNS(ns, 'path');
+    fillPath.classList.add('sftp-progress-fill');
+    fillPath.setAttribute('d', basePathD);
+    fillPath.setAttribute('fill', `url(#${uid}-fill)`);
+
+    const fillGloss = document.createElementNS(ns, 'path');
+    fillGloss.classList.add('sftp-progress-fill-gloss');
+    fillGloss.setAttribute('d', basePathD);
+    fillGloss.setAttribute('fill', `url(#${uid}-gloss)`);
+
+    const fillSpecPath = document.createElementNS(ns, 'path');
+    fillSpecPath.classList.add('sftp-progress-fill-spec');
+    fillSpecPath.setAttribute('d', basePathD);
+    fillSpecPath.setAttribute('fill', `url(#${uid}-fill-spec)`);
+
+    svg.appendChild(trackOutline);
+    svg.appendChild(trackFill);
+    svg.appendChild(trackSpecPath);
+    svg.appendChild(trackGloss);
+    svg.appendChild(fillPath);
+    svg.appendChild(fillSpecPath);
+    svg.appendChild(fillGloss);
+
+    container.insertBefore(svg, container.firstChild);
+
+    container._progressVisual = svg;
+    container._progressTrackOutline = trackOutline;
+    container._progressTrackFill = trackFill;
+    container._progressTrackSpec = trackSpecPath;
+    container._progressTrackGloss = trackGloss;
+    container._progressFill = fillPath;
+    container._progressFillSpec = fillSpecPath;
+    container._progressFillGloss = fillGloss;
+    container._progressGloss = gloss;
+    container._progressValue = 0;
+    container._progressCenter = SFTP_PROGRESS_BULGE.viewW / 2;
+    container._progressStrength = 0;
+    refreshProgressVisual(container);
+}
+
+function attachProgressPointer(container) {
+    if (!container || container._progressPointerAttached) {
+        return;
+    }
+
+    const handleMove = (event) => {
+        if (document.body.dataset.uiTheme !== 'glass') {
+            return;
+        }
+        const rect = container.getBoundingClientRect();
+        if (!rect.width || !rect.height) {
+            return;
+        }
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const nx = (x - rect.width / 2) / (rect.width / 2);
+        const ny = (y - rect.height / 2) / (rect.height / 2);
+        const dist = Math.min(Math.sqrt(nx * nx + ny * ny), 1);
+        const lightPop = Math.max(0, 1 - dist);
+        setProgressBulge(container, x, SFTP_PROGRESS_BULGE.hoverStrength);
+        setProgressLighting(container, x, y, lightPop * 0.8);
+    };
+
+    const handleLeave = () => {
+        setProgressBulge(container, 0, 0);
+        clearProgressLighting(container);
+    };
+
+    container.addEventListener('pointermove', handleMove);
+    container.addEventListener('pointerleave', handleLeave);
+    container.addEventListener('pointercancel', handleLeave);
+    container._progressPointerAttached = true;
+}
+
+function ensureGlassProgress(progressEl) {
+    if (!progressEl) {
+        return null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(progressEl.dataset, 'origWidth')) {
+        progressEl.dataset.origWidth = progressEl.style.width || '';
+    }
+
+    let wrapper = progressEl.closest('.glass-progress');
+    if (!wrapper) {
+        wrapper = document.createElement('div');
+        wrapper.classList.add('glass-progress');
+        const width = progressEl.dataset.origWidth || progressEl.style.width || '100%';
+        wrapper.style.width = width;
+        wrapper.style.margin = '0 auto';
+        progressEl.parentNode.insertBefore(wrapper, progressEl);
+        wrapper.appendChild(progressEl);
+    }
+    progressEl.style.width = '100%';
+    if (!wrapper._progressVisual) {
+        createProgressVisual(wrapper);
+    }
+    attachProgressPointer(wrapper);
+    progressEl._glassWrapper = wrapper;
+    return wrapper;
+}
+
+function updateGlassProgressValue(progressEl, value) {
+    if (!progressEl) {
+        return;
+    }
+    const wrapper = progressEl._glassWrapper || ensureGlassProgress(progressEl);
+    if (!wrapper) {
+        return;
+    }
+    wrapper._progressValue = Number(value) || 0;
+    refreshProgressVisual(wrapper);
+}
+
+function teardownGlassProgress(progressEl) {
+    if (!progressEl) {
+        return;
+    }
+    const wrapper = progressEl._glassWrapper || progressEl.closest('.glass-progress');
+    if (!wrapper) {
+        return;
+    }
+    if (wrapper.parentNode) {
+        wrapper.parentNode.insertBefore(progressEl, wrapper);
+        wrapper.remove();
+    }
+    const originalWidth = Object.prototype.hasOwnProperty.call(progressEl.dataset, 'origWidth')
+        ? progressEl.dataset.origWidth
+        : '';
+    if (originalWidth) {
+        progressEl.style.width = originalWidth;
+    } else {
+        progressEl.style.removeProperty('width');
+    }
+    delete progressEl._glassWrapper;
+}
+
+function getProgressBarsForSync() {
+    const bars = [];
+    const upload = document.getElementById('upload-progress');
+    if (upload) {
+        bars.push(upload);
+    }
+    document.querySelectorAll('.zip-progress-bar').forEach((bar) => bars.push(bar));
+    return bars;
+}
+
+function syncProgressMode() {
+    const useGlass = isGlassThemeActive();
+    document.body.classList.toggle('sftp-progress-flat', !useGlass);
+    getProgressBarsForSync().forEach((bar) => {
+        if (useGlass) {
+            ensureGlassProgress(bar);
+            updateGlassProgressValue(bar, Number(bar.value) || 0);
+            return;
+        }
+        teardownGlassProgress(bar);
+    });
+}
+
+function observeProgressThemeChanges() {
+    if (progressThemeObserver) {
+        return;
+    }
+    progressThemeObserver = new MutationObserver((mutations) => {
+        if (mutations.some((m) =>
+            m.type === 'attributes' &&
+            (m.attributeName === 'data-ui-theme' || m.attributeName === 'href')
+        )) {
+            syncProgressMode();
+        }
+    });
+    progressThemeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['data-ui-theme']
+    });
+
+    const themeStylesheet = document.getElementById('theme-stylesheet');
+    if (themeStylesheet) {
+        progressThemeObserver.observe(themeStylesheet, {
+            attributes: true,
+            attributeFilter: ['href']
+        });
+    }
 }
 
 function setupWebSocket() {
@@ -176,7 +691,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (!currentUser) {
         return;
     }
-    setupAccountMenu(currentUser);
+    if (window.Appearance && typeof window.Appearance.init === 'function') {
+        window.Appearance.init({ user: currentUser });
+    }
+    observeProgressThemeChanges();
+    syncProgressMode();
     setupWebSocket();
     fetchFiles(getInitialPath(), false, true);
 
@@ -515,11 +1034,19 @@ function showLoadingSpinner(form, requestId) {
         progressBar.max = 100;
         progressBar.style.display = 'block';
         progressBar.style.width = '100%';
-        progressBar.style.height = '10px';
+        progressBar.style.height = '20px';
         form.appendChild(progressBar);
     } else {
         progressBar.value = 0;
+        progressBar.max = 100;
         progressBar.style.display = 'block';
+    }
+
+    if (isGlassThemeActive()) {
+        ensureGlassProgress(progressBar);
+        updateGlassProgressValue(progressBar, 0);
+    } else {
+        teardownGlassProgress(progressBar);
     }
 
     form.dataset.requestId = requestId;
@@ -529,6 +1056,11 @@ function hideLoadingSpinner(form) {
     const progressBar = form.querySelector('.zip-progress-bar');
     if (progressBar) {
         progressBar.remove();
+    }
+
+    const glassWrapper = form.querySelector('.glass-progress');
+    if (glassWrapper) {
+        glassWrapper.remove();
     }
 
     const progressLabel = form.querySelector('.zip-progress-label');
@@ -694,23 +1226,26 @@ function uploadFiles() {
     progressContainer.style.display = 'block';
 
     progressBar.value = 0;
+    if (isGlassThemeActive()) {
+        ensureGlassProgress(progressBar);
+        updateGlassProgressValue(progressBar, 0);
+    } else {
+        teardownGlassProgress(progressBar);
+    }
     uploadPercentage.textContent = 'Uploading...';
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/upload', true);
     xhr.setRequestHeader('Authorization', 'Bearer ' + token);
 
-    let progressDetected = false;
-
     xhr.upload.onprogress = function (event) {
         if (event.lengthComputable) {
-            progressDetected = true;
-            progressBar.value = 0;
             const percentComplete = (event.loaded / event.total) * 100;
-            if (percentComplete >= 1) {
-                progressBar.value = percentComplete;
-                uploadPercentage.textContent = `${Math.round(percentComplete)}%`;
+            progressBar.value = percentComplete;
+            if (isGlassThemeActive()) {
+                updateGlassProgressValue(progressBar, percentComplete);
             }
+            uploadPercentage.textContent = `${Math.round(percentComplete)}%`;
 
             if (percentComplete === 100) {
                 uploadPercentage.textContent = 'Processing...';
@@ -728,7 +1263,9 @@ function uploadFiles() {
 
         progressContainer.style.display = 'none';
         progressBar.value = 0;
-        progressBar.removeAttribute('value');
+        if (isGlassThemeActive()) {
+            updateGlassProgressValue(progressBar, 0);
+        }
         uploadPercentage.textContent = '';
         uploadButton.style.display = 'block';
     };
@@ -738,17 +1275,12 @@ function uploadFiles() {
 
         progressContainer.style.display = 'none';
         progressBar.value = 0;
-        progressBar.removeAttribute('value');
+        if (isGlassThemeActive()) {
+            updateGlassProgressValue(progressBar, 0);
+        }
         uploadPercentage.textContent = '';
         uploadButton.style.display = 'block';
     };
-
-    setTimeout(() => {
-        if (!progressDetected) {
-            progressBar.removeAttribute('value');
-            uploadPercentage.textContent = 'Uploading...';
-        }
-    }, 500);
 
     xhr.send(formData);
 }
@@ -846,6 +1378,7 @@ function createPDFPreview(file, path) {
 }
 
 function updateZipProgress(requestId, progress) {
+    const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
     const forms = document.querySelectorAll('form');
     let formFound = false;
 
@@ -855,11 +1388,11 @@ function updateZipProgress(requestId, progress) {
 
     const state = progressStateMap[requestId];
 
-    if (state.phase === 'retrieving' && progress <= 1 && state.lastProgress >= 98) {
+    if (state.phase === 'retrieving' && safeProgress <= 1 && state.lastProgress >= 98) {
         state.phase = 'compressing';
     }
 
-    state.lastProgress = progress;
+    state.lastProgress = safeProgress;
 
     forms.forEach(form => {
         const formRequestId = form.dataset.requestId;
@@ -877,7 +1410,7 @@ function updateZipProgress(requestId, progress) {
                 progressBar.value = 0;
                 progressBar.max = 100;
                 progressBar.style.width = '100%';
-                progressBar.style.height = '10px';
+                progressBar.style.height = '20px';
                 form.appendChild(progressBar);
             }
 
@@ -888,18 +1421,17 @@ function updateZipProgress(requestId, progress) {
                 form.appendChild(progressLabel);
             }
 
-            progressLabel.textContent = `${capitalize(state.phase)} ${Math.round(progress)}%`;
+            progressLabel.textContent = `${capitalize(state.phase)} ${Math.round(safeProgress)}%`;
 
-            progressBar.style.display = 'none';
-            progressBar.value = progress;
-            progressBar.style.display = 'block';
+            progressBar.value = safeProgress;
+            if (isGlassThemeActive()) {
+                ensureGlassProgress(progressBar);
+                updateGlassProgressValue(progressBar, safeProgress);
+            } else {
+                teardownGlassProgress(progressBar);
+            }
 
-            requestAnimationFrame(() => {
-                progressBar.style.display = 'block';
-                progressBar.offsetHeight;
-            });
-
-            if (progress >= 100 && state.phase === 'compressing') {
+            if (safeProgress >= 100 && state.phase === 'compressing') {
                 hideLoadingSpinner(form);
             }
         }

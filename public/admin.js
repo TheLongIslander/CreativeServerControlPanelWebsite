@@ -44,35 +44,6 @@ async function loadCurrentUser() {
     return user;
 }
 
-function setupAccountMenu(user) {
-    const accountButton = document.getElementById('account-button');
-    const dropdown = document.getElementById('account-dropdown');
-    const logoutButton = document.getElementById('logout-button');
-    const manageButton = document.getElementById('manage-account-button');
-
-    if (user) {
-        accountButton.dataset.username = user.username || '';
-    }
-
-    accountButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        dropdown.classList.toggle('hidden');
-    });
-
-    document.addEventListener('click', () => {
-        if (!dropdown.classList.contains('hidden')) {
-            dropdown.classList.add('hidden');
-        }
-    });
-
-    logoutButton.addEventListener('click', () => {
-        logout();
-    });
-
-    manageButton.addEventListener('click', () => {
-        window.location.href = '/account.html';
-    });
-}
 
 function formatDate(value) {
     if (!value) {
@@ -175,20 +146,30 @@ function renderUsers(users) {
         usernameCell.appendChild(usernameButton);
 
         const lastLoginCell = document.createElement('td');
-        const lastLoginButton = document.createElement('button');
-        lastLoginButton.type = 'button';
-        lastLoginButton.classList.add('login-history-link');
-        lastLoginButton.textContent = formatDate(user.lastLoginAt);
         if (user.lastLoginAt) {
+            const lastLoginButton = document.createElement('button');
+            lastLoginButton.type = 'button';
+            lastLoginButton.classList.add('login-history-link', 'has-history');
+            lastLoginButton.textContent = formatDate(user.lastLoginAt);
             lastLoginButton.addEventListener('click', () => openLoginHistory(user));
+            lastLoginCell.appendChild(lastLoginButton);
         } else {
-            lastLoginButton.disabled = true;
-            lastLoginButton.classList.add('disabled-link');
+            const neverValue = document.createElement('span');
+            neverValue.classList.add('never-value');
+            neverValue.textContent = 'Never';
+            lastLoginCell.appendChild(neverValue);
         }
-        lastLoginCell.appendChild(lastLoginButton);
 
         const lastResetCell = document.createElement('td');
-        lastResetCell.textContent = formatDate(user.lastPasswordResetAt);
+        const lastReset = formatDate(user.lastPasswordResetAt);
+        if (lastReset === 'Never') {
+            const neverValue = document.createElement('span');
+            neverValue.classList.add('never-value');
+            neverValue.textContent = lastReset;
+            lastResetCell.appendChild(neverValue);
+        } else {
+            lastResetCell.textContent = lastReset;
+        }
 
         const createdCell = document.createElement('td');
         createdCell.textContent = formatDate(user.createdAt);
@@ -475,7 +456,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (!currentUser) {
         return;
     }
-    setupAccountMenu(currentUser);
+    if (window.Appearance && typeof window.Appearance.init === 'function') {
+        window.Appearance.init({
+            user: currentUser,
+            options: { adminOnly: true }
+        });
+    }
     refreshUsers();
     document.getElementById('audit-log-button').addEventListener('click', () => {
         window.location.href = '/admin-audit.html';

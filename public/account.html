@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Manage Account</title>
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styleAdmin.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,7 +14,31 @@
         <div class="account-container">
             <button id="account-button">Account</button>
             <div id="account-dropdown" class="account-dropdown hidden">
+                <button id="manage-account-button" class="hidden">Manage Account</button>
                 <button id="admin-management-button" class="hidden">Admin Management</button>
+                <button id="appearance-button">Appearance</button>
+                <div id="appearance-panel" class="appearance-panel hidden">
+                    <div class="appearance-row">
+                        <span>Classic</span>
+                        <label class="switch">
+                            <input type="checkbox" id="appearance-classic-toggle">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="appearance-label">Color Mode</div>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="system">
+                        System
+                    </label>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="light">
+                        Light
+                    </label>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="dark">
+                        Dark
+                    </label>
+                </div>
                 <button id="logout-button">Logout</button>
             </div>
         </div>
@@ -59,6 +84,7 @@
     </main>
 
     <script src="webauthn.js"></script>
+    <script src="appearance.js"></script>
     <script src="account.js"></script>
 </body>
 </html>

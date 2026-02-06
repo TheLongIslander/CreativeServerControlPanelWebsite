@@ -1,42 +1,74 @@
 /* Light mode styles (default) */
+:root {
+    --surface: #f4f4f4;
+    --surface-2: #ffffff;
+    --border: #e0e0e0;
+    --shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    --text: #333;
+    --muted: #6b7280;
+}
+
 body {
     font-family: 'Arial', sans-serif;
-    background-color: #f4f4f4;
+    background-color: var(--surface);
     margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    color: var(--text);
+}
+
+body[data-color-scheme="dark"] {
+    --surface: #0f1115;
+    --surface-2: #161a22;
+    --border: #262c36;
+    --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    --text: #e5e7eb;
+    --muted: #9aa4b2;
+}
+
+body[data-ui-theme="glass"] {
+    --surface: #0f1115;
+    --surface-2: rgba(10, 16, 18, 0.78);
+    --border: rgba(255, 255, 255, 0.16);
+    --shadow: 0 18px 36px rgba(0, 0, 0, 0.5);
+    --text: #e5e7eb;
+    --muted: rgba(219, 228, 240, 0.7);
+}
+
+body.control-panel {
     padding: 20px;
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh; /* Ensures the body takes the full height of the viewport */
+    height: 100vh;
     flex-direction: column;
-    color: #333;
     position: relative;
-    overflow: hidden; /* Prevents scrolling */
+    overflow: hidden;
 }
 
-header {
+body.control-panel header {
     position: absolute;
-    width: 100%; /* Ensure the header spans the full width */
-    top: 20px; /* Align the header at the top */
+    width: 100%;
+    top: 20px;
 }
 
-.content {
-    width: 100%; /* Continues to span the full width */
-    max-width: 80%; /* Allows it to grow until 80% of the viewport width on larger screens */
-    margin: 0 auto; /* Keeps it centered */
+body.control-panel .content {
+    width: 100%;
+    max-width: 80%;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     align-items: center;
 }
 
-h1 {
-    color: #333;
+body.control-panel h1 {
+    color: var(--text);
     font-size: 2rem;
     margin-bottom: 2rem;
     text-align: center;
 }
 
-main {
+body.control-panel main {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -421,12 +453,12 @@ body[data-ui-theme="glass"] .switch input:checked + .slider::before {
     background-color: #0a6a8b;
 }
 
-body.modal-open header {
+body.control-panel.modal-open header {
     opacity: 0;
     pointer-events: none;
 }
 
-#sftp-button {
+body.control-panel #sftp-button {
     position: absolute;
     top: 6px; /* Adjust as needed */
     left: 20px;
@@ -436,7 +468,7 @@ body.modal-open header {
     border-radius: 20px; /* Match border-radius with the logout button */
 }
 
-#sftp-button:hover {
+body.control-panel #sftp-button:hover {
     background-color: #005f73; /* Darker blue */
 }
 
@@ -821,26 +853,26 @@ button:disabled:hover {
 /* Responsive adjustments for screens less than 768px wide */
 /* Responsive adjustments for screens less than 768px wide */
 @media (max-width: 768px) {
-    body {
+    body.control-panel {
         padding: 10px;
         flex-direction: column;
         align-items: center;
     }
 
-    header {
+    body.control-panel header {
         top: 10px;
     }
 
-    h1 {
+    body.control-panel h1 {
         font-size: 1.5rem; /* Smaller font size for smaller screens */
         margin-top: 20px; /* Provide some top margin for spacing */
     }
 
-    .content {
+    body.control-panel .content {
         width: 100%; /* Use full width for layout adjustments */
     }
 
-    button {
+    body.control-panel button {
         width: 90%; /* Make buttons slightly smaller than full width for aesthetics */
         margin: 10px 5%; /* Center buttons with automatic margins */
         padding: 12px; /* Slightly smaller padding */
@@ -877,35 +909,35 @@ body[data-color-scheme="dark"] {
     color: #ccc;
 }
 
-body[data-color-scheme="dark"] h1 {
+body.control-panel[data-color-scheme="dark"] h1 {
     color: #ccc;
 }
 
-body[data-color-scheme="dark"] button {
+body.control-panel[data-color-scheme="dark"] button {
     background-color: #666;
     color: #fff;
 }
 
-body[data-color-scheme="dark"] .account-dropdown {
+body.control-panel[data-color-scheme="dark"] .account-dropdown {
     background: #1d1d1d;
     border-color: #333;
 }
 
-body[data-color-scheme="dark"] .appearance-panel {
+body.control-panel[data-color-scheme="dark"] .appearance-panel {
     background: #1b1b1b;
     border-color: #2a2a2a;
 }
 
-body[data-color-scheme="dark"] .appearance-row,
-body[data-color-scheme="dark"] .appearance-option {
+body.control-panel[data-color-scheme="dark"] .appearance-row,
+body.control-panel[data-color-scheme="dark"] .appearance-option {
     color: #e5e7eb;
 }
 
-body[data-color-scheme="dark"] .appearance-label {
+body.control-panel[data-color-scheme="dark"] .appearance-label {
     color: #9ca3af;
 }
 
-body[data-color-scheme="dark"] .switch .slider {
+body.control-panel[data-color-scheme="dark"] .switch .slider {
     background: #374151;
 }
 
@@ -963,30 +995,30 @@ body[data-color-scheme="light"] {
     color: #333;
 }
 
-body[data-color-scheme="light"] h1 {
+body.control-panel[data-color-scheme="light"] h1 {
     color: #333;
 }
 
-body[data-color-scheme="light"] .account-dropdown {
+body.control-panel[data-color-scheme="light"] .account-dropdown {
     background: #ffffff;
     border-color: #e0e0e0;
 }
 
-body[data-color-scheme="light"] .appearance-panel {
+body.control-panel[data-color-scheme="light"] .appearance-panel {
     background: #f6f7f9;
     border-color: #e1e5ea;
 }
 
-body[data-color-scheme="light"] .appearance-row,
-body[data-color-scheme="light"] .appearance-option {
+body.control-panel[data-color-scheme="light"] .appearance-row,
+body.control-panel[data-color-scheme="light"] .appearance-option {
     color: #333;
 }
 
-body[data-color-scheme="light"] .appearance-label {
+body.control-panel[data-color-scheme="light"] .appearance-label {
     color: #6b7280;
 }
 
-body[data-color-scheme="light"] .switch .slider {
+body.control-panel[data-color-scheme="light"] .switch .slider {
     background: #cbd5e1;
 }
 

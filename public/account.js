@@ -36,42 +36,6 @@ async function loadCurrentUser() {
     return user;
 }
 
-function setupAccountMenu(user) {
-    const accountButton = document.getElementById('account-button');
-    const dropdown = document.getElementById('account-dropdown');
-    const adminButton = document.getElementById('admin-management-button');
-    const logoutButton = document.getElementById('logout-button');
-
-    if (user) {
-        accountButton.dataset.username = user.username || '';
-    }
-
-    if (adminButton) {
-        if (user && user.role === 'admin') {
-            adminButton.classList.remove('hidden');
-            adminButton.addEventListener('click', () => {
-                window.location.href = '/admin.html';
-            });
-        } else {
-            adminButton.classList.add('hidden');
-        }
-    }
-
-    accountButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        dropdown.classList.toggle('hidden');
-    });
-
-    document.addEventListener('click', () => {
-        if (!dropdown.classList.contains('hidden')) {
-            dropdown.classList.add('hidden');
-        }
-    });
-
-    logoutButton.addEventListener('click', () => {
-        logout();
-    });
-}
 
 function formatDate(value) {
     if (!value) {
@@ -277,7 +241,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
 
-    setupAccountMenu(user);
+    if (window.Appearance && typeof window.Appearance.init === 'function') {
+        window.Appearance.init({
+            user,
+            options: {
+                showManageAccountButton: false
+            }
+        });
+    }
     refreshPasskeys();
 
     document.getElementById('change-password-form').addEventListener('submit', submitPasswordChange);

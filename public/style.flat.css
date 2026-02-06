@@ -1,42 +1,67 @@
 /* Light mode styles (default) */
+:root {
+    --surface: #f4f4f4;
+    --surface-2: #ffffff;
+    --border: #e0e0e0;
+    --shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    --text: #333;
+    --muted: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --surface: #121212;
+        --surface-2: #1d1d1d;
+        --border: #333;
+        --shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+        --text: #ccc;
+        --muted: #9ca3af;
+    }
+}
+
 body {
     font-family: 'Arial', sans-serif;
-    background-color: #f4f4f4;
+    background-color: var(--surface);
     margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    color: var(--text);
+}
+
+body.control-panel {
     padding: 20px;
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh; /* Ensures the body takes the full height of the viewport */
+    height: 100vh;
     flex-direction: column;
-    color: #333;
     position: relative;
-    overflow: hidden; /* Prevents scrolling */
+    overflow: hidden;
 }
 
-header {
+body.control-panel header {
     position: absolute;
-    width: 100%; /* Ensure the header spans the full width */
-    top: 20px; /* Align the header at the top */
+    width: 100%;
+    top: 20px;
 }
 
-.content {
-    width: 100%; /* Continues to span the full width */
-    max-width: 80%; /* Allows it to grow until 80% of the viewport width on larger screens */
-    margin: 0 auto; /* Keeps it centered */
+body.control-panel .content {
+    width: 100%;
+    max-width: 80%;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     align-items: center;
 }
 
-h1 {
-    color: #333;
+body.control-panel h1 {
+    color: var(--text);
     font-size: 2rem;
     margin-bottom: 2rem;
     text-align: center;
 }
 
-main {
+body.control-panel main {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -283,7 +308,7 @@ main {
     background-color: #0a6a8b;
 }
 
-body.modal-open header {
+body.control-panel.modal-open header {
     opacity: 0;
     pointer-events: none;
 }
@@ -489,51 +514,51 @@ button:disabled {
 /* Responsive adjustments for screens less than 768px wide */
 /* Responsive adjustments for screens less than 768px wide */
 @media (max-width: 768px) {
-    body {
+    body.control-panel {
         padding: 10px;
         flex-direction: column;
         align-items: center;
     }
 
-    header {
+    body.control-panel header {
         top: 10px;
     }
 
-    h1 {
+    body.control-panel h1 {
         font-size: 1.5rem; /* Smaller font size for smaller screens */
         margin-top: 20px; /* Provide some top margin for spacing */
     }
 
-    .content {
+    body.control-panel .content {
         width: 100%; /* Use full width for layout adjustments */
     }
 
-    button {
+    body.control-panel button {
         width: 90%; /* Make buttons slightly smaller than full width for aesthetics */
         margin: 10px 5%; /* Center buttons with automatic margins */
         padding: 12px; /* Slightly smaller padding */
         font-size: 14px; /* Adjust font size for readability */
     }
 
-    #progress-area {
+    body.control-panel #progress-area {
         width: 90%; /* Adjust the progress area width to match button styling */
     }
 
-    #start-server,
-    #stop-server,
-    #backup-server,
-    #progress-container,
-    #progress-percentage {
+    body.control-panel #start-server,
+    body.control-panel #stop-server,
+    body.control-panel #backup-server,
+    body.control-panel #progress-container,
+    body.control-panel #progress-percentage {
         margin-bottom: 10px;
     }
 
-    #logout-button {
+    body.control-panel #logout-button {
         padding: 6px 12px; /* Smaller padding */
         font-size: 12px; /* Smaller font size */
         width: auto; /* Prevent full-width on small screens */
     }
 
-    #sftp-button {
+    body.control-panel #sftp-button {
         padding: 6px 12px; /* Smaller padding */
         font-size: 12px; /* Smaller font size */
         width: auto; /* Prevent full-width on small screens */
@@ -541,15 +566,21 @@ button:disabled {
 }
 
 body[data-color-scheme="dark"] {
-    background-color: #121212;
+    --surface: #121212;
+    --surface-2: #1d1d1d;
+    --border: #333;
+    --shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+    --text: #ccc;
+    --muted: #9ca3af;
+    background-color: var(--surface);
+    color: var(--text);
+}
+
+body.control-panel[data-color-scheme="dark"] h1 {
     color: #ccc;
 }
 
-body[data-color-scheme="dark"] h1 {
-    color: #ccc;
-}
-
-body[data-color-scheme="dark"] button {
+body.control-panel[data-color-scheme="dark"] button {
     background-color: #666;
     color: #fff;
 }
@@ -577,36 +608,36 @@ body[data-color-scheme="dark"] .switch .slider {
     background: #374151;
 }
 
-body[data-color-scheme="dark"] #start-server {
+body.control-panel[data-color-scheme="dark"] #start-server {
     background-color: #198754;
 }
 
-body[data-color-scheme="dark"] #start-server:hover {
+body.control-panel[data-color-scheme="dark"] #start-server:hover {
     background-color: #146c43;
 }
 
-body[data-color-scheme="dark"] #stop-server {
+body.control-panel[data-color-scheme="dark"] #stop-server {
     background-color: #dc3545;
 }
 
-body[data-color-scheme="dark"] #stop-server:hover {
+body.control-panel[data-color-scheme="dark"] #stop-server:hover {
     background-color: #bb2d3b;
 }
 
-body[data-color-scheme="dark"] button:disabled {
+body.control-panel[data-color-scheme="dark"] button:disabled {
     background-color: #444;
     color: #666;
 }
 
-body[data-color-scheme="dark"] #backup-server {
+body.control-panel[data-color-scheme="dark"] #backup-server {
     background-color: #20B2AA;
 }
 
-body[data-color-scheme="dark"] #backup-server:hover {
+body.control-panel[data-color-scheme="dark"] #backup-server:hover {
     background-color: #1D7F7E;
 }
 
-body[data-color-scheme="dark"] #progress-percentage {
+body.control-panel[data-color-scheme="dark"] #progress-percentage {
     color: white;
 }
 
@@ -627,11 +658,17 @@ body[data-color-scheme="dark"] .modal-message {
 }
 
 body[data-color-scheme="light"] {
-    background-color: #f4f4f4;
-    color: #333;
+    --surface: #f4f4f4;
+    --surface-2: #ffffff;
+    --border: #e0e0e0;
+    --shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    --text: #333;
+    --muted: #6b7280;
+    background-color: var(--surface);
+    color: var(--text);
 }
 
-body[data-color-scheme="light"] h1 {
+body.control-panel[data-color-scheme="light"] h1 {
     color: #333;
 }
 
@@ -658,7 +695,7 @@ body[data-color-scheme="light"] .switch .slider {
     background: #cbd5e1;
 }
 
-body[data-color-scheme="light"] #progress-percentage {
+body.control-panel[data-color-scheme="light"] #progress-percentage {
     color: #333;
 }
 

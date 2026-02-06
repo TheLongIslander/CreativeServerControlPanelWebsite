@@ -42,35 +42,6 @@ async function loadCurrentUser() {
     return user;
 }
 
-function setupAccountMenu(user) {
-    const accountButton = document.getElementById('account-button');
-    const dropdown = document.getElementById('account-dropdown');
-    const logoutButton = document.getElementById('logout-button');
-    const manageButton = document.getElementById('manage-account-button');
-
-    if (user) {
-        accountButton.dataset.username = user.username || '';
-    }
-
-    accountButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        dropdown.classList.toggle('hidden');
-    });
-
-    document.addEventListener('click', () => {
-        if (!dropdown.classList.contains('hidden')) {
-            dropdown.classList.add('hidden');
-        }
-    });
-
-    logoutButton.addEventListener('click', () => {
-        logout();
-    });
-
-    manageButton.addEventListener('click', () => {
-        window.location.href = '/account.html';
-    });
-}
 
 function formatDate(value) {
     if (!value) {
@@ -152,7 +123,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!currentUser) {
         return;
     }
-    setupAccountMenu(currentUser);
+    if (window.Appearance && typeof window.Appearance.init === 'function') {
+        window.Appearance.init({
+            user: currentUser,
+            options: { adminOnly: true }
+        });
+    }
 
     const params = new URLSearchParams(window.location.search);
     const userId = params.get('userId');

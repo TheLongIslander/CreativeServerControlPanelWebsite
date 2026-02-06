@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>The Creative Server Backup File Browser</title>
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styleSFTP.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -19,6 +20,29 @@
             <div id="account-dropdown" class="account-dropdown hidden">
                 <button id="manage-account-button">Manage Account</button>
                 <button id="admin-management-button" class="hidden">Admin Management</button>
+                <button id="appearance-button">Appearance</button>
+                <div id="appearance-panel" class="appearance-panel hidden">
+                    <div class="appearance-row">
+                        <span>Classic</span>
+                        <label class="switch">
+                            <input type="checkbox" id="appearance-classic-toggle">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="appearance-label">Color Mode</div>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="system">
+                        System
+                    </label>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="light">
+                        Light
+                    </label>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="dark">
+                        Dark
+                    </label>
+                </div>
                 <button id="logout-button">Logout</button>
             </div>
         </div>
@@ -32,12 +56,13 @@
             <input type="file" id="file-input" name="file" style="display:none;" multiple>
             <button type="button" id="upload-button">Upload</button>
             <div id="progress-container" style="display:none;">
-                <progress id="upload-progress" value="0" max="100" style="width: 80%;"></progress>
+                <progress id="upload-progress" value="0" max="100"></progress>
                 <div id="upload-percentage" style="text-align:center; margin-top:5px;"></div>
             </div>
         </form>
     </div>
     <div id="loading-spinner" class="spinner" style="display:none;"></div>
+    <script src="appearance.js"></script>
     <script src="sftp.js"></script>
 </body>
 </html>
