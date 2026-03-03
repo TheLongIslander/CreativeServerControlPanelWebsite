@@ -8,3 +8,4 @@ tmp/
 token_blacklist.db
 bycrypt.js
 users.db
+plans.md
