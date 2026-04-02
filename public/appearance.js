@@ -1,4 +1,6 @@
 (function() {
+    const STYLE_VERSION = '20260402-8';
+
     let appearanceState = {
         uiTheme: 'glass',
         colorScheme: 'system'
@@ -9,7 +11,9 @@
         if (!link) {
             return;
         }
-        const href = uiTheme === 'flat' ? 'style.flat.css' : 'style.css';
+        const href = uiTheme === 'flat'
+            ? `style.flat.css?v=${STYLE_VERSION}`
+            : `style.css?v=${STYLE_VERSION}`;
         if (!link.getAttribute('href') || link.getAttribute('href') !== href) {
             link.setAttribute('href', href);
         }

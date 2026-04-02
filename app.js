@@ -19,11 +19,18 @@ const { createPreviewRoutes, precacheVideoThumbnails } = require('./backend/rout
 const createAdminUserRoutes = require('./backend/routes/adminUsers');
 const createWebAuthnRoutes = require('./backend/routes/webauthn');
 const createMaintenanceService = require('./backend/services/maintenance');
+const createUpdateService = require('./backend/services/updateService');
+const createUpdateRoutes = require('./backend/routes/update');
 
 const app = express();
 const port = Number(process.env.PORT) || 8087;
 let wss;
 let server;
+
+const updateService = createUpdateService({
+  state,
+  getWss: () => wss
+});
 
 const maintenanceService = createMaintenanceService({
   getWss: () => wss,
@@ -58,10 +65,13 @@ app.use(createSftpRoutes());
 app.use(createDownloadRoutes({ getWss: () => wss }));
 app.use(createUploadRoutes());
 app.use(createPreviewRoutes());
+app.use(createUpdateRoutes({ updateService }));
 
 async function startServer() {
   await usersDb.initUsersDb();
   await usersDb.ensureAdminUser();
+  await updateService.initialize();
+  updateService.startStatusRefreshTimer();
 
   server = app.listen(port, () => {
     console.log(`Server listening at http://localhost:${port}`);

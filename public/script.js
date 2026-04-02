@@ -5,6 +5,11 @@
  */
 let isBackingUp = false;
 let ws;
+let latestUpdateStatus = null;
+let activeUpdateCheck = null;
+let isApplyingUpdate = false;
+let updateButtonAnimationTimer = null;
+let updateButtonAnimationBase = null;
 
 function redirectToLogin() {
     localStorage.removeItem('token');
@@ -42,6 +47,547 @@ async function loadCurrentUser() {
     }
 
     return user;
+}
+
+function getAuthToken() {
+    return localStorage.getItem('token');
+}
+
+function getAuthHeaders(includeJson = false) {
+    const token = getAuthToken();
+    const headers = {};
+    if (includeJson) {
+        headers['Content-Type'] = 'application/json';
+    }
+    if (token) {
+        headers.Authorization = 'Bearer ' + token;
+    }
+    return headers;
+}
+
+function setUpdateStatusMessage(message, isError = false) {
+    const el = document.getElementById('update-status-message');
+    if (!el) {
+        return;
+    }
+    if (!message) {
+        el.textContent = '';
+        el.classList.add('hidden');
+        return;
+    }
+    el.textContent = message;
+    el.classList.remove('hidden');
+    el.style.color = isError ? '#b91c1c' : '';
+}
+
+function formatIsoDateLabel(isoDate) {
+    const match = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) {
+        return null;
+    }
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+        return null;
+    }
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    if (month < 1 || month > 12) {
+        return null;
+    }
+    return `${monthNames[month - 1]} ${day}, ${year}`;
+}
+
+function formatReleaseDateLabel(releaseTime, releaseDate) {
+    const dateLabel = formatIsoDateLabel(releaseDate);
+    if (dateLabel) {
+        return dateLabel;
+    }
+    if (!releaseTime) {
+        return null;
+    }
+    const parsed = new Date(releaseTime);
+    if (!Number.isFinite(parsed.getTime())) {
+        return null;
+    }
+    return formatIsoDateLabel(parsed.toISOString().slice(0, 10));
+}
+
+function formatVersionWithRelease(versionInfo, fallbackVersion) {
+    const version = (versionInfo && versionInfo.version) || fallbackVersion || 'unknown';
+    const releaseLabel = formatReleaseDateLabel(
+        versionInfo && versionInfo.releaseTime,
+        versionInfo && versionInfo.releaseDate
+    );
+    if (!releaseLabel) {
+        return `${version} (release date unknown)`;
+    }
+    return `${version} (released ${releaseLabel})`;
+}
+
+function startUpdateButtonAnimation(baseText = 'Updating') {
+    const button = document.getElementById('update-server');
+    if (!button) {
+        return;
+    }
+    if (updateButtonAnimationTimer && updateButtonAnimationBase === baseText) {
+        button.disabled = true;
+        return;
+    }
+
+    if (updateButtonAnimationTimer) {
+        clearInterval(updateButtonAnimationTimer);
+        updateButtonAnimationTimer = null;
+    }
+
+    updateButtonAnimationBase = baseText;
+    let dots = 0;
+    const render = () => {
+        const suffix = '.'.repeat(dots);
+        button.textContent = `${baseText}${suffix}`;
+        dots = (dots + 1) % 4;
+    };
+    render();
+    updateButtonAnimationTimer = setInterval(render, 360);
+    button.disabled = true;
+}
+
+function stopUpdateButtonAnimation({ restoreLabel = true } = {}) {
+    if (updateButtonAnimationTimer) {
+        clearInterval(updateButtonAnimationTimer);
+        updateButtonAnimationTimer = null;
+    }
+    updateButtonAnimationBase = null;
+    if (restoreLabel) {
+        updateUpdateButtonLabel();
+    }
+}
+
+function updateUpdateButtonLabel() {
+    const button = document.getElementById('update-server');
+    if (!button) {
+        return;
+    }
+    if (updateButtonAnimationTimer) {
+        return;
+    }
+    if (!latestUpdateStatus || !latestUpdateStatus.updateAvailable) {
+        button.textContent = 'Update Available';
+        return;
+    }
+    button.textContent = `Update to ${latestUpdateStatus.latestVersion}`;
+}
+
+async function loadUpdateStatus({ forceRefresh = false } = {}) {
+    const button = document.getElementById('update-server');
+    if (!button) {
+        return null;
+    }
+
+    const token = getAuthToken();
+    if (!token) {
+        button.classList.add('hidden');
+        return null;
+    }
+
+    let endpoint = '/updates/status';
+    if (forceRefresh) {
+        endpoint += '?refresh=1';
+    }
+
+    try {
+        const response = await fetch(endpoint, {
+            headers: getAuthHeaders(false)
+        });
+        if (!response.ok) {
+            if (response.status === 401 || response.status === 403) {
+                return null;
+            }
+            throw new Error(`Failed to load update status (${response.status})`);
+        }
+        latestUpdateStatus = await response.json();
+        if (latestUpdateStatus.updateAvailable) {
+            button.classList.remove('hidden');
+            if (latestUpdateStatus.updateInProgress) {
+                startUpdateButtonAnimation('Updating');
+                setUpdateStatusMessage('Update in progress. Server actions are temporarily locked.');
+            } else {
+                stopUpdateButtonAnimation({ restoreLabel: false });
+                updateUpdateButtonLabel();
+                button.disabled = Boolean(isBackingUp) || isApplyingUpdate;
+                setUpdateStatusMessage('');
+            }
+        } else {
+            button.classList.add('hidden');
+            stopUpdateButtonAnimation({ restoreLabel: false });
+            setUpdateStatusMessage('');
+        }
+        return latestUpdateStatus;
+    } catch (err) {
+        console.error('Failed to fetch update status:', err);
+        setUpdateStatusMessage('Failed to load update status.', true);
+        return null;
+    }
+}
+
+function getConflictMods(check) {
+    if (!check || !check.mods || !Array.isArray(check.mods.mods)) {
+        return [];
+    }
+    return check.mods.mods.filter(mod => mod.status === 'blocked' || mod.status === 'unknown');
+}
+
+function setUpdateActionDisabled(disabled) {
+    const cancelBtn = document.getElementById('update-cancel-btn');
+    const compatibleBtn = document.getElementById('update-compatible-btn');
+    const serverOnlyBtn = document.getElementById('update-server-only-btn');
+    const compatibleVersionBtn = document.getElementById('update-compatible-version-btn');
+    if (cancelBtn) {
+        cancelBtn.disabled = disabled;
+    }
+    if (compatibleBtn) {
+        compatibleBtn.disabled = disabled;
+    }
+    if (serverOnlyBtn) {
+        serverOnlyBtn.disabled = disabled;
+    }
+    if (compatibleVersionBtn) {
+        compatibleVersionBtn.disabled = disabled;
+    }
+}
+
+function closeUpdateModal() {
+    const modal = document.getElementById('update-modal');
+    if (!modal) {
+        return;
+    }
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+}
+
+function describeBlockingReasons(reasons) {
+    const lookup = {
+        blocked_by_java: 'Java version is too old for the target Minecraft release.',
+        blocked_by_java_detection: 'Java runtime could not be detected from the launch script.',
+        blocked_by_disk: 'Insufficient disk space for safe update + rollback.',
+        blocked_by_fabric_support: 'Fabric loader support for the target version was not found.',
+        blocked_by_mod_scan_failure: 'Mod compatibility scan failed.',
+        blocked_by_minecraft_manifest: 'Minecraft version metadata lookup failed.'
+    };
+    return (reasons || []).map(reason => lookup[reason] || reason);
+}
+
+function getVersionInfo(check, key, fallbackVersion) {
+    const info = check && check.versionInfo && check.versionInfo[key] ? check.versionInfo[key] : null;
+    return {
+        version: (info && info.version) || fallbackVersion || null,
+        releaseTime: info && info.releaseTime ? info.releaseTime : null,
+        releaseDate: info && info.releaseDate ? info.releaseDate : null
+    };
+}
+
+function openUpdateModal(check) {
+    activeUpdateCheck = check;
+    const modal = document.getElementById('update-modal');
+    const summary = document.getElementById('update-modal-summary');
+    const modWarning = document.getElementById('update-mod-warning');
+    const javaWarning = document.getElementById('update-java-warning');
+    const conflicts = document.getElementById('update-conflicts');
+    const conflictList = document.getElementById('update-conflict-list');
+    const compatibleBtn = document.getElementById('update-compatible-btn');
+    const serverOnlyBtn = document.getElementById('update-server-only-btn');
+    const compatibleVersionBtn = document.getElementById('update-compatible-version-btn');
+    const cancelBtn = document.getElementById('update-cancel-btn');
+
+    if (!modal || !summary || !modWarning || !javaWarning || !conflicts || !conflictList || !compatibleBtn || !serverOnlyBtn || !compatibleVersionBtn || !cancelBtn) {
+        return;
+    }
+
+    const conflictMods = getConflictMods(check);
+    const hasConflicts = conflictMods.length > 0;
+    const canApply = Boolean(check && check.canApply);
+    const blockingReasons = Array.isArray(check.blockingReasons) ? check.blockingReasons : [];
+    const hasJavaBlock = blockingReasons.includes('blocked_by_java') || blockingReasons.includes('blocked_by_java_detection');
+    const currentInfo = getVersionInfo(check, 'current', check.currentVersion);
+    const targetInfo = getVersionInfo(check, 'target', check.targetVersion);
+
+    summary.textContent = `Current: ${formatVersionWithRelease(currentInfo, check.currentVersion)} | Target: ${formatVersionWithRelease(targetInfo, check.targetVersion)}.`;
+
+    if (hasConflicts) {
+        modWarning.classList.remove('hidden');
+        modWarning.textContent = `Warning: ${conflictMods.length} mod${conflictMods.length === 1 ? '' : 's'} do not have a compatible release for Minecraft ${check.targetVersion || 'the target version'}.`;
+    } else {
+        modWarning.classList.add('hidden');
+        modWarning.textContent = '';
+    }
+
+    const javaMessages = [];
+    if (blockingReasons.length > 0) {
+        javaMessages.push(...describeBlockingReasons(blockingReasons));
+    }
+    if (hasJavaBlock && check.java && check.java.requiredJavaMajor) {
+        const detected = check.java.detectedJavaMajor != null ? check.java.detectedJavaMajor : 'unknown';
+        javaMessages.push(`Required Java: ${check.java.requiredJavaMajor}. Detected: ${detected} (${check.java.detectedJavaPath || 'unknown path'}).`);
+        javaMessages.push('Upgrade Java and run the update check again.');
+    }
+
+    if (javaMessages.length > 0) {
+        javaWarning.classList.remove('hidden');
+        javaWarning.classList.toggle('critical', hasJavaBlock);
+        javaWarning.textContent = javaMessages.join(' ');
+    } else {
+        javaWarning.classList.add('hidden');
+        javaWarning.classList.remove('critical');
+        javaWarning.textContent = '';
+    }
+
+    conflictList.innerHTML = '';
+    if (hasConflicts) {
+        conflicts.classList.remove('hidden');
+        conflictMods.forEach(mod => {
+            const li = document.createElement('li');
+            const modLabel = mod.modId || mod.fileName;
+            li.textContent = `${modLabel}: ${mod.reason || 'No compatible update found.'}`;
+            conflictList.appendChild(li);
+        });
+    } else {
+        conflicts.classList.add('hidden');
+    }
+
+    compatibleBtn.classList.remove('hidden');
+    serverOnlyBtn.classList.remove('hidden');
+    compatibleVersionBtn.classList.add('hidden');
+    compatibleBtn.textContent = 'Update Server and Only Compatible Mods';
+    serverOnlyBtn.textContent = 'Update Server Only and Delete All Mods';
+    cancelBtn.disabled = false;
+    serverOnlyBtn.disabled = !canApply;
+    compatibleBtn.disabled = !canApply;
+
+    if (!hasConflicts) {
+        serverOnlyBtn.classList.add('hidden');
+    }
+
+    if (check.recommendedTargetVersion && hasConflicts) {
+        compatibleVersionBtn.classList.remove('hidden');
+        const recommendedReleaseLabel = formatReleaseDateLabel(
+            check.recommendedTargetReleaseTime,
+            check.recommendedTargetReleaseDate
+        );
+        if (recommendedReleaseLabel) {
+            compatibleVersionBtn.textContent = `Update Compatible Version (${check.recommendedTargetVersion} - ${recommendedReleaseLabel})`;
+        } else {
+            compatibleVersionBtn.textContent = `Update Compatible Version (${check.recommendedTargetVersion})`;
+        }
+        compatibleVersionBtn.dataset.targetVersion = check.recommendedTargetVersion;
+        if (check.recommendedTargetCanApply === false) {
+            compatibleVersionBtn.disabled = true;
+        } else {
+            compatibleVersionBtn.disabled = false;
+        }
+    } else {
+        compatibleVersionBtn.classList.add('hidden');
+        compatibleVersionBtn.removeAttribute('data-target-version');
+    }
+
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+}
+
+async function runUpdatePreflight() {
+    return runUpdatePreflightForTarget(null);
+}
+
+async function runUpdatePreflightForTarget(targetVersion) {
+    const button = document.getElementById('update-server');
+    if (!button || isApplyingUpdate) {
+        return null;
+    }
+
+    const token = getAuthToken();
+    if (!token) {
+        alert('You are not authenticated.');
+        redirectToLogin();
+        return null;
+    }
+
+    button.disabled = true;
+    stopUpdateButtonAnimation({ restoreLabel: false });
+    button.textContent = 'Checking...';
+
+    try {
+        const response = await fetch('/updates/check', {
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify(targetVersion ? { targetVersion } : {})
+        });
+        if (response.status === 428) {
+            alert('You must set a new password before continuing.');
+            redirectToSetPassword();
+            return null;
+        }
+        if (response.status === 401 || response.status === 403) {
+            alert('Session has expired, please log in again.');
+            redirectToLogin();
+            return null;
+        }
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.message || `Update preflight failed (${response.status})`);
+        }
+
+        const check = await response.json();
+        if (!check.updateAvailable) {
+            alert('No new Minecraft version is available right now.');
+            await loadUpdateStatus({ forceRefresh: true });
+            return null;
+        }
+
+        const hasConflicts = getConflictMods(check).length > 0;
+        if (!hasConflicts && check.canApply) {
+            activeUpdateCheck = check;
+            const targetReleaseLabel = formatReleaseDateLabel(
+                check && check.versionInfo && check.versionInfo.target
+                    ? check.versionInfo.target.releaseTime
+                    : null,
+                check && check.versionInfo && check.versionInfo.target
+                    ? check.versionInfo.target.releaseDate
+                    : null
+            );
+            if (targetReleaseLabel) {
+                setUpdateStatusMessage(`No compatibility issues detected. Starting update to ${check.targetVersion} (released ${targetReleaseLabel})...`);
+            } else {
+                setUpdateStatusMessage(`No compatibility issues detected. Starting update to ${check.targetVersion}...`);
+            }
+            await applyUpdateMode('server_and_compatible_mods');
+            return check;
+        }
+
+        openUpdateModal(check);
+        return check;
+    } catch (err) {
+        console.error('Update preflight error:', err);
+        alert(err.message || 'Failed to run update preflight check.');
+        return null;
+    } finally {
+        const updateRunning = Boolean(latestUpdateStatus && latestUpdateStatus.updateInProgress) || isApplyingUpdate;
+        if (updateRunning) {
+            startUpdateButtonAnimation('Updating');
+        } else {
+            stopUpdateButtonAnimation({ restoreLabel: false });
+            updateUpdateButtonLabel();
+        }
+        if ((!latestUpdateStatus || !latestUpdateStatus.updateInProgress) && !isApplyingUpdate) {
+            button.disabled = false;
+        }
+        if (button.textContent === 'Checking...' && !updateRunning) {
+            updateUpdateButtonLabel();
+        }
+    }
+}
+
+async function applyUpdateMode(mode) {
+    if (!activeUpdateCheck || !activeUpdateCheck.checkId || isApplyingUpdate) {
+        return;
+    }
+
+    const token = getAuthToken();
+    if (!token) {
+        alert('You are not authenticated.');
+        redirectToLogin();
+        return;
+    }
+
+    isApplyingUpdate = true;
+    startUpdateButtonAnimation('Updating');
+    setUpdateActionDisabled(true);
+    closeUpdateModal();
+    setUpdateStatusMessage('Update started. Waiting for completion...');
+
+    try {
+        const response = await fetch('/updates/apply', {
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify({
+                checkId: activeUpdateCheck.checkId,
+                mode
+            })
+        });
+
+        if (response.status === 401 || response.status === 403) {
+            alert('Session has expired, please log in again.');
+            redirectToLogin();
+            return;
+        }
+        if (response.status === 428) {
+            alert('You must set a new password before continuing.');
+            redirectToSetPassword();
+            return;
+        }
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.message || `Update failed (${response.status})`);
+        }
+
+        const payload = await response.json();
+        closeUpdateModal();
+        alert(payload.message || 'Update completed successfully.');
+        await loadUpdateStatus({ forceRefresh: true });
+        checkServerStatus();
+    } catch (err) {
+        console.error('Apply update failed:', err);
+        alert(err.message || 'Update failed.');
+    } finally {
+        isApplyingUpdate = false;
+        setUpdateActionDisabled(false);
+        await loadUpdateStatus({ forceRefresh: true }).catch(() => null);
+        if (!latestUpdateStatus || !latestUpdateStatus.updateInProgress) {
+            stopUpdateButtonAnimation();
+        }
+    }
+}
+
+async function useCompatibleVersionTarget() {
+    const button = document.getElementById('update-compatible-version-btn');
+    const targetVersion = button ? button.dataset.targetVersion : null;
+    if (!targetVersion || isApplyingUpdate) {
+        return;
+    }
+    closeUpdateModal();
+    setUpdateStatusMessage(`Checking compatible version ${targetVersion}...`);
+    await runUpdatePreflightForTarget(targetVersion);
+}
+
+function setupUpdateModalHandlers() {
+    const updateButton = document.getElementById('update-server');
+    if (updateButton) {
+        updateButton.addEventListener('click', runUpdatePreflight);
+    }
+
+    const cancelBtn = document.getElementById('update-cancel-btn');
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', closeUpdateModal);
+    }
+
+    const compatibleBtn = document.getElementById('update-compatible-btn');
+    if (compatibleBtn) {
+        compatibleBtn.addEventListener('click', () => applyUpdateMode('server_and_compatible_mods'));
+    }
+
+    const serverOnlyBtn = document.getElementById('update-server-only-btn');
+    if (serverOnlyBtn) {
+        serverOnlyBtn.addEventListener('click', () => applyUpdateMode('server_only_move_all_mods'));
+    }
+
+    const compatibleVersionBtn = document.getElementById('update-compatible-version-btn');
+    if (compatibleVersionBtn) {
+        compatibleVersionBtn.addEventListener('click', useCompatibleVersionTarget);
+    }
+
+    document.querySelectorAll('[data-close-update-modal="true"]').forEach(node => {
+        node.addEventListener('click', closeUpdateModal);
+    });
 }
 
 const PROGRESS_BULGE = {
@@ -615,8 +1161,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     setupProgressBulge();
     setupPointerLighting();
+    setupUpdateModalHandlers();
     setupWebSocket();
     checkServerStatus();
+    await loadUpdateStatus();
 });
 
 function checkServerStatus() {
@@ -626,17 +1174,26 @@ function checkServerStatus() {
             const startButton = document.getElementById('start-server');
             const stopButton = document.getElementById('stop-server');
             const backupButton = document.getElementById('backup-server');
-            const restartButton = document.getElementById('restart-server'); // Add reference to restart button
+            const restartButton = document.getElementById('restart-server');
+            const updateButton = document.getElementById('update-server');
+            const updateLocked = Boolean(data.updateInProgress);
+            const controlsLocked = isBackingUp || updateLocked;
 
-            // Server must be running to stop or restart, and should not be backing up or restarting
-            const serverOperable = !isBackingUp && data.running;
+            startButton.disabled = controlsLocked || data.running;
+            stopButton.disabled = controlsLocked || !data.running;
+            backupButton.disabled = controlsLocked;
+            restartButton.disabled = controlsLocked || !data.running;
+            if (updateButton && !updateButton.classList.contains('hidden')) {
+                if (updateButtonAnimationTimer) {
+                    updateButton.disabled = true;
+                } else {
+                    updateButton.disabled = controlsLocked || isApplyingUpdate;
+                }
+            }
 
-            startButton.disabled = isBackingUp || data.running;
-            stopButton.disabled = isBackingUp || !data.running;
-            backupButton.disabled = isBackingUp;
-            restartButton.disabled = isBackingUp || !data.running; // Disable if server is off or backup is in progress
-
-            console.log(`Server running: ${data.running}, Is backing up: ${isBackingUp}`);
+            if (updateLocked) {
+                setUpdateStatusMessage('Update in progress. Server controls are temporarily disabled.');
+            }
         })
         .catch(err => {
             console.error('Error checking server status: ', err);
@@ -670,6 +1227,25 @@ function checkServerStatus() {
           // When backup is complete, ensure the progress bar shows 100%
           updateBackupProgress('100');
           setBackupState(false); // Reset the backup state
+        } else if (message.type === 'update-progress') {
+          startUpdateButtonAnimation('Updating');
+          const label = message.message || 'Update in progress...';
+          const percent = Number(message.value);
+          if (Number.isFinite(percent)) {
+            setUpdateStatusMessage(`${label} (${Math.round(percent)}%)`);
+          } else {
+            setUpdateStatusMessage(label);
+          }
+        } else if (message.type === 'update-complete') {
+          stopUpdateButtonAnimation({ restoreLabel: false });
+          if (message.success) {
+            setUpdateStatusMessage('Update completed successfully.');
+          } else {
+            setUpdateStatusMessage('Update failed and rollback was attempted.', true);
+          }
+          closeUpdateModal();
+          loadUpdateStatus({ forceRefresh: true });
+          checkServerStatus();
         }
       };
     ws.onclose = function(e) {
@@ -758,6 +1334,12 @@ function handleFetchResponse(response) {
         // Handle backup frequency error specifically
         alert('A backup has already been performed this hour.');
         return null; // Stop further processing and do not throw a session expired message
+    } else if (response.status === 423) {
+        alert('An update is currently in progress. Please wait until it completes.');
+        return null;
+    } else if (response.status === 409) {
+        alert('Operation blocked due to update preflight state. Re-check updates and try again.');
+        return null;
     }
     return response; // Continue processing for other status codes
 }

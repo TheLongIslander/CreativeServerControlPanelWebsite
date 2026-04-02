@@ -13,11 +13,28 @@ const { startServer } = require('../services/serverControl');
 module.exports = function createServerRoutes() {
   const router = express.Router();
 
+  function rejectIfUpdateInProgress(res) {
+    if (!state.updateLocked) {
+      return false;
+    }
+    res.status(423).json({
+      message: 'An update operation is currently in progress.'
+    });
+    return true;
+  }
+
   router.get('/status', (req, res) => {
-    res.json({ running: state.serverRunning });
+    res.json({
+      running: state.serverRunning,
+      updateInProgress: Boolean(state.updateLocked)
+    });
   });
 
   router.post('/start', authenticateJWT, requireOnboarded, (req, res) => {
+    if (rejectIfUpdateInProgress(res)) {
+      return;
+    }
+
     const subprocess = exec(`sh ${process.env.START_COMMAND_PATH}`);
 
     subprocess.stdout.on('data', (data) => {
@@ -40,6 +57,10 @@ module.exports = function createServerRoutes() {
   });
 
   router.post('/stop', authenticateJWT, requireOnboarded, (req, res) => {
+    if (rejectIfUpdateInProgress(res)) {
+      return;
+    }
+
     exec('screen -S MinecraftSession -p 0 -X stuff "stop"$(printf "\\r")', (error) => {
       if (error) {
         console.error(`exec error: ${error}`);
@@ -53,6 +74,10 @@ module.exports = function createServerRoutes() {
   });
 
   router.post('/restart', authenticateJWT, requireOnboarded, (req, res) => {
+    if (rejectIfUpdateInProgress(res)) {
+      return;
+    }
+
     if (!state.serverRunning) {
       res.status(400).send('Server is not currently running.');
       return;

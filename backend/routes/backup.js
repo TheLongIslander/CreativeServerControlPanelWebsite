@@ -18,6 +18,10 @@ module.exports = function createBackupRoutes({ getWss }) {
   const router = express.Router();
 
   router.post('/backup', authenticateJWT, requireOnboarded, async (req, res) => {
+    if (state.updateLocked) {
+      return res.status(423).json({ message: 'An update operation is currently in progress.' });
+    }
+
     const now = new Date();
     const currentHour = getEasternDateHour();
 

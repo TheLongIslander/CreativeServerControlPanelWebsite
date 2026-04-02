@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Creative Server Control Panel</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260402-8">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
@@ -48,6 +48,8 @@
         <button id="restart-server">Restart Server</button>
         <button id="stop-server">Stop Server</button>
         <button id="backup-server">Backup Server</button>
+        <button id="update-server" class="hidden">Update Available</button>
+        <div id="update-status-message" class="update-status-message hidden"></div>
         <div id="progress-area">
             <div id="progress-container">
                 <div id="progress-bar"></div>
@@ -55,7 +57,27 @@
             <div id="progress-percentage">0%</div>
         </div>
     </div>
-    <script src="appearance.js"></script>
-    <script src="script.js"></script>
+
+    <div id="update-modal" class="modal hidden" aria-hidden="true">
+        <div class="modal-backdrop" data-close-update-modal="true"></div>
+        <div class="modal-content update-modal-content" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
+            <h2 id="update-modal-title">Server Update</h2>
+            <p id="update-modal-summary" class="modal-message"></p>
+            <div id="update-mod-warning" class="update-mod-warning hidden"></div>
+            <div id="update-java-warning" class="update-java-warning hidden"></div>
+            <div id="update-conflicts" class="update-conflicts hidden">
+                <h3>Incompatible or Unknown Mods</h3>
+                <ul id="update-conflict-list"></ul>
+            </div>
+            <div class="modal-actions update-modal-actions">
+                <button id="update-cancel-btn">Cancel</button>
+                <button id="update-compatible-btn">Update Server and Only Compatible Mods</button>
+                <button id="update-server-only-btn">Update Server Only and Delete All Mods</button>
+                <button id="update-compatible-version-btn" class="hidden">Update Compatible Version</button>
+            </div>
+        </div>
+    </div>
+    <script src="appearance.js?v=20260402-8"></script>
+    <script src="script.js?v=20260402-8"></script>
 </body>
 </html>
