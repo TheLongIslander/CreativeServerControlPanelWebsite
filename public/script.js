@@ -10,6 +10,15 @@ let activeUpdateCheck = null;
 let isApplyingUpdate = false;
 let updateButtonAnimationTimer = null;
 let updateButtonAnimationBase = null;
+let currentUser = null;
+let updateButtonSeverity = 'none';
+let backgroundPreflightInFlight = false;
+let backgroundPreflightLastTarget = null;
+let backgroundPreflightLastAt = 0;
+const BACKGROUND_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
+const UPDATE_STATUS_POLL_INTERVAL_MS = 5 * 60 * 1000;
+let updateStatusPollTimer = null;
+let updateStatusPollInFlight = false;
 
 function redirectToLogin() {
     localStorage.removeItem('token');
@@ -125,6 +134,46 @@ function formatVersionWithRelease(versionInfo, fallbackVersion) {
     return `${version} (released ${releaseLabel})`;
 }
 
+function setUpdateButtonSeverity(severity) {
+    const allowed = new Set(['none', 'warning', 'java']);
+    updateButtonSeverity = allowed.has(severity) ? severity : 'none';
+}
+
+function applySeverityFromCheck(check) {
+    const hasConflicts = getConflictMods(check).length > 0;
+    const blockingReasons = Array.isArray(check && check.blockingReasons) ? check.blockingReasons : [];
+    const hasJavaBlock = blockingReasons.includes('blocked_by_java') || blockingReasons.includes('blocked_by_java_detection');
+    if (hasJavaBlock) {
+        setUpdateButtonSeverity('java');
+        return;
+    }
+    if (hasConflicts) {
+        setUpdateButtonSeverity('warning');
+        return;
+    }
+    setUpdateButtonSeverity('none');
+}
+
+function setUpdateButtonLabel(label, { includeSeverityIcon = true } = {}) {
+    const button = document.getElementById('update-server');
+    if (!button) {
+        return;
+    }
+
+    button.innerHTML = '';
+    if (includeSeverityIcon && updateButtonSeverity !== 'none') {
+        const icon = document.createElement('span');
+        icon.className = `update-button-alert update-button-alert-${updateButtonSeverity}`;
+        icon.setAttribute('aria-hidden', 'true');
+        button.appendChild(icon);
+    }
+
+    const text = document.createElement('span');
+    text.className = 'update-button-label';
+    text.textContent = label;
+    button.appendChild(text);
+}
+
 function startUpdateButtonAnimation(baseText = 'Updating') {
     const button = document.getElementById('update-server');
     if (!button) {
@@ -144,7 +193,7 @@ function startUpdateButtonAnimation(baseText = 'Updating') {
     let dots = 0;
     const render = () => {
         const suffix = '.'.repeat(dots);
-        button.textContent = `${baseText}${suffix}`;
+        setUpdateButtonLabel(`${baseText}${suffix}`);
         dots = (dots + 1) % 4;
     };
     render();
@@ -172,10 +221,61 @@ function updateUpdateButtonLabel() {
         return;
     }
     if (!latestUpdateStatus || !latestUpdateStatus.updateAvailable) {
-        button.textContent = 'Update Available';
+        setUpdateButtonLabel('Update Available');
         return;
     }
-    button.textContent = `Update to ${latestUpdateStatus.latestVersion}`;
+    setUpdateButtonLabel(`Update to ${latestUpdateStatus.latestVersion}`);
+}
+
+async function runBackgroundUpdateRiskCheck({ force = false } = {}) {
+    if (isApplyingUpdate || backgroundPreflightInFlight) {
+        return;
+    }
+    if (!latestUpdateStatus || !latestUpdateStatus.updateAvailable || latestUpdateStatus.updateInProgress) {
+        return;
+    }
+
+    const targetVersion = latestUpdateStatus.latestVersion || null;
+    if (!targetVersion) {
+        return;
+    }
+
+    const now = Date.now();
+    if (
+        !force
+        && backgroundPreflightLastTarget === targetVersion
+        && (now - backgroundPreflightLastAt) < BACKGROUND_PREFLIGHT_TTL_MS
+    ) {
+        return;
+    }
+
+    backgroundPreflightInFlight = true;
+    try {
+        const response = await fetch('/updates/check', {
+            method: 'POST',
+            headers: getAuthHeaders(true),
+            body: JSON.stringify({ targetVersion })
+        });
+        if (!response.ok) {
+            return;
+        }
+
+        const check = await response.json();
+        if (!check || !check.updateAvailable) {
+            setUpdateButtonSeverity('none');
+            updateUpdateButtonLabel();
+            return;
+        }
+
+        applySeverityFromCheck(check);
+        updateUpdateButtonLabel();
+    } catch (err) {
+        console.warn('Background update preflight failed:', err.message);
+    } finally {
+        backgroundPreflightInFlight = false;
+        backgroundPreflightLastTarget = targetVersion;
+        backgroundPreflightLastAt = now;
+    }
 }
 
 async function loadUpdateStatus({ forceRefresh = false } = {}) {
@@ -216,9 +316,11 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
                 updateUpdateButtonLabel();
                 button.disabled = Boolean(isBackingUp) || isApplyingUpdate;
                 setUpdateStatusMessage('');
+                runBackgroundUpdateRiskCheck().catch(() => {});
             }
         } else {
             button.classList.add('hidden');
+            setUpdateButtonSeverity('none');
             stopUpdateButtonAnimation({ restoreLabel: false });
             setUpdateStatusMessage('');
         }
@@ -228,6 +330,41 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
         setUpdateStatusMessage('Failed to load update status.', true);
         return null;
     }
+}
+
+async function pollUpdateStatusNow({ forceRefresh = false } = {}) {
+    if (updateStatusPollInFlight || isApplyingUpdate) {
+        return;
+    }
+    updateStatusPollInFlight = true;
+    try {
+        await loadUpdateStatus({ forceRefresh });
+        checkServerStatus();
+    } catch (_) {
+        // loadUpdateStatus/checkServerStatus already handle their own logging.
+    } finally {
+        updateStatusPollInFlight = false;
+    }
+}
+
+function setupUpdateStatusPolling() {
+    if (updateStatusPollTimer) {
+        clearInterval(updateStatusPollTimer);
+    }
+
+    updateStatusPollTimer = setInterval(() => {
+        if (document.hidden) {
+            return;
+        }
+        pollUpdateStatusNow().catch(() => {});
+    }, UPDATE_STATUS_POLL_INTERVAL_MS);
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            return;
+        }
+        pollUpdateStatusNow().catch(() => {});
+    });
 }
 
 function getConflictMods(check) {
@@ -256,6 +393,16 @@ function setUpdateActionDisabled(disabled) {
     }
 }
 
+function isModalVisible(modalId) {
+    const modal = document.getElementById(modalId);
+    return Boolean(modal && !modal.classList.contains('hidden'));
+}
+
+function syncModalOpenState() {
+    const hasVisibleModal = isModalVisible('update-modal') || isModalVisible('update-summary-modal');
+    document.body.classList.toggle('modal-open', hasVisibleModal);
+}
+
 function closeUpdateModal() {
     const modal = document.getElementById('update-modal');
     if (!modal) {
@@ -263,7 +410,165 @@ function closeUpdateModal() {
     }
     modal.classList.add('hidden');
     modal.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('modal-open');
+    syncModalOpenState();
+}
+
+function closeUpdateSummaryModal() {
+    const modal = document.getElementById('update-summary-modal');
+    if (!modal) {
+        return;
+    }
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    syncModalOpenState();
+}
+
+function extractFileName(filePath) {
+    if (!filePath) {
+        return 'unknown-file';
+    }
+    const parts = String(filePath).split(/[\\/]/g);
+    return parts[parts.length - 1] || String(filePath);
+}
+
+function extractParentFolderName(filePath) {
+    if (!filePath) {
+        return 'archive';
+    }
+    const parts = String(filePath).split(/[\\/]/g).filter(Boolean);
+    if (parts.length < 2) {
+        return 'archive';
+    }
+    return parts[parts.length - 2];
+}
+
+function isAdminUser() {
+    return Boolean(currentUser && currentUser.role === 'admin');
+}
+
+function formatUpdateMode(mode) {
+    if (mode === 'server_only_move_all_mods') {
+        return 'Update server only and move all mods';
+    }
+    if (mode === 'server_and_compatible_mods') {
+        return 'Update server and keep only compatible mods';
+    }
+    return mode || 'Unknown mode';
+}
+
+function formatMoveReason(reason) {
+    const map = {
+        blocked: 'incompatible with target',
+        unknown: 'compatibility unknown',
+        server_only_mode: 'server-only mode',
+        replaced_by_update: 'replaced by newer version'
+    };
+    return map[reason] || reason || 'moved';
+}
+
+function appendSummarySection(container, title, items, tone = '') {
+    const section = document.createElement('section');
+    section.className = `update-summary-section${tone ? ` ${tone}` : ''}`;
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    section.appendChild(heading);
+
+    if (!items || items.length === 0) {
+        const emptyText = document.createElement('p');
+        emptyText.className = 'update-summary-empty';
+        emptyText.textContent = 'None.';
+        section.appendChild(emptyText);
+        container.appendChild(section);
+        return;
+    }
+
+    const list = document.createElement('ul');
+    items.forEach(itemText => {
+        const li = document.createElement('li');
+        li.textContent = itemText;
+        list.appendChild(li);
+    });
+    section.appendChild(list);
+    container.appendChild(section);
+}
+
+function openUpdateSummaryModal(result) {
+    const modal = document.getElementById('update-summary-modal');
+    const content = document.getElementById('update-summary-content');
+    const title = document.getElementById('update-summary-title');
+    if (!modal || !content || !title) {
+        return;
+    }
+
+    content.innerHTML = '';
+    const updatedMods = Array.isArray(result && result.updatedMods) ? result.updatedMods : [];
+    const movedMods = Array.isArray(result && result.movedMods) ? result.movedMods : [];
+    const notUpdatedMods = movedMods.filter(mod => mod.reason !== 'replaced_by_update');
+    const preCount = Array.isArray(result && result.preModManifest) ? result.preModManifest.length : null;
+    const postCount = Array.isArray(result && result.postModManifest) ? result.postModManifest.length : null;
+    const adminView = isAdminUser();
+    const archiveFolderName = result && result.archiveDir ? extractFileName(result.archiveDir) : null;
+
+    title.textContent = result && result.succeeded === false ? 'Update Failed Summary' : 'Update Summary';
+
+    const overview = document.createElement('section');
+    overview.className = 'update-summary-section';
+    const overviewTitle = document.createElement('h3');
+    overviewTitle.textContent = 'Overview';
+    overview.appendChild(overviewTitle);
+
+    const overviewLines = [
+        `Server version: ${result && result.targetVersion ? result.targetVersion : 'unknown'}`,
+        `Mode: ${formatUpdateMode(result && result.mode)}`,
+        `Mods updated: ${updatedMods.length}`,
+        `Mods not updated: ${notUpdatedMods.length}`,
+        `Archive folder: ${result && result.archiveDir ? (adminView ? result.archiveDir : `${archiveFolderName} (inside server directory)`) : 'Not created'}`,
+        `Snapshot: ${result && result.snapshotPath ? (adminView ? result.snapshotPath : 'Created in backup storage before update') : 'Not recorded'}`
+    ];
+    if (preCount != null && postCount != null) {
+        overviewLines.push(`Mods folder count: ${preCount} before -> ${postCount} after`);
+    }
+    overviewLines.forEach(line => {
+        const p = document.createElement('p');
+        p.className = 'update-summary-meta';
+        p.textContent = line;
+        overview.appendChild(p);
+    });
+    content.appendChild(overview);
+
+    appendSummarySection(
+        content,
+        'Mods Updated',
+        updatedMods.map(mod => {
+            const name = mod.modId || mod.fileName || 'mod';
+            const fromVersion = mod.fromVersion || 'unknown';
+            const toVersion = mod.toVersion || 'latest';
+            const fileName = mod.fileName || 'unknown-file';
+            return `${name}: ${fromVersion} -> ${toVersion} (${fileName})`;
+        }),
+        'is-updated'
+    );
+
+    appendSummarySection(
+        content,
+        'Mods Not Updated',
+        notUpdatedMods.map(mod => {
+            const fileName = extractFileName(mod.from);
+            const reason = formatMoveReason(mod.reason);
+            const destination = mod.to || 'unknown destination';
+            if (adminView) {
+                return `${fileName}: ${reason} -> ${destination}`;
+            }
+            const destinationFolder = extractParentFolderName(destination);
+            const destinationFile = extractFileName(destination);
+            return `${fileName}: ${reason} -> ${destinationFolder}/${destinationFile}`;
+        }),
+        'is-not-updated'
+    );
+
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    syncModalOpenState();
 }
 
 function describeBlockingReasons(reasons) {
@@ -392,7 +697,7 @@ function openUpdateModal(check) {
 
     modal.classList.remove('hidden');
     modal.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('modal-open');
+    syncModalOpenState();
 }
 
 async function runUpdatePreflight() {
@@ -414,7 +719,7 @@ async function runUpdatePreflightForTarget(targetVersion) {
 
     button.disabled = true;
     stopUpdateButtonAnimation({ restoreLabel: false });
-    button.textContent = 'Checking...';
+    setUpdateButtonLabel('Checking...', { includeSeverityIcon: false });
 
     try {
         const response = await fetch('/updates/check', {
@@ -445,6 +750,10 @@ async function runUpdatePreflightForTarget(targetVersion) {
         }
 
         const hasConflicts = getConflictMods(check).length > 0;
+        applySeverityFromCheck(check);
+        backgroundPreflightLastTarget = check.targetVersion || latestUpdateStatus.latestVersion || null;
+        backgroundPreflightLastAt = Date.now();
+
         if (!hasConflicts && check.canApply) {
             activeUpdateCheck = check;
             const targetReleaseLabel = formatReleaseDateLabel(
@@ -532,7 +841,7 @@ async function applyUpdateMode(mode) {
 
         const payload = await response.json();
         closeUpdateModal();
-        alert(payload.message || 'Update completed successfully.');
+        openUpdateSummaryModal(payload && payload.result ? payload.result : null);
         await loadUpdateStatus({ forceRefresh: true });
         checkServerStatus();
     } catch (err) {
@@ -587,6 +896,15 @@ function setupUpdateModalHandlers() {
 
     document.querySelectorAll('[data-close-update-modal="true"]').forEach(node => {
         node.addEventListener('click', closeUpdateModal);
+    });
+
+    const summaryCloseBtn = document.getElementById('update-summary-close-btn');
+    if (summaryCloseBtn) {
+        summaryCloseBtn.addEventListener('click', closeUpdateSummaryModal);
+    }
+
+    document.querySelectorAll('[data-close-update-summary="true"]').forEach(node => {
+        node.addEventListener('click', closeUpdateSummaryModal);
     });
 }
 
@@ -1156,6 +1474,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (!user) {
         return;
     }
+    currentUser = user;
     if (window.Appearance && typeof window.Appearance.init === 'function') {
         window.Appearance.init({ user });
     }
@@ -1163,6 +1482,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupPointerLighting();
     setupUpdateModalHandlers();
     setupWebSocket();
+    setupUpdateStatusPolling();
     checkServerStatus();
     await loadUpdateStatus();
 });

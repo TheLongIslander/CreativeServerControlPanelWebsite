@@ -551,7 +551,8 @@ module.exports = function createUpdateService({ state, getWss }) {
     }
     return {
       latestRelease,
-      manifestUrl: versionEntry.url
+      manifestUrl: versionEntry.url,
+      manifest
     };
   }
 
@@ -818,40 +819,62 @@ module.exports = function createUpdateService({ state, getWss }) {
     if (!force && lastCheckedAt) {
       const elapsed = Date.now() - new Date(lastCheckedAt).getTime();
       if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < STATUS_REFRESH_INTERVAL_MS) {
+        const latestMinecraftVersion = await updateStore.getState('latestMinecraftVersion');
+        const latestFabricSupportedVersion = await updateStore.getState('latestFabricSupportedVersion');
         return {
-          latestVersion: await updateStore.getState('latestMinecraftVersion'),
+          latestVersion: latestFabricSupportedVersion,
+          latestMinecraftVersion,
+          latestFabricSupportedVersion,
           lastCheckedAt
         };
       }
     }
 
     const { latestRelease } = await fetchLatestMinecraftRelease();
+    let latestFabricSupportedVersion = null;
+    try {
+      const fabricSupport = await fetchFabricSupport(latestRelease);
+      if (fabricSupport && fabricSupport.supported) {
+        latestFabricSupportedVersion = latestRelease;
+      }
+    } catch (_) {
+      // Leave as null; status endpoint should stay resilient and use cached values when possible.
+    }
     const checkedAt = nowIso();
     await updateStore.setState('latestMinecraftVersion', latestRelease);
+    await updateStore.setState('latestFabricSupportedVersion', latestFabricSupportedVersion || null);
     await updateStore.setState('latestMinecraftCheckedAt', checkedAt);
     return {
-      latestVersion: latestRelease,
+      latestVersion: latestFabricSupportedVersion || null,
+      latestMinecraftVersion: latestRelease,
+      latestFabricSupportedVersion: latestFabricSupportedVersion || null,
       lastCheckedAt: checkedAt
     };
   }
 
   async function getStatus({ forceRefresh = false } = {}) {
     let latestVersion;
+    let latestMinecraftVersion;
+    let latestFabricSupportedVersion;
     let lastCheckedAt;
     try {
       const refreshed = await refreshLatestVersion({ force: forceRefresh });
       latestVersion = refreshed.latestVersion;
+      latestMinecraftVersion = refreshed.latestMinecraftVersion || null;
+      latestFabricSupportedVersion = refreshed.latestFabricSupportedVersion || null;
       lastCheckedAt = refreshed.lastCheckedAt;
     } catch (err) {
-      latestVersion = await updateStore.getState('latestMinecraftVersion');
+      latestFabricSupportedVersion = await updateStore.getState('latestFabricSupportedVersion');
+      latestMinecraftVersion = await updateStore.getState('latestMinecraftVersion');
+      latestVersion = latestFabricSupportedVersion;
       lastCheckedAt = await updateStore.getState('latestMinecraftCheckedAt');
-      if (!latestVersion) {
-        throw err;
-      }
+      // Don't throw here: frontend status should degrade gracefully on transient upstream failures.
     }
     const currentVersion = await getCurrentVersion();
     const lock = await updateStore.getLock();
-    const updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
+    const updateAvailable = latestVersion
+      ? compareVersions(latestVersion, currentVersion) > 0
+      : false;
     const recentRuns = await updateStore.listRuns(50);
     let hasRestorableSnapshot = false;
     for (const run of recentRuns) {
@@ -872,6 +895,8 @@ module.exports = function createUpdateService({ state, getWss }) {
     return {
       currentVersion,
       latestVersion,
+      latestMinecraftVersion: latestMinecraftVersion || null,
+      latestFabricSupportedVersion: latestFabricSupportedVersion || latestVersion || null,
       updateAvailable,
       lastCheckedAt,
       updateInProgress: Boolean(lock),
@@ -1253,6 +1278,7 @@ module.exports = function createUpdateService({ state, getWss }) {
     const movedFiles = [];
     const downloadedFiles = [];
     const archiveLabel = sourceVersion || targetVersion;
+    const movedSourcePaths = new Set();
 
     async function getArchiveDir() {
       if (!archiveDir) {
@@ -1261,26 +1287,35 @@ module.exports = function createUpdateService({ state, getWss }) {
       return archiveDir;
     }
 
+    async function moveCurrentModFile(sourcePath, reason) {
+      if (!sourcePath || movedSourcePaths.has(sourcePath)) {
+        return null;
+      }
+      try {
+        await fsp.access(sourcePath, fs.constants.F_OK);
+      } catch (_) {
+        return null;
+      }
+      const currentArchiveDir = await getArchiveDir();
+      const destination = await ensureUniquePath(path.join(currentArchiveDir, path.basename(sourcePath)));
+      await moveFileSafe(sourcePath, destination);
+      movedSourcePaths.add(sourcePath);
+      const record = {
+        from: sourcePath,
+        to: destination,
+        reason
+      };
+      movedFiles.push(record);
+      return record;
+    }
+
     const allCurrentMods = Array.isArray(checkReport.mods && checkReport.mods.mods)
       ? checkReport.mods.mods
       : [];
 
     if (mode === 'server_only_move_all_mods') {
       for (const mod of allCurrentMods) {
-        const source = mod.filePath;
-        try {
-          await fsp.access(source, fs.constants.F_OK);
-        } catch (_) {
-          continue;
-        }
-        const currentArchiveDir = await getArchiveDir();
-        const destination = await ensureUniquePath(path.join(currentArchiveDir, path.basename(source)));
-        await moveFileSafe(source, destination);
-        movedFiles.push({
-          from: source,
-          to: destination,
-          reason: 'server_only_mode'
-        });
+        await moveCurrentModFile(mod.filePath, 'server_only_mode');
       }
       return {
         archiveDir,
@@ -1291,20 +1326,7 @@ module.exports = function createUpdateService({ state, getWss }) {
 
     const toMove = allCurrentMods.filter(mod => mod.status === 'blocked' || mod.status === 'unknown');
     for (const mod of toMove) {
-      const source = mod.filePath;
-      try {
-        await fsp.access(source, fs.constants.F_OK);
-      } catch (_) {
-        continue;
-      }
-      const currentArchiveDir = await getArchiveDir();
-      const destination = await ensureUniquePath(path.join(currentArchiveDir, path.basename(source)));
-      await moveFileSafe(source, destination);
-      movedFiles.push({
-        from: source,
-        to: destination,
-        reason: mod.status
-      });
+      await moveCurrentModFile(mod.filePath, mod.status);
     }
 
     const updatable = allCurrentMods.filter(mod => mod.status === 'updatable' && mod.candidate && mod.candidate.downloadUrl);
@@ -1313,16 +1335,20 @@ module.exports = function createUpdateService({ state, getWss }) {
       const finalFileName = candidate.fileName || `${mod.modId || 'mod'}-${candidate.versionNumber || 'latest'}.jar`;
       const destination = path.join(modsPath, finalFileName);
       const tempDownload = `${destination}.download`;
+
+      // Preserve the currently installed jar in the versioned archive before replacing it.
+      await moveCurrentModFile(mod.filePath, 'replaced_by_update');
+
       await downloadFile({
         url: candidate.downloadUrl,
         destinationPath: tempDownload,
         expectedSha1: candidate.fileHashes ? candidate.fileHashes.sha1 : null
       });
-      if (mod.filePath !== destination) {
-        await fsp.unlink(mod.filePath).catch(() => {});
-      } else {
-        await fsp.unlink(destination).catch(() => {});
-      }
+      await fsp.unlink(destination).catch(err => {
+        if (err && err.code !== 'ENOENT') {
+          throw err;
+        }
+      });
       await fsp.rename(tempDownload, destination);
       downloadedFiles.push({
         modId: mod.modId,
