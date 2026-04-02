@@ -1249,9 +1249,17 @@ module.exports = function createUpdateService({ state, getWss }) {
   }) {
     const modsPath = getModsPath();
     await fsp.mkdir(modsPath, { recursive: true });
-    const archiveDir = await createVersionedModsArchiveDir(sourceVersion || targetVersion);
+    let archiveDir = null;
     const movedFiles = [];
     const downloadedFiles = [];
+    const archiveLabel = sourceVersion || targetVersion;
+
+    async function getArchiveDir() {
+      if (!archiveDir) {
+        archiveDir = await createVersionedModsArchiveDir(archiveLabel);
+      }
+      return archiveDir;
+    }
 
     const allCurrentMods = Array.isArray(checkReport.mods && checkReport.mods.mods)
       ? checkReport.mods.mods
@@ -1265,7 +1273,8 @@ module.exports = function createUpdateService({ state, getWss }) {
         } catch (_) {
           continue;
         }
-        const destination = await ensureUniquePath(path.join(archiveDir, path.basename(source)));
+        const currentArchiveDir = await getArchiveDir();
+        const destination = await ensureUniquePath(path.join(currentArchiveDir, path.basename(source)));
         await moveFileSafe(source, destination);
         movedFiles.push({
           from: source,
@@ -1288,7 +1297,8 @@ module.exports = function createUpdateService({ state, getWss }) {
       } catch (_) {
         continue;
       }
-      const destination = await ensureUniquePath(path.join(archiveDir, path.basename(source)));
+      const currentArchiveDir = await getArchiveDir();
+      const destination = await ensureUniquePath(path.join(currentArchiveDir, path.basename(source)));
       await moveFileSafe(source, destination);
       movedFiles.push({
         from: source,
