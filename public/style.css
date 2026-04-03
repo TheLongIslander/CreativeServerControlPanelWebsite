@@ -610,6 +610,10 @@ button:active {
     gap: 8px;
 }
 
+#update-server.hidden {
+    display: none !important;
+}
+
 #update-server:hover {
     background-color: #5b21b6;
 }
@@ -673,6 +677,7 @@ button:active {
 .update-status-message {
     margin-top: 12px;
     color: var(--muted);
+    font-weight: 600;
     text-align: center;
     max-width: 680px;
 }
@@ -782,15 +787,15 @@ button:active {
 .update-summary-section.is-updated h3,
 .update-summary-section.is-updated li,
 .update-summary-section.is-updated .update-summary-empty {
-    color: #22ff88;
-    text-shadow: 0 0 10px rgba(34, 255, 136, 0.35);
+    color: #16a34a;
+    text-shadow: none;
 }
 
 .update-summary-section.is-not-updated h3,
 .update-summary-section.is-not-updated li,
 .update-summary-section.is-not-updated .update-summary-empty {
-    color: #ff3b3b;
-    text-shadow: 0 0 10px rgba(255, 59, 59, 0.32);
+    color: #dc2626;
+    text-shadow: none;
 }
 
 .update-summary-empty,
@@ -1279,6 +1284,24 @@ body[data-color-scheme="dark"] .update-mod-warning {
     color: #2b1a00;
 }
 
+body[data-color-scheme="dark"] .update-status-message {
+    color: #cbd5e1;
+}
+
+body[data-color-scheme="dark"] .update-summary-section.is-updated h3,
+body[data-color-scheme="dark"] .update-summary-section.is-updated li,
+body[data-color-scheme="dark"] .update-summary-section.is-updated .update-summary-empty {
+    color: #22ff88;
+    text-shadow: 0 0 10px rgba(34, 255, 136, 0.35);
+}
+
+body[data-color-scheme="dark"] .update-summary-section.is-not-updated h3,
+body[data-color-scheme="dark"] .update-summary-section.is-not-updated li,
+body[data-color-scheme="dark"] .update-summary-section.is-not-updated .update-summary-empty {
+    color: #ff4d4d;
+    text-shadow: 0 0 10px rgba(255, 77, 77, 0.34);
+}
+
 body[data-color-scheme="light"] {
     background-color: #f4f4f4;
     color: #333;
@@ -1349,7 +1372,33 @@ body[data-color-scheme="light"] .update-mod-warning {
     color: #241400;
 }
 
-body[data-ui-theme="glass"] .update-modal-content {
+body[data-color-scheme="light"] .update-status-message {
+    color: #111111;
+}
+
+body[data-color-scheme="light"] .update-summary-meta,
+body[data-color-scheme="light"] .update-summary-empty,
+body[data-color-scheme="light"] .update-summary-section:not(.is-updated):not(.is-not-updated) h3,
+body[data-color-scheme="light"] .update-summary-section:not(.is-updated):not(.is-not-updated) li {
+    color: #334155;
+}
+
+body[data-color-scheme="light"] .update-summary-section.is-updated h3,
+body[data-color-scheme="light"] .update-summary-section.is-updated li,
+body[data-color-scheme="light"] .update-summary-section.is-updated .update-summary-empty {
+    color: #138c45;
+    text-shadow: none;
+}
+
+body[data-color-scheme="light"] .update-summary-section.is-not-updated h3,
+body[data-color-scheme="light"] .update-summary-section.is-not-updated li,
+body[data-color-scheme="light"] .update-summary-section.is-not-updated .update-summary-empty {
+    color: #dc2626;
+    text-shadow: none;
+}
+
+body[data-ui-theme="glass"] .update-modal-content,
+body[data-ui-theme="glass"] .update-summary-modal-content {
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
         radial-gradient(120% 140% at 10% 0%, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 55%),
@@ -1367,8 +1416,52 @@ body[data-ui-theme="glass"] .update-modal-content .modal-message {
     color: rgba(229, 231, 235, 0.85);
 }
 
-body[data-ui-theme="glass"] #update-modal .modal-backdrop {
+body[data-ui-theme="glass"] .update-summary-modal-content .update-summary-meta,
+body[data-ui-theme="glass"] .update-summary-modal-content .update-summary-empty,
+body[data-ui-theme="glass"] .update-summary-modal-content .update-summary-section:not(.is-updated):not(.is-not-updated) h3,
+body[data-ui-theme="glass"] .update-summary-modal-content .update-summary-section:not(.is-updated):not(.is-not-updated) li {
+    color: rgba(229, 231, 235, 0.9);
+}
+
+body[data-ui-theme="glass"] #update-modal .modal-backdrop,
+body[data-ui-theme="glass"] #update-summary-modal .modal-backdrop {
     background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+}
+
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-modal-content,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-summary-modal-content {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.42)),
+        radial-gradient(120% 140% at 8% 0%, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.1) 56%),
+        linear-gradient(160deg, rgba(226, 234, 244, 0.62) 0%, rgba(214, 224, 236, 0.58) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.68);
+    box-shadow:
+        inset 0 1px 2px rgba(255, 255, 255, 0.78),
+        inset 0 -8px 16px rgba(148, 163, 184, 0.16),
+        0 24px 46px rgba(15, 23, 42, 0.16);
+    color: #0f172a;
+    backdrop-filter: blur(14px) saturate(135%);
+}
+
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-modal-content .modal-message,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-summary-modal-content .update-summary-meta,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-summary-modal-content .update-summary-empty,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-summary-modal-content .update-summary-section:not(.is-updated):not(.is-not-updated) h3,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-summary-modal-content .update-summary-section:not(.is-updated):not(.is-not-updated) li {
+    color: #111827;
+}
+
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-modal-content h2,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-modal-content .update-conflicts h3,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-modal-content .update-conflicts ul,
+body[data-ui-theme="glass"][data-color-scheme="light"] .update-modal-content .update-conflicts li {
+    color: #111827;
+}
+
+body[data-ui-theme="glass"][data-color-scheme="light"] #update-modal .modal-backdrop,
+body[data-ui-theme="glass"][data-color-scheme="light"] #update-summary-modal .modal-backdrop {
+    background: rgba(236, 241, 248, 0.22);
     backdrop-filter: blur(4px);
 }
 

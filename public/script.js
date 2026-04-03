@@ -74,6 +74,17 @@ function getAuthHeaders(includeJson = false) {
     return headers;
 }
 
+function getActiveColorScheme() {
+    const explicit = document.body ? document.body.getAttribute('data-color-scheme') : null;
+    if (explicit === 'dark' || explicit === 'light') {
+        return explicit;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+    }
+    return 'light';
+}
+
 function setUpdateStatusMessage(message, isError = false) {
     const el = document.getElementById('update-status-message');
     if (!el) {
@@ -86,7 +97,11 @@ function setUpdateStatusMessage(message, isError = false) {
     }
     el.textContent = message;
     el.classList.remove('hidden');
-    el.style.color = isError ? '#b91c1c' : '';
+    if (isError) {
+        el.style.color = '#b91c1c';
+        return;
+    }
+    el.style.color = getActiveColorScheme() === 'light' ? '#111111' : '';
 }
 
 function formatIsoDateLabel(isoDate) {
@@ -221,9 +236,12 @@ function updateUpdateButtonLabel() {
         return;
     }
     if (!latestUpdateStatus || !latestUpdateStatus.updateAvailable) {
+        button.classList.add('hidden');
+        setUpdateButtonSeverity('none');
         setUpdateButtonLabel('Update Available');
         return;
     }
+    button.classList.remove('hidden');
     setUpdateButtonLabel(`Update to ${latestUpdateStatus.latestVersion}`);
 }
 
@@ -327,6 +345,9 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
         return latestUpdateStatus;
     } catch (err) {
         console.error('Failed to fetch update status:', err);
+        button.classList.add('hidden');
+        setUpdateButtonSeverity('none');
+        stopUpdateButtonAnimation({ restoreLabel: false });
         setUpdateStatusMessage('Failed to load update status.', true);
         return null;
     }
@@ -744,7 +765,16 @@ async function runUpdatePreflightForTarget(targetVersion) {
 
         const check = await response.json();
         if (!check.updateAvailable) {
-            alert('No new Minecraft version is available right now.');
+            latestUpdateStatus = {
+                ...(latestUpdateStatus || {}),
+                updateAvailable: false,
+                updateInProgress: false,
+                latestVersion: check.latestVersion || null
+            };
+            setUpdateButtonSeverity('none');
+            stopUpdateButtonAnimation({ restoreLabel: false });
+            button.classList.add('hidden');
+            setUpdateStatusMessage('No new Minecraft version is available right now.');
             await loadUpdateStatus({ forceRefresh: true });
             return null;
         }
