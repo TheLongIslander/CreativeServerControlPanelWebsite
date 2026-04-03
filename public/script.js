@@ -414,6 +414,30 @@ function setUpdateActionDisabled(disabled) {
     }
 }
 
+function setMainServerControlsDisabled(disabled) {
+    const startButton = document.getElementById('start-server');
+    const stopButton = document.getElementById('stop-server');
+    const backupButton = document.getElementById('backup-server');
+    const restartButton = document.getElementById('restart-server');
+    const updateButton = document.getElementById('update-server');
+
+    if (startButton) {
+        startButton.disabled = disabled;
+    }
+    if (stopButton) {
+        stopButton.disabled = disabled;
+    }
+    if (backupButton) {
+        backupButton.disabled = disabled;
+    }
+    if (restartButton) {
+        restartButton.disabled = disabled;
+    }
+    if (updateButton && !updateButton.classList.contains('hidden')) {
+        updateButton.disabled = disabled || Boolean(updateButtonAnimationTimer) || isApplyingUpdate;
+    }
+}
+
 function isModalVisible(modalId) {
     const modal = document.getElementById(modalId);
     return Boolean(modal && !modal.classList.contains('hidden'));
@@ -570,22 +594,24 @@ function openUpdateSummaryModal(result) {
         'is-updated'
     );
 
-    appendSummarySection(
-        content,
-        'Mods Not Updated',
-        notUpdatedMods.map(mod => {
-            const fileName = extractFileName(mod.from);
-            const reason = formatMoveReason(mod.reason);
-            const destination = mod.to || 'unknown destination';
-            if (adminView) {
-                return `${fileName}: ${reason} -> ${destination}`;
-            }
-            const destinationFolder = extractParentFolderName(destination);
-            const destinationFile = extractFileName(destination);
-            return `${fileName}: ${reason} -> ${destinationFolder}/${destinationFile}`;
-        }),
-        'is-not-updated'
-    );
+    if (notUpdatedMods.length > 0) {
+        appendSummarySection(
+            content,
+            'Mods Not Updated',
+            notUpdatedMods.map(mod => {
+                const fileName = extractFileName(mod.from);
+                const reason = formatMoveReason(mod.reason);
+                const destination = mod.to || 'unknown destination';
+                if (adminView) {
+                    return `${fileName}: ${reason} -> ${destination}`;
+                }
+                const destinationFolder = extractParentFolderName(destination);
+                const destinationFile = extractFileName(destination);
+                return `${fileName}: ${reason} -> ${destinationFolder}/${destinationFile}`;
+            }),
+            'is-not-updated'
+        );
+    }
 
     modal.classList.remove('hidden');
     modal.setAttribute('aria-hidden', 'false');
@@ -841,6 +867,7 @@ async function applyUpdateMode(mode) {
     isApplyingUpdate = true;
     startUpdateButtonAnimation('Updating');
     setUpdateActionDisabled(true);
+    setMainServerControlsDisabled(true);
     closeUpdateModal();
     setUpdateStatusMessage('Update started. Waiting for completion...');
 
@@ -881,6 +908,7 @@ async function applyUpdateMode(mode) {
         isApplyingUpdate = false;
         setUpdateActionDisabled(false);
         await loadUpdateStatus({ forceRefresh: true }).catch(() => null);
+        checkServerStatus();
         if (!latestUpdateStatus || !latestUpdateStatus.updateInProgress) {
             stopUpdateButtonAnimation();
         }
@@ -1527,7 +1555,9 @@ function checkServerStatus() {
             const restartButton = document.getElementById('restart-server');
             const updateButton = document.getElementById('update-server');
             const updateLocked = Boolean(data.updateInProgress);
-            const controlsLocked = isBackingUp || updateLocked;
+            const localUpdateLock = Boolean(isApplyingUpdate)
+                || Boolean(latestUpdateStatus && latestUpdateStatus.updateInProgress);
+            const controlsLocked = isBackingUp || updateLocked || localUpdateLock;
 
             startButton.disabled = controlsLocked || data.running;
             stopButton.disabled = controlsLocked || !data.running;
@@ -1578,6 +1608,11 @@ function checkServerStatus() {
           updateBackupProgress('100');
           setBackupState(false); // Reset the backup state
         } else if (message.type === 'update-progress') {
+          latestUpdateStatus = {
+            ...(latestUpdateStatus || {}),
+            updateInProgress: true
+          };
+          setMainServerControlsDisabled(true);
           startUpdateButtonAnimation('Updating');
           const label = message.message || 'Update in progress...';
           const percent = Number(message.value);
@@ -1587,6 +1622,10 @@ function checkServerStatus() {
             setUpdateStatusMessage(label);
           }
         } else if (message.type === 'update-complete') {
+          latestUpdateStatus = {
+            ...(latestUpdateStatus || {}),
+            updateInProgress: false
+          };
           stopUpdateButtonAnimation({ restoreLabel: false });
           if (message.success) {
             setUpdateStatusMessage('Update completed successfully.');

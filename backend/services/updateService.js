@@ -1576,12 +1576,17 @@ module.exports = function createUpdateService({ state, getWss }) {
       emitProgress('finalize', 'Finalizing update state…', 92, { runId });
       await setCurrentVersion(report.targetVersion);
 
-      if (!wasRunningBefore) {
-        await stopMinecraftSessionIfRunning();
-        const started = await startMinecraftSession();
-        if (!started) {
-          throw new Error('Updated server failed to restart.');
+      if (wasRunningBefore) {
+        const stillRunning = await isScreenSessionRunning();
+        if (!stillRunning) {
+          const started = await startMinecraftSession();
+          if (!started) {
+            throw new Error('Updated server failed to restart.');
+          }
         }
+      } else {
+        // Smoke test temporarily starts the server; keep final state offline if it was offline before update.
+        await stopMinecraftSessionIfRunning();
       }
 
       completion.succeeded = true;
