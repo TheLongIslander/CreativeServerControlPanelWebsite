@@ -266,6 +266,89 @@ function getRecentLogDelta(content, initialLength) {
   return content.length >= initialLength ? content.slice(initialLength) : content;
 }
 
+function formatModeSummaryLabel(mode, { targetVersion, latestVersion } = {}) {
+  const isLatestTarget = Boolean(targetVersion && latestVersion && String(targetVersion) === String(latestVersion));
+  if (mode === 'server_only_move_all_mods') {
+    return isLatestTarget
+      ? 'Update latest server version and move all mods out'
+      : 'Update compatible target version and move all mods out';
+  }
+  if (mode === 'server_and_compatible_mods') {
+    return isLatestTarget
+      ? 'Update latest server version and keep compatible mods'
+      : 'Update compatible target version and keep compatible mods';
+  }
+  if (mode === 'restore_latest_snapshot') {
+    return 'Restore latest snapshot';
+  }
+  return mode || 'Unknown mode';
+}
+
+function formatMoveReasonSummary(reason) {
+  const map = {
+    blocked: 'incompatible with target version',
+    unknown: 'compatibility unknown',
+    server_only_mode: 'moved by server-only mode',
+    replaced_by_update: 'replaced by updated mod jar'
+  };
+  return map[reason] || reason || 'moved';
+}
+
+function buildRunSummaryText(completion = {}) {
+  const sourceVersion = completion.sourceVersion || 'unknown';
+  const targetVersion = completion.targetVersion || 'unknown';
+  const latestVersion = completion.latestVersion || null;
+  const updatedMods = Array.isArray(completion.updatedMods) ? completion.updatedMods : [];
+  const movedMods = Array.isArray(completion.movedMods) ? completion.movedMods : [];
+  const notUpdatedMods = movedMods.filter(mod => mod && mod.reason !== 'replaced_by_update');
+
+  const lines = [
+    `Version path: ${sourceVersion} -> ${targetVersion}`,
+    `Mode: ${formatModeSummaryLabel(completion.mode, { targetVersion, latestVersion })}`,
+    `Status: ${completion.succeeded ? 'completed' : 'failed'}${completion.rolledBack ? ' (rolled back)' : ''}`,
+    `Mods updated: ${updatedMods.length}`,
+    `Mods not updated: ${notUpdatedMods.length}`
+  ];
+
+  if (updatedMods.length > 0) {
+    lines.push('Mods Updated:');
+    for (const mod of updatedMods) {
+      if (!mod) {
+        continue;
+      }
+      const name = mod.modId || mod.fileName || 'mod';
+      const fromVersion = mod.fromVersion || 'unknown';
+      const toVersion = mod.toVersion || 'latest';
+      lines.push(`- ${name}: ${fromVersion} -> ${toVersion}`);
+    }
+  } else {
+    lines.push('Mods Updated: None');
+  }
+
+  if (notUpdatedMods.length > 0) {
+    lines.push('Mods Not Updated:');
+    for (const moved of notUpdatedMods) {
+      if (!moved) {
+        continue;
+      }
+      const fileName = moved.from ? path.basename(moved.from) : 'unknown-mod.jar';
+      const reason = formatMoveReasonSummary(moved.reason);
+      lines.push(`- ${fileName}: ${reason}`);
+    }
+  } else {
+    lines.push('Mods Not Updated: None');
+  }
+
+  if (!completion.succeeded && completion.error) {
+    lines.push(`Error: ${completion.error}`);
+  }
+  if (completion.rollbackError) {
+    lines.push(`Rollback error: ${completion.rollbackError}`);
+  }
+
+  return lines.join('\n');
+}
+
 function tailText(text, maxBytes = SMOKE_TEST_LOG_TAIL_BYTES) {
   if (!text) {
     return '';
@@ -1515,7 +1598,9 @@ module.exports = function createUpdateService({ state, getWss }) {
     const completion = {
       runId,
       checkId,
+      sourceVersion: report.currentVersion || null,
       targetVersion: report.targetVersion,
+      latestVersion: report.latestVersion || null,
       mode,
       succeeded: false,
       rolledBack: false,
@@ -1523,6 +1608,7 @@ module.exports = function createUpdateService({ state, getWss }) {
       movedMods: [],
       updatedMods: [],
       snapshotPath: null,
+      summaryText: null,
       preModManifest: Array.isArray(report.mods && report.mods.mods)
         ? report.mods.mods.map(mod => ({
           fileName: mod.fileName,
@@ -1590,6 +1676,7 @@ module.exports = function createUpdateService({ state, getWss }) {
       }
 
       completion.succeeded = true;
+      completion.summaryText = buildRunSummaryText(completion);
       await updateStore.updateRun({
         runId,
         status: 'completed',
@@ -1633,6 +1720,7 @@ module.exports = function createUpdateService({ state, getWss }) {
         }
       }
 
+      completion.summaryText = buildRunSummaryText(completion);
       await updateStore.updateRun({
         runId,
         status: 'failed',

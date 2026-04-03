@@ -1,6 +1,6 @@
 /*
  * Purpose: Admin-only user management endpoints.
- * Routes: GET /admin/users, GET /admin/users/:id/logins, GET /admin/audit,
+ * Routes: GET /admin/users, GET /admin/users/:id/logins, GET /admin/audit, GET /admin/updates,
  *         POST /admin/users, PATCH /admin/users/:id,
  *         POST /admin/users/:id/reset-temp-password, POST /admin/users/:id/force-logout,
  *         DELETE /admin/users/:id
@@ -12,11 +12,52 @@ const authenticateJWT = require('../middleware/authenticate');
 const requireAdmin = require('../middleware/requireAdmin');
 const requireOnboarded = require('../middleware/requireOnboarded');
 const usersDb = require('../db/users');
+const updateStore = require('../db/updateStore');
 const { decryptText } = require('../utils/encryption');
 const { normalizeUsername } = require('../utils/username');
 
 function generateTempPassword() {
   return crypto.randomBytes(16).toString('base64url');
+}
+
+function formatUpdateModeLabel(mode, { targetVersion, latestVersion } = {}) {
+  const isLatestTarget = Boolean(targetVersion && latestVersion && String(targetVersion) === String(latestVersion));
+  if (mode === 'server_and_compatible_mods') {
+    return isLatestTarget
+      ? 'Latest + Compatible Mods'
+      : 'Compatible Target + Compatible Mods';
+  }
+  if (mode === 'server_only_move_all_mods') {
+    return isLatestTarget
+      ? 'Latest + Move All Mods'
+      : 'Compatible Target + Move All Mods';
+  }
+  if (mode === 'restore_latest_snapshot') {
+    return 'Restore Latest Snapshot';
+  }
+  return mode || 'Unknown';
+}
+
+function buildFallbackNotes({
+  modeLabel,
+  versionPath,
+  status,
+  rolledBack,
+  errorMessage,
+  modsUpdatedCount,
+  modsNotUpdatedCount
+}) {
+  if (errorMessage) {
+    return `Update failed.\nError: ${errorMessage}`;
+  }
+  const lines = [
+    `Version path: ${versionPath}`,
+    `Mode: ${modeLabel}`,
+    `Status: ${status}${rolledBack ? ' (rolled back)' : ''}`,
+    `Mods updated: ${modsUpdatedCount}`,
+    `Mods not updated: ${modsNotUpdatedCount}`
+  ];
+  return lines.join('\n');
 }
 
 module.exports = function createAdminUserRoutes() {
@@ -95,6 +136,91 @@ module.exports = function createAdminUserRoutes() {
     } catch (err) {
       console.error('Failed to load audit log:', err);
       res.status(500).send('Failed to load audit log');
+    }
+  });
+
+  router.get('/admin/updates', async (req, res) => {
+    try {
+      const parsedLimit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+      const [runs, users] = await Promise.all([
+        updateStore.listRuns(parsedLimit),
+        usersDb.listUsers()
+      ]);
+      const usernamesById = new Map(users.map(user => [user.id, user.username]));
+      const checkIds = Array.from(new Set(
+        runs
+          .map(run => run && Number.isInteger(run.checkId) ? run.checkId : null)
+          .filter(Boolean)
+      ));
+      const checks = await Promise.all(checkIds.map(id => updateStore.getCheckById(id)));
+      const checksById = new Map();
+      checks.forEach(check => {
+        if (check && Number.isInteger(check.id)) {
+          checksById.set(check.id, check);
+        }
+      });
+
+      const payload = runs.map(run => {
+        const details = run && run.details ? run.details : {};
+        const check = run && Number.isInteger(run.checkId) ? checksById.get(run.checkId) : null;
+        const checkReport = check && check.report ? check.report : null;
+        const updatedMods = Array.isArray(details.updatedMods) ? details.updatedMods : [];
+        const movedMods = Array.isArray(details.movedMods) ? details.movedMods : [];
+        const notUpdatedMods = movedMods.filter(mod => mod && mod.reason !== 'replaced_by_update');
+        const sourceVersion = details.sourceVersion
+          || (checkReport && checkReport.currentVersion)
+          || (check && check.currentVersion)
+          || null;
+        const targetVersion = run.targetVersion
+          || details.targetVersion
+          || (checkReport && checkReport.targetVersion)
+          || null;
+        const latestVersion = details.latestVersion
+          || (checkReport && checkReport.latestVersion)
+          || (check && check.latestVersion)
+          || null;
+        const versionPath = `${sourceVersion || 'unknown'} -> ${targetVersion || 'unknown'}`;
+        const modeLabel = formatUpdateModeLabel(run.mode, { targetVersion, latestVersion });
+        const notes = (typeof details.summaryText === 'string' && details.summaryText.trim())
+          ? details.summaryText
+          : buildFallbackNotes({
+            modeLabel,
+            versionPath,
+            status: run.status || 'unknown',
+            rolledBack: Boolean(details.rolledBack),
+            errorMessage: run.errorMessage || null,
+            modsUpdatedCount: updatedMods.length,
+            modsNotUpdatedCount: notUpdatedMods.length
+          });
+
+        return {
+          id: run.id,
+          checkId: run.checkId || null,
+          actorUserId: run.actorUserId || null,
+          actorUsername: run.actorUserId ? (usernamesById.get(run.actorUserId) || 'Unknown') : 'System',
+          mode: run.mode || 'unknown',
+          modeLabel,
+          sourceVersion,
+          targetVersion,
+          latestVersion,
+          versionPath,
+          status: run.status || 'unknown',
+          errorMessage: run.errorMessage || null,
+          rolledBack: Boolean(details.rolledBack),
+          createdAt: run.createdAt || null,
+          startedAt: run.startedAt || null,
+          completedAt: run.completedAt || null,
+          modsUpdatedCount: updatedMods.length,
+          modsNotUpdatedCount: notUpdatedMods.length,
+          notes,
+          summary: details
+        };
+      });
+
+      res.json(payload);
+    } catch (err) {
+      console.error('Failed to load update history:', err);
+      res.status(500).send('Failed to load update history');
     }
   });
 
