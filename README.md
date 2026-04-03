@@ -7,6 +7,7 @@ Engineering specification for the current implementation.
 This service is a self-hosted web control plane for:
 
 - Minecraft server lifecycle operations (start, stop, restart).
+- Compatibility-aware Minecraft/Fabric server updates with preflight checks, rollback snapshots, and mod migration.
 - Scheduled backup execution and backup browsing over SFTP.
 - Multi-user authentication with admin-managed accounts.
 - Optional passkey (WebAuthn) login and passkey lifecycle management.
@@ -22,6 +23,7 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 - Admin user management and user audit trails.
 - SFTP file browsing, upload, preview, and download orchestration.
 - Backup execution with progress telemetry.
+- End-to-end update orchestration (status detection, preflight, apply, rollback, and update history).
 - Graceful maintenance broadcast + process shutdown.
 - User appearance preferences (theme + color mode).
 
@@ -70,9 +72,12 @@ One Node.js process (`app.js`) hosts:
 2. Construct Express app and middleware stack.
 3. Initialize users DB schema (`initUsersDb`).
 4. Ensure bootstrap `admin` account (`ensureAdminUser`).
-5. Start HTTP listener on `PORT` (default `8087`).
-6. Attach WebSocket server to HTTP server.
-7. Trigger background video thumbnail pre-cache crawl from SFTP root (`/`).
+5. Initialize update DB/schema and recover update lock/run state (`updateService.initialize`).
+6. Prime current/latest Minecraft version state for update status.
+7. Start periodic update status refresh timer (`updateService.startStatusRefreshTimer`).
+8. Start HTTP listener on `PORT` (default `8087`).
+9. Attach WebSocket server to HTTP server.
+10. Trigger background video thumbnail pre-cache crawl from SFTP root (`/`).
 
 ### Graceful shutdown
 
@@ -125,6 +130,8 @@ cp .env.example .env
 - `ffmpeg`
 - `GraphicsMagick` or `ImageMagick` + `Ghostscript` (PDF preview path)
 - `stdbuf` (used by directory zipping in download worker)
+- `df` (disk-space preflight for update flow)
+- `java` (or explicit Java path used by launch script; required for Fabric installer and runtime checks)
 
 ## 6. Middleware and Global HTTP Settings
 
@@ -149,6 +156,8 @@ Defined in `backend/state.js`:
 - `serverRunning` (`boolean`) default `false`
 - `lastBackupHour` (`string|null`) default `null`
 - `maintenanceMode` (`boolean`) default `false`
+- `updateLocked` (`boolean`) default `false`
+- `updateLockOwner` (`string|null`) default `null`
 
 Notes:
 
@@ -255,6 +264,7 @@ All `/admin/*` routes require `authenticateJWT + requireOnboarded + requireAdmin
 | `GET` | `/admin/users` | None | Array of users with admin-facing state fields (including decrypted temp password where available). |
 | `GET` | `/admin/users/:id/logins` | None | `{ user, logins[] }` |
 | `GET` | `/admin/audit` | Query: `actor,target,action,ip,from,to,limit` | Array of audit events (limit max 500). |
+| `GET` | `/admin/updates` | Query: `limit` | Update run history with mode labels, version path, counts, status, and detailed summary payload. |
 | `POST` | `/admin/users` | `{ username }` | Created user payload with generated temp password. |
 | `PATCH` | `/admin/users/:id` | `{ disabled: boolean }` | `{ message: 'User updated' }` |
 | `POST` | `/admin/users/:id/reset-temp-password` | None | `{ message, tempPassword }` |
@@ -282,16 +292,16 @@ Protection rules enforced server-side:
 
 | Method | Path | Auth | Behavior |
 |---|---|---|---|
-| `GET` | `/status` | No | Returns `{ running }` from in-memory state. |
-| `POST` | `/start` | JWT + onboarded | Executes `sh $START_COMMAND_PATH`, sets `serverRunning=true`, logs action. |
-| `POST` | `/stop` | JWT + onboarded | Sends `stop` to `screen -S MinecraftSession`, sets `serverRunning=false`, logs action. |
-| `POST` | `/restart` | JWT + onboarded | Stops via `screen`, waits 3s, starts via service helper, logs action. |
+| `GET` | `/status` | No | Returns `{ running, updateInProgress }` from in-memory state. |
+| `POST` | `/start` | JWT + onboarded | Executes `sh $START_COMMAND_PATH`, sets `serverRunning=true`, logs action. Returns `423` if update is in progress. |
+| `POST` | `/stop` | JWT + onboarded | Sends `stop` to `screen -S MinecraftSession`, sets `serverRunning=false`, logs action. Returns `423` if update is in progress. |
+| `POST` | `/restart` | JWT + onboarded | Stops via `screen`, waits 3s, starts via service helper, logs action. Returns `423` if update is in progress. |
 
 ### 10.6 Backup route
 
 | Method | Path | Auth | Behavior |
 |---|---|---|---|
-| `POST` | `/backup` | JWT + onboarded | Enforces once-per-hour window, optionally stops server, runs `rsync`, streams progress via WebSocket, restarts server if previously running. |
+| `POST` | `/backup` | JWT + onboarded | Enforces once-per-hour window, optionally stops server, runs `rsync`, streams progress via WebSocket, restarts server if previously running. Returns `423` if update is in progress. |
 
 Operational details:
 
@@ -358,6 +368,34 @@ File-type handling:
 - PDF: first-page render + cache.
 - Other: raw octet-stream relay.
 
+### 10.11 Update routes
+
+All update routes require `authenticateJWT + requireOnboarded`.
+
+| Method | Path | Request | Behavior |
+|---|---|---|---|
+| `GET` | `/updates/status` | Query: `refresh=1|true` (optional) | Returns update status snapshot: current version, latest Mojang release, latest Fabric-supported release, availability, lock state, and snapshot-restorability state. |
+| `POST` | `/updates/check` | `{ targetVersion? }` | Runs preflight: Java, disk, Fabric support, mod compatibility, conflict analysis, recommended compatible target lookup. Persists check in `updates.db`. |
+| `GET` | `/updates/check/:id` | None | Returns a stored preflight check report by id. |
+| `POST` | `/updates/apply` | `{ checkId, mode }` | Applies update using a fresh preflight check (`<= 30m`), with lock, snapshot, artifact install, mod migration, smoke test, auto-rollback on failure, and run summary persistence. |
+| `POST` | `/updates/restore-latest` | None | Restores latest snapshot-bearing update run. Intended for administrative/manual recovery paths. |
+
+Supported apply modes:
+
+- `server_and_compatible_mods`: update server and keep compatible mods (archive moved/replaced jars).
+- `server_only_move_all_mods`: update server and move all current mods out of `mods/` into versioned archive folder.
+
+Apply pipeline (high-level):
+
+1. Acquire global update lock.
+2. Stop running server session (if running).
+3. Create full snapshot backup (`UpdateSnapshots/...`).
+4. Download target server jar + Fabric installer + install loader.
+5. Apply mod plan (download compatible updates, move blocked/unknown/old jars to archive).
+6. Run startup smoke test (process, logs, and local TCP probe).
+7. Persist final state + detailed summary and release lock.
+8. On failure: rollback from snapshot and restore prior running/offline state.
+
 ## 11. WebSocket Protocol
 
 The server sends broadcast messages to all connected clients.
@@ -370,10 +408,14 @@ The server sends broadcast messages to all connected clients.
 | `progress` (backup) | `{ type: 'progress', value }` |
 | `progress` (download) | `{ type: 'progress', requestId, progress }` |
 | `complete` (download) | `{ type: 'complete', requestId }` |
+| `update-progress` | `{ type: 'update-progress', stage, message, value, ...extra }` |
+| `update-complete` | `{ type: 'update-complete', success, runId, summary }` |
+| `update-restore-complete` | `{ type: 'update-restore-complete', success, runId, details|error }` |
 
 Notes:
 
-- Message namespace is shared for backup and download progress.
+- Backup and download share `type: 'progress'` with different payload shapes.
+- Update flow uses separate message types (`update-progress`, `update-complete`, `update-restore-complete`).
 - No authenticated channel separation exists at WS level.
 - Frontend pages selectively ignore irrelevant payload shapes.
 
@@ -385,6 +427,7 @@ Notes:
 - `token_blacklist.db`
 - `server_logs.db`
 - `sftp_activity_log.db`
+- `updates.db`
 
 ### 12.1 `users.db` tables
 
@@ -493,6 +536,21 @@ Purpose:
 
 - Records SFTP upload/download activity events.
 
+### 12.5 `updates.db`
+
+Tables:
+
+- `update_state(key, value, updated_at)`: latest/current version cache and refresh timestamps.
+- `update_checks(...)`: persisted preflight reports (`report_json`) including Java, disk, Fabric, mods, and recommendation metadata.
+- `update_runs(...)`: apply/restore run records, status, error, timings, and full summary payload (`details_json`).
+- `mod_source_cache(...)`: Modrinth resolution cache keyed by file SHA-1.
+- `update_lock(id=1, owner, created_at)`: single-writer lock to prevent concurrent updates.
+
+Recovery behavior:
+
+- On process start, stale `update_lock` is removed.
+- Any `update_runs` left in `running` state are marked failed with restart reason.
+
 ## 13. Background Workers and Heavy Pipelines
 
 ### `backend/workers/downloadWorker.js`
@@ -535,14 +593,29 @@ Responsibilities:
 ### Frontend script ownership
 
 - `public/login.js`: password and passkey login flows.
-- `public/script.js`: control panel actions + backup progress UI + WS handling.
+- `public/script.js`: control panel actions + backup progress UI + update status polling/preflight/apply UX + WS handling.
 - `public/sftp.js`: browse/upload/download/preview UX + WS download tracking.
 - `public/account.js`: password change and passkey CRUD.
-- `public/admin.js`: admin user lifecycle UI.
+- `public/admin.js`: admin user lifecycle UI + update history table + update summary modal.
 - `public/admin-logins.js`: login history UI.
 - `public/admin-audit.js`: audit log filters and rendering.
 - `public/webauthn.js`: browser-side WebAuthn helper transformations.
 - `public/appearance.js`: shared account menu, theming, and button-lighting behavior.
+
+### Update UX contract (control panel + admin)
+
+- Update button is hidden when no newer Fabric-supported Minecraft target exists (`latestFabricSupportedVersion <= currentVersion`).
+- Update button severity icon is yellow hazard for compatibility warnings and red stop for Java-blocking conditions.
+- Clicking update always runs preflight before apply.
+- If no conflicts and preflight is clear, update starts immediately (no choice modal).
+- If conflicts exist, modal presents explicit options (Cancel, update server + compatible mods, or update server-only with mods moved out).
+- Optional compatible intermediate target button is shown when discovered.
+- During update apply, main server controls are disabled.
+- During update apply, update button switches to animated `Updating...`.
+- During update apply, status text and WS progress messages drive in-page progress feedback.
+- On completion/failure, a summary modal renders updated vs not-updated mods plus run metadata.
+- Summary metadata/path details are role-aware: admins can see full archive/snapshot paths, non-admin users see sanitized labels.
+- Admin Management includes a server update history table with one-click summary modal replay per run.
 
 ### Theme system
 
@@ -558,6 +631,7 @@ Detailed UI contract is documented in `STYLE_GUIDE.md`.
 - SFTP page performs frequent refresh polling while user is active (1s interval) and stops after inactivity timeout (5 minutes).
 - Backup frequency limit is enforced in-memory by hour key; process restarts reset the limiter.
 - Maintenance mode flag is in-memory; process restart clears it.
+- Update status refresh is cached/polled on multiple layers: backend refresh timer every 6 hours (`updateService.startStatusRefreshTimer`), frontend status polling every 5 minutes plus tab-visibility return, and frontend background preflight TTL of 10 minutes for warning/icon refresh.
 - Video thumbnail pre-caching can be expensive on large SFTP trees because it recursively crawls from `/` at startup.
 - Logging timestamps are written using `America/New_York` locale formatting, not ISO-8601.
 - Backup hour-gating uses Eastern date-hour keying and in-memory state only.
@@ -589,8 +663,10 @@ Important design properties to be aware of:
 - `GET /status` is public and driven by in-memory flags, not direct process introspection.
 - Process-global `currentPath` in SFTP route module is shared state, not per-session state.
 - Preview cache filenames are based on basename, so same-name files in different directories can collide.
-- Backup and download progress share the same WS `type: 'progress'` namespace with different payload shapes.
+- Backup and download share WS `type: 'progress'` with different payload shapes.
 - Download worker requires `stdbuf`; missing utility will break directory zip progress pipeline.
+- Recommended compatible-target lookup scans a bounded release window (currently first 15 candidates between current and latest).
+- Update apply requires a non-stale preflight check (`<= 30 minutes`).
 
 ## 18. Local Development and Runbook
 
