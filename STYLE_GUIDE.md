@@ -94,6 +94,18 @@ Required on `index.html`-style pages that use `public/script.js` progress engine
 </div>
 ```
 
+### 4) Control panel server management dropdown
+The control panel header uses a left-side management dropdown instead of a standalone backup-browser button:
+```html
+<div class="server-management-container">
+  <button id="server-management-button" type="button" aria-haspopup="true" aria-expanded="false">Server Management</button>
+  <div id="server-management-dropdown" class="server-management-dropdown hidden" role="menu" aria-hidden="true">
+    <button id="sftp-button" class="sftp-button" type="button" role="menuitem">Server Backups Browser</button>
+    <button id="server-version-button" type="button" role="menuitem">Server Version</button>
+  </div>
+</div>
+```
+
 ## Required JS Boot Pattern
 
 ### Standard boot flow
@@ -175,6 +187,15 @@ body[data-ui-theme="glass"] .switch .slider::after {
 - Required behavior:
 dropdown opens/closes via account button, closes on outside click, appearance panel closes with dropdown.
 - Keep button width consistent (`~180px`) in dropdown for layout rhythm.
+
+### Control panel server management dropdown
+- Required selectors:
+`.server-management-container`, `#server-management-button`, `.server-management-dropdown`, `#sftp-button`, `#server-version-button`.
+- Required behavior:
+dropdown opens/closes via Server Management, closes on outside click and Escape, and closes when Account opens.
+- `Server Backups Browser` keeps the existing blue backup-browser color.
+- `Server Version` opens the advanced version selector and must remain available even when no update button is visible, except while server controls are locked.
+- Keep dropdown button width consistent with account dropdown rhythm (`~180px`).
 
 ### Buttons + pointer lighting
 - Non-control-panel pages use pointer lighting from `public/appearance.js` with `.is-lit`.

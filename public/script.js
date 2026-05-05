@@ -24,6 +24,10 @@ const advancedVersionCache = {
     all: null
 };
 
+function clearAdvancedVersionCache() {
+    advancedVersionCache.all = null;
+}
+
 function redirectToLogin() {
     localStorage.removeItem('token');
     window.location.href = '/';
@@ -348,7 +352,13 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
             }
             throw new Error(`Failed to load update status (${response.status})`);
         }
+        const previousUpdateStatus = latestUpdateStatus;
         latestUpdateStatus = await response.json();
+        if (forceRefresh
+            || (previousUpdateStatus && previousUpdateStatus.currentVersion !== latestUpdateStatus.currentVersion)
+            || (previousUpdateStatus && previousUpdateStatus.latestVersion !== latestUpdateStatus.latestVersion)) {
+            clearAdvancedVersionCache();
+        }
         if (latestUpdateStatus.updateAvailable) {
             button.classList.remove('hidden');
             if (latestUpdateStatus.updateInProgress) {
@@ -448,6 +458,7 @@ function setMainServerControlsDisabled(disabled) {
     const backupButton = document.getElementById('backup-server');
     const restartButton = document.getElementById('restart-server');
     const updateButton = document.getElementById('update-server');
+    const versionButton = document.getElementById('server-version-button');
 
     if (startButton) {
         startButton.disabled = disabled;
@@ -463,6 +474,9 @@ function setMainServerControlsDisabled(disabled) {
     }
     if (updateButton && !updateButton.classList.contains('hidden')) {
         updateButton.disabled = disabled || Boolean(updateButtonAnimationTimer) || isApplyingUpdate;
+    }
+    if (versionButton) {
+        versionButton.disabled = disabled || isApplyingUpdate;
     }
 }
 
@@ -506,6 +520,30 @@ function closeUpdateAdvancedModal() {
     modal.classList.add('hidden');
     modal.setAttribute('aria-hidden', 'true');
     syncModalOpenState();
+}
+
+function closeServerManagementDropdown() {
+    const button = document.getElementById('server-management-button');
+    const dropdown = document.getElementById('server-management-dropdown');
+    if (!dropdown) {
+        return;
+    }
+    dropdown.classList.add('hidden');
+    dropdown.setAttribute('aria-hidden', 'true');
+    if (button) {
+        button.setAttribute('aria-expanded', 'false');
+    }
+}
+
+function closeAccountDropdown() {
+    const dropdown = document.getElementById('account-dropdown');
+    const appearancePanel = document.getElementById('appearance-panel');
+    if (dropdown) {
+        dropdown.classList.add('hidden');
+    }
+    if (appearancePanel) {
+        appearancePanel.classList.add('hidden');
+    }
 }
 
 function extractFileName(filePath) {
@@ -1036,6 +1074,7 @@ async function applyUpdateMode(mode) {
         const payload = await response.json();
         closeUpdateModal();
         openUpdateSummaryModal(payload && payload.result ? payload.result : null);
+        clearAdvancedVersionCache();
         await loadUpdateStatus({ forceRefresh: true });
         checkServerStatus();
     } catch (err) {
@@ -1088,6 +1127,7 @@ function openUpdateAdvancedMenu(event) {
     }
     event.preventDefault();
     event.stopPropagation();
+    closeServerManagementDropdown();
     const padding = 8;
     const anchor = event.currentTarget || document.getElementById('update-server');
     menu.classList.remove('hidden');
@@ -1279,6 +1319,10 @@ async function loadAdvancedVersionOptions({ force = false } = {}) {
 
 async function openUpdateAdvancedModal() {
     closeUpdateAdvancedMenu();
+    closeServerManagementDropdown();
+    if (isApplyingUpdate || (latestUpdateStatus && latestUpdateStatus.updateInProgress)) {
+        return;
+    }
     const modal = document.getElementById('update-advanced-modal');
     if (!modal) {
         return;
@@ -1288,6 +1332,46 @@ async function openUpdateAdvancedModal() {
     modal.setAttribute('aria-hidden', 'false');
     syncModalOpenState();
     await loadAdvancedVersionOptions();
+}
+
+function setupServerManagementMenu() {
+    const button = document.getElementById('server-management-button');
+    const dropdown = document.getElementById('server-management-dropdown');
+    const backupButton = document.getElementById('sftp-button');
+    const versionButton = document.getElementById('server-version-button');
+    const accountButton = document.getElementById('account-button');
+
+    if (button && dropdown) {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            const isOpening = dropdown.classList.contains('hidden');
+            if (isOpening) {
+                closeAccountDropdown();
+                closeUpdateAdvancedMenu();
+            }
+            dropdown.classList.toggle('hidden', !isOpening);
+            dropdown.setAttribute('aria-hidden', isOpening ? 'false' : 'true');
+            button.setAttribute('aria-expanded', isOpening ? 'true' : 'false');
+        });
+
+        dropdown.addEventListener('click', event => {
+            event.stopPropagation();
+        });
+    }
+
+    if (backupButton) {
+        backupButton.addEventListener('click', () => {
+            window.location.href = '/sftp.html';
+        });
+    }
+
+    if (versionButton) {
+        versionButton.addEventListener('click', openUpdateAdvancedModal);
+    }
+
+    if (accountButton) {
+        accountButton.addEventListener('click', closeServerManagementDropdown);
+    }
 }
 
 async function runAdvancedVersionPreflight() {
@@ -1331,16 +1415,19 @@ function setupUpdateModalHandlers() {
     document.addEventListener('click', event => {
         const menu = document.getElementById('update-advanced-menu');
         if (!menu || menu.classList.contains('hidden')) {
+            closeServerManagementDropdown();
             return;
         }
         if (!menu.contains(event.target)) {
             closeUpdateAdvancedMenu();
         }
+        closeServerManagementDropdown();
     });
 
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
             closeUpdateAdvancedMenu();
+            closeServerManagementDropdown();
         }
     });
 
@@ -1981,6 +2068,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     setupProgressBulge();
     setupPointerLighting();
+    setupServerManagementMenu();
     setupUpdateModalHandlers();
     setupWebSocket();
     setupUpdateStatusPolling();
@@ -1997,6 +2085,7 @@ function checkServerStatus() {
             const backupButton = document.getElementById('backup-server');
             const restartButton = document.getElementById('restart-server');
             const updateButton = document.getElementById('update-server');
+            const versionButton = document.getElementById('server-version-button');
             const updateLocked = Boolean(data.updateInProgress);
             const localUpdateLock = Boolean(isApplyingUpdate)
                 || Boolean(latestUpdateStatus && latestUpdateStatus.updateInProgress);
@@ -2012,6 +2101,9 @@ function checkServerStatus() {
                 } else {
                     updateButton.disabled = controlsLocked || isApplyingUpdate;
                 }
+            }
+            if (versionButton) {
+                versionButton.disabled = controlsLocked;
             }
 
             if (updateLocked) {

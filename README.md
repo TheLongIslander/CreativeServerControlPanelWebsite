@@ -390,7 +390,7 @@ Supported apply modes:
 Advanced version-change policy:
 
 - Normal left-click update flow remains update-only and targets the latest Fabric-supported release.
-- Right-click Advanced flow accepts an explicit Minecraft release target and derives update vs downgrade from the selected version.
+- Server Management > Server Version opens the advanced flow with an explicit Minecraft release target and derives update vs downgrade from the selected version. Right-clicking the visible update button remains a shortcut when an update is available.
 - Advanced downgrade targets are constrained server-side by a hardcoded minimum release policy.
 - Downgrade apply requests must include `acknowledgeDowngradeRisk: true`; otherwise `/updates/apply` rejects the run.
 - Advanced conflict checks may return multiple `compatibleTargets`; the frontend can let the user switch to one before applying.
@@ -617,7 +617,7 @@ Responsibilities:
 - Update button is hidden when no newer Fabric-supported Minecraft target exists (`latestFabricSupportedVersion <= currentVersion`).
 - Update button severity icon is yellow hazard for compatibility warnings and red stop for Java-blocking conditions.
 - Clicking update always runs preflight before apply and preserves the normal update-only latest-target flow.
-- Right-clicking the update button opens an Advanced option. Advanced uses one Minecraft version dropdown; the action button changes between update and downgrade based on the selected version.
+- Server Management > Server Version opens the advanced version selector even when no update is available. Right-clicking the update button also opens Advanced when the update button is visible. Advanced uses one Minecraft version dropdown; the action button changes between update and downgrade based on the selected version.
 - Advanced downgrade selections show a prominent warning and an acknowledgement checkbox. That warning/checkbox is not shown for update selections.
 - If no conflicts and preflight is clear, update starts immediately (no choice modal).
 - If conflicts exist, modal presents explicit options (Cancel, change server + compatible mods, or server-only with mods moved out).

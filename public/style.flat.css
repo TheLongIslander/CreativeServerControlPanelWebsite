@@ -100,9 +100,43 @@ body.control-panel main {
     right: 20px;
 }
 
+.server-management-container {
+    position: absolute;
+    top: 0;
+    left: 20px;
+}
+
+#server-management-button {
+    padding: 10px 20px;
+    background-color: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+}
+
+#server-management-button:hover {
+    background-color: #1d4ed8;
+}
+
 .account-dropdown {
     position: absolute;
     right: 0;
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 14px;
+    padding: 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+    z-index: 10;
+}
+
+.server-management-dropdown {
+    position: absolute;
+    left: 0;
     margin-top: 10px;
     display: flex;
     flex-direction: column;
@@ -120,6 +154,14 @@ body.control-panel main {
     padding: 10px 14px;
     border-radius: 12px;
     box-shadow: none;
+}
+
+.server-management-dropdown button {
+    width: 180px;
+    padding: 10px 14px;
+    border-radius: 12px;
+    box-shadow: none;
+    margin: 0;
 }
 
 .appearance-panel {
@@ -316,18 +358,22 @@ body.control-panel.modal-open header {
 }
 
 #sftp-button {
-    position: absolute;
-    top: 0; /* Adjust as needed */
-    left: 20px;
-    background-color: #008CBA; /* Blue */
-    border: none; /* Remove border */
-    color: white; /* Text color */
-    cursor: pointer; /* Pointer cursor */
-    border-radius: 20px; /* Match border-radius with the logout button */
+    background-color: #008CBA;
+    border: none;
+    color: white;
+    cursor: pointer;
 }
 
 #sftp-button:hover {
-    background-color: #005f73; /* Darker blue */
+    background-color: #005f73;
+}
+
+#server-version-button {
+    background-color: #4f46e5;
+}
+
+#server-version-button:hover {
+    background-color: #4338ca;
 }
 
 /* Button styling remains the same */
@@ -825,7 +871,16 @@ button:disabled {
         color: #fff;
     }
 
-    .account-dropdown {
+    #server-management-button {
+        background-color: #3b82f6;
+    }
+
+    #server-management-button:hover {
+        background-color: #2563eb;
+    }
+
+    .account-dropdown,
+    .server-management-dropdown {
         background: #1d1d1d;
         border-color: #333;
     }
@@ -959,10 +1014,16 @@ button:disabled {
         width: auto; /* Prevent full-width on small screens */
     }
 
+    body.control-panel #server-management-button,
     body.control-panel #sftp-button {
         padding: 6px 12px; /* Smaller padding */
         font-size: 12px; /* Smaller font size */
         width: auto; /* Prevent full-width on small screens */
+    }
+
+    body.control-panel .server-management-dropdown button {
+        width: 180px;
+        margin: 0;
     }
 }
 
@@ -986,7 +1047,16 @@ body.control-panel[data-color-scheme="dark"] button {
     color: #fff;
 }
 
-body[data-color-scheme="dark"] .account-dropdown {
+body.control-panel[data-color-scheme="dark"] #server-management-button {
+    background-color: #3b82f6;
+}
+
+body.control-panel[data-color-scheme="dark"] #server-management-button:hover {
+    background-color: #2563eb;
+}
+
+body[data-color-scheme="dark"] .account-dropdown,
+body[data-color-scheme="dark"] .server-management-dropdown {
     background: #1d1d1d;
     border-color: #333;
 }
@@ -1123,7 +1193,16 @@ body.control-panel[data-color-scheme="light"] h1 {
     color: #333;
 }
 
-body[data-color-scheme="light"] .account-dropdown {
+body.control-panel[data-color-scheme="light"] #server-management-button {
+    background-color: #2563eb;
+}
+
+body.control-panel[data-color-scheme="light"] #server-management-button:hover {
+    background-color: #1d4ed8;
+}
+
+body[data-color-scheme="light"] .account-dropdown,
+body[data-color-scheme="light"] .server-management-dropdown {
     background: #ffffff;
     border-color: #e0e0e0;
 }
