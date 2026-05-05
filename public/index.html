@@ -65,6 +65,7 @@
             <p id="update-modal-summary" class="modal-message"></p>
             <div id="update-mod-warning" class="update-mod-warning hidden"></div>
             <div id="update-java-warning" class="update-java-warning hidden"></div>
+            <div id="update-downgrade-warning" class="update-downgrade-warning hidden"></div>
             <div id="update-conflicts" class="update-conflicts hidden">
                 <h3>Incompatible or Unknown Mods</h3>
                 <ul id="update-conflict-list"></ul>
@@ -72,8 +73,9 @@
             <div class="modal-actions update-modal-actions">
                 <button id="update-cancel-btn">Cancel</button>
                 <button id="update-compatible-btn">Update Server and Only Compatible Mods</button>
-                <button id="update-server-only-btn">Update Server Only and Delete All Mods</button>
+                <button id="update-server-only-btn">Update Server Only and Move All Mods</button>
                 <button id="update-compatible-version-btn" class="hidden">Update Compatible Version</button>
+                <div id="update-compatible-version-options" class="compatible-version-options hidden"></div>
             </div>
         </div>
     </div>
@@ -85,6 +87,32 @@
             <div id="update-summary-content" class="update-summary-content"></div>
             <div class="modal-actions update-summary-actions">
                 <button id="update-summary-close-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="update-advanced-menu" class="update-advanced-menu hidden" role="menu" aria-hidden="true">
+        <button id="update-advanced-open-btn" type="button" role="menuitem">Advanced</button>
+    </div>
+
+    <div id="update-advanced-modal" class="modal hidden" aria-hidden="true">
+        <div class="modal-backdrop" data-close-update-advanced="true"></div>
+        <div class="modal-content update-advanced-modal-content" role="dialog" aria-modal="true" aria-labelledby="update-advanced-title">
+            <h2 id="update-advanced-title">Advanced Version Change</h2>
+            <p id="update-advanced-summary" class="modal-message"></p>
+            <label class="advanced-version-label" for="advanced-version-select">Minecraft Version</label>
+            <select id="advanced-version-select"></select>
+            <div id="advanced-downgrade-warning" class="update-downgrade-warning hidden">
+                Downgrading can cause data loss or corrupt the world. Only continue if you know what you are doing.
+            </div>
+            <label id="advanced-downgrade-ack-row" class="advanced-downgrade-ack hidden">
+                <input type="checkbox" id="advanced-downgrade-ack">
+                I understand the downgrade risk.
+            </label>
+            <div id="advanced-version-error" class="advanced-version-error hidden"></div>
+            <div class="modal-actions update-advanced-actions">
+                <button id="advanced-cancel-btn" type="button">Cancel</button>
+                <button id="advanced-check-btn" type="button">Update</button>
             </div>
         </div>
     </div>

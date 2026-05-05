@@ -24,6 +24,10 @@ const SERVER_STOP_TIMEOUT_MS = 30 * 1000;
 const SMOKE_TEST_LOG_TAIL_BYTES = 4000;
 const SMOKE_TEST_TCP_TIMEOUT_MS = 7000;
 const SMOKE_TEST_POST_CONNECT_WAIT_MS = 1500;
+const ADVANCED_DOWNGRADE_MIN_VERSION = '1.15.2';
+const ADVANCED_DOWNGRADE_MIN_RELEASE_DATE = '2020-04-30';
+const COMPATIBLE_TARGET_RESULT_LIMIT = 5;
+const COMPATIBLE_TARGET_SCAN_LIMIT = 30;
 
 function nowIso() {
   return new Date().toISOString();
@@ -266,7 +270,15 @@ function getRecentLogDelta(content, initialLength) {
   return content.length >= initialLength ? content.slice(initialLength) : content;
 }
 
-function formatModeSummaryLabel(mode, { targetVersion, latestVersion } = {}) {
+function formatModeSummaryLabel(mode, { targetVersion, latestVersion, operation } = {}) {
+  if (operation === 'downgrade') {
+    if (mode === 'server_only_move_all_mods') {
+      return 'Downgrade server version and move all mods out';
+    }
+    if (mode === 'server_and_compatible_mods') {
+      return 'Downgrade server version and keep compatible mods';
+    }
+  }
   const isLatestTarget = Boolean(targetVersion && latestVersion && String(targetVersion) === String(latestVersion));
   if (mode === 'server_only_move_all_mods') {
     return isLatestTarget
@@ -298,13 +310,15 @@ function buildRunSummaryText(completion = {}) {
   const sourceVersion = completion.sourceVersion || 'unknown';
   const targetVersion = completion.targetVersion || 'unknown';
   const latestVersion = completion.latestVersion || null;
+  const operation = completion.operation || 'update';
   const updatedMods = Array.isArray(completion.updatedMods) ? completion.updatedMods : [];
   const movedMods = Array.isArray(completion.movedMods) ? completion.movedMods : [];
   const notUpdatedMods = movedMods.filter(mod => mod && mod.reason !== 'replaced_by_update');
 
   const lines = [
     `Version path: ${sourceVersion} -> ${targetVersion}`,
-    `Mode: ${formatModeSummaryLabel(completion.mode, { targetVersion, latestVersion })}`,
+    `Operation: ${operation === 'downgrade' ? 'downgrade' : 'update'}`,
+    `Mode: ${formatModeSummaryLabel(completion.mode, { targetVersion, latestVersion, operation })}`,
     `Status: ${completion.succeeded ? 'completed' : 'failed'}${completion.rolledBack ? ' (rolled back)' : ''}`,
     `Mods updated: ${updatedMods.length}`,
     `Mods not updated: ${notUpdatedMods.length}`
@@ -447,6 +461,31 @@ function buildVersionReleaseInfo(manifest, versionId) {
     releaseTime,
     releaseDate: releaseTime ? releaseTime.slice(0, 10) : null
   };
+}
+
+function getReleaseEntries(manifest) {
+  return Array.isArray(manifest && manifest.versions)
+    ? manifest.versions.filter(entry => entry && entry.type === 'release' && entry.id)
+    : [];
+}
+
+function getManifestVersionEntry(manifest, versionId) {
+  if (!versionId || !manifest || !Array.isArray(manifest.versions)) {
+    return null;
+  }
+  return manifest.versions.find(entry => entry && entry.id === versionId) || null;
+}
+
+function getReleaseDateInfo(entry) {
+  const releaseTime = normalizeReleaseTime(entry && (entry.releaseTime || entry.time));
+  return {
+    releaseTime,
+    releaseDate: releaseTime ? releaseTime.slice(0, 10) : null
+  };
+}
+
+function normalizeUpdateOperation(operation) {
+  return operation === 'downgrade' ? 'downgrade' : 'update';
 }
 
 function pickStableFabricLoader(loaders) {
@@ -660,83 +699,129 @@ module.exports = function createUpdateService({ state, getWss }) {
     return await fetchJson(entry.url, { retries: 2 });
   }
 
-  async function findRecommendedCompatibleTarget({
+  function buildCandidateEntries({
+    manifest,
     currentVersion,
     latestVersion,
     excludeVersion,
-    javaInfo,
-    manifest: providedManifest
+    operation
   }) {
-    const manifest = providedManifest || await fetchMinecraftVersionManifest();
-    const releaseEntries = Array.isArray(manifest.versions)
-      ? manifest.versions.filter(entry => entry.type === 'release' && entry.id)
-      : [];
-
-    const candidates = releaseEntries.filter(entry => {
+    const normalizedOperation = normalizeUpdateOperation(operation);
+    const releaseEntries = getReleaseEntries(manifest);
+    return releaseEntries.filter(entry => {
       const versionId = entry.id;
       if (!versionId || versionId === excludeVersion) {
         return false;
       }
-      if (compareVersions(versionId, latestVersion) > 0) {
+      if (normalizedOperation === 'downgrade') {
+        return compareVersions(versionId, currentVersion) < 0
+          && compareVersions(versionId, ADVANCED_DOWNGRADE_MIN_VERSION) >= 0;
+      }
+      if (latestVersion && compareVersions(versionId, latestVersion) > 0) {
         return false;
       }
       return compareVersions(versionId, currentVersion) > 0;
     });
+  }
 
-    // Keep search bounded to avoid expensive scans over very large release spans.
-    const limitedCandidates = candidates.slice(0, 15);
-    for (const candidateEntry of limitedCandidates) {
-      const candidate = candidateEntry.id;
-      // eslint-disable-next-line no-await-in-loop
-      const fabricSupport = await fetchFabricSupport(candidate).catch(() => null);
-      if (!fabricSupport || !fabricSupport.supported) {
-        continue;
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      const mods = await resolveModsForTarget({
-        modsDir: getModsPath(),
-        targetVersion: candidate,
-        loader: 'fabric'
-      }).catch(() => null);
-      if (!mods || mods.hasConflicts) {
-        continue;
-      }
-
-      let details = null;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        details = await fetchMinecraftVersionDetailsFromManifest(manifest, candidate);
-      } catch (_) {
-        continue;
-      }
-      const javaRequiredMajor = details
-        && details.javaVersion
-        && Number.isFinite(Number(details.javaVersion.majorVersion))
-        ? Number(details.javaVersion.majorVersion)
-        : 8;
-
-      const javaDetectedMajor = javaInfo && Number.isFinite(javaInfo.detectedMajor)
-        ? javaInfo.detectedMajor
-        : null;
-      const javaCompatible = javaDetectedMajor != null && javaDetectedMajor >= javaRequiredMajor;
-      const targetReleaseTime = normalizeReleaseTime(candidateEntry.releaseTime || candidateEntry.time || null);
-
-      return {
-        targetVersion: candidate,
-        modsSummary: mods.summary,
-        javaRequiredMajor,
-        javaDetectedMajor,
-        javaCompatible,
-        blockingReasons: javaCompatible ? [] : ['blocked_by_java'],
-        targetReleaseTime,
-        targetReleaseDate: targetReleaseTime
-          ? targetReleaseTime.slice(0, 10)
-          : null
-      };
+  async function inspectCompatibleTargetCandidate({
+    manifest,
+    candidateEntry,
+    javaInfo
+  }) {
+    const candidate = candidateEntry.id;
+    const fabricSupport = await fetchFabricSupport(candidate).catch(() => null);
+    if (!fabricSupport || !fabricSupport.supported) {
+      return null;
     }
 
-    return null;
+    const mods = await resolveModsForTarget({
+      modsDir: getModsPath(),
+      targetVersion: candidate,
+      loader: 'fabric'
+    }).catch(() => null);
+    if (!mods || mods.hasConflicts) {
+      return null;
+    }
+
+    let details = null;
+    try {
+      details = await fetchMinecraftVersionDetailsFromManifest(manifest, candidate);
+    } catch (_) {
+      return null;
+    }
+
+    const javaRequiredMajor = details
+      && details.javaVersion
+      && Number.isFinite(Number(details.javaVersion.majorVersion))
+      ? Number(details.javaVersion.majorVersion)
+      : 8;
+    const javaDetectedMajor = javaInfo && Number.isFinite(javaInfo.detectedMajor)
+      ? javaInfo.detectedMajor
+      : null;
+    const javaCompatible = javaDetectedMajor != null && javaDetectedMajor >= javaRequiredMajor;
+    const releaseInfo = getReleaseDateInfo(candidateEntry);
+
+    return {
+      targetVersion: candidate,
+      modsSummary: mods.summary,
+      javaRequiredMajor,
+      javaDetectedMajor,
+      javaCompatible,
+      blockingReasons: javaCompatible ? [] : ['blocked_by_java'],
+      targetReleaseTime: releaseInfo.releaseTime,
+      targetReleaseDate: releaseInfo.releaseDate
+    };
+  }
+
+  async function findCompatibleAlternativeTargets({
+    currentVersion,
+    latestVersion,
+    excludeVersion,
+    javaInfo,
+    manifest: providedManifest,
+    operation = 'update',
+    limit = COMPATIBLE_TARGET_RESULT_LIMIT,
+    scanLimit = COMPATIBLE_TARGET_SCAN_LIMIT
+  }) {
+    const manifest = providedManifest || await fetchMinecraftVersionManifest();
+    const candidates = buildCandidateEntries({
+      manifest,
+      currentVersion,
+      latestVersion,
+      excludeVersion,
+      operation
+    });
+
+    const results = [];
+    const limitedCandidates = candidates.slice(0, Math.max(1, scanLimit));
+    for (const candidateEntry of limitedCandidates) {
+      // eslint-disable-next-line no-await-in-loop
+      const candidate = await inspectCompatibleTargetCandidate({
+        manifest,
+        candidateEntry,
+        javaInfo
+      });
+      if (!candidate) {
+        continue;
+      }
+      results.push(candidate);
+      if (results.length >= limit) {
+        break;
+      }
+    }
+
+    return results;
+  }
+
+  async function findRecommendedCompatibleTarget(options) {
+    const [candidate] = await findCompatibleAlternativeTargets({
+      ...options,
+      operation: 'update',
+      limit: 1,
+      scanLimit: 15
+    });
+    return candidate || null;
   }
 
   async function fetchFabricSupport(targetVersion) {
@@ -988,20 +1073,85 @@ module.exports = function createUpdateService({ state, getWss }) {
     };
   }
 
+  async function listAdvancedTargets({ direction = 'update' } = {}) {
+    const operation = normalizeUpdateOperation(direction);
+    const status = await getStatus({ forceRefresh: true });
+    const manifest = await fetchMinecraftVersionManifest();
+    const latestBoundary = status.latestMinecraftVersion || status.latestVersion || null;
+    const releaseEntries = getReleaseEntries(manifest);
+    const versions = releaseEntries
+      .filter(entry => {
+        const versionId = entry.id;
+        if (!versionId || versionId === status.currentVersion) {
+          return false;
+        }
+        if (operation === 'downgrade') {
+          return compareVersions(versionId, status.currentVersion) < 0
+            && compareVersions(versionId, ADVANCED_DOWNGRADE_MIN_VERSION) >= 0;
+        }
+        if (latestBoundary && compareVersions(versionId, latestBoundary) > 0) {
+          return false;
+        }
+        return compareVersions(versionId, status.currentVersion) > 0;
+      })
+      .map(entry => {
+        const releaseInfo = getReleaseDateInfo(entry);
+        return {
+          version: entry.id,
+          releaseTime: releaseInfo.releaseTime,
+          releaseDate: releaseInfo.releaseDate
+        };
+      });
+
+    return {
+      direction: operation,
+      currentVersion: status.currentVersion,
+      latestVersion: status.latestVersion || null,
+      latestMinecraftVersion: status.latestMinecraftVersion || null,
+      minDowngradeVersion: ADVANCED_DOWNGRADE_MIN_VERSION,
+      minDowngradeReleaseDate: ADVANCED_DOWNGRADE_MIN_RELEASE_DATE,
+      versions
+    };
+  }
+
   async function createPreflightCheck({
-    targetVersion
+    targetVersion,
+    operation = 'update',
+    advanced = false
   } = {}) {
+    const normalizedOperation = normalizeUpdateOperation(operation);
     const status = await getStatus({ forceRefresh: true });
     const latestVersion = status.latestVersion;
+    const latestMinecraftVersion = status.latestMinecraftVersion || latestVersion || null;
     const currentVersion = status.currentVersion;
     const resolvedTarget = targetVersion || latestVersion;
-    const updateAvailable = compareVersions(resolvedTarget, currentVersion) > 0;
+    if (advanced && !targetVersion) {
+      throw new Error('targetVersion is required for advanced version changes.');
+    }
+    if (!resolvedTarget) {
+      throw new Error('No target Minecraft version could be resolved.');
+    }
+
+    const comparisonToCurrent = compareVersions(resolvedTarget, currentVersion);
+    const updateAvailable = comparisonToCurrent > 0;
+    const versionChangeAvailable = normalizedOperation === 'downgrade'
+      ? comparisonToCurrent < 0
+      : comparisonToCurrent > 0;
     const blockingReasons = [];
     let minecraftManifest = null;
     try {
       minecraftManifest = await fetchMinecraftVersionManifest();
     } catch (_) {
       minecraftManifest = null;
+    }
+
+    const targetManifestEntry = getManifestVersionEntry(minecraftManifest, resolvedTarget);
+    if (minecraftManifest && (!targetManifestEntry || targetManifestEntry.type !== 'release')) {
+      throw new Error(`Minecraft ${resolvedTarget} is not an allowed release target.`);
+    }
+
+    if (advanced && normalizedOperation === 'downgrade' && compareVersions(resolvedTarget, ADVANCED_DOWNGRADE_MIN_VERSION) < 0) {
+      throw new Error(`Downgrades before Minecraft ${ADVANCED_DOWNGRADE_MIN_VERSION} are not allowed.`);
     }
 
     let minecraftDetails = null;
@@ -1075,13 +1225,19 @@ module.exports = function createUpdateService({ state, getWss }) {
     }
 
     const hasConflicts = Boolean(mods.hasConflicts);
-    const canApply = updateAvailable && blockingReasons.length === 0;
+    const canApply = versionChangeAvailable && blockingReasons.length === 0;
     const report = {
       createdAt: nowIso(),
       currentVersion,
       latestVersion,
+      latestMinecraftVersion,
       targetVersion: resolvedTarget,
+      operation: normalizedOperation,
+      advanced: Boolean(advanced),
+      downgradeMinVersion: ADVANCED_DOWNGRADE_MIN_VERSION,
+      downgradeMinReleaseDate: ADVANCED_DOWNGRADE_MIN_RELEASE_DATE,
       updateAvailable,
+      versionChangeAvailable,
       blockingReasons,
       canApply,
       java: {
@@ -1097,7 +1253,9 @@ module.exports = function createUpdateService({ state, getWss }) {
       versionInfo: {
         current: buildVersionReleaseInfo(minecraftManifest, currentVersion),
         target: buildVersionReleaseInfo(minecraftManifest, resolvedTarget),
-        latest: buildVersionReleaseInfo(minecraftManifest, latestVersion)
+        latest: buildVersionReleaseInfo(minecraftManifest, latestVersion),
+        latestMinecraft: buildVersionReleaseInfo(minecraftManifest, latestMinecraftVersion),
+        downgradeMin: buildVersionReleaseInfo(minecraftManifest, ADVANCED_DOWNGRADE_MIN_VERSION)
       },
       options: {
         cancel: true,
@@ -1128,6 +1286,22 @@ module.exports = function createUpdateService({ state, getWss }) {
         }
       } catch (err) {
         report.recommendedTargetLookupError = err.message;
+      }
+    }
+
+    if (advanced && versionChangeAvailable && hasConflicts) {
+      try {
+        report.compatibleTargets = await findCompatibleAlternativeTargets({
+          currentVersion,
+          latestVersion: normalizedOperation === 'update' ? (latestMinecraftVersion || latestVersion) : latestVersion,
+          excludeVersion: resolvedTarget,
+          javaInfo,
+          manifest: minecraftManifest,
+          operation: normalizedOperation
+        });
+      } catch (err) {
+        report.compatibleTargetLookupError = err.message;
+        report.compatibleTargets = [];
       }
     }
 
@@ -1554,7 +1728,8 @@ module.exports = function createUpdateService({ state, getWss }) {
   async function applyUpdate({
     checkId,
     mode,
-    actorUserId
+    actorUserId,
+    acknowledgeDowngradeRisk = false
   }) {
     const allowedModes = new Set([
       'server_and_compatible_mods',
@@ -1574,8 +1749,15 @@ module.exports = function createUpdateService({ state, getWss }) {
     }
 
     const report = check.report;
-    if (!report.updateAvailable) {
-      throw new Error('No new Minecraft update is available.');
+    const operation = normalizeUpdateOperation(report.operation);
+    const hasVersionChange = report.versionChangeAvailable !== undefined
+      ? Boolean(report.versionChangeAvailable)
+      : Boolean(report.updateAvailable);
+    if (!hasVersionChange) {
+      throw new Error('Selected Minecraft version is not an eligible version change.');
+    }
+    if (operation === 'downgrade' && acknowledgeDowngradeRisk !== true) {
+      throw new Error('Downgrade risk acknowledgement is required.');
     }
     if (Array.isArray(report.blockingReasons) && report.blockingReasons.length > 0) {
       throw new Error(`Preflight is blocked: ${report.blockingReasons.join(', ')}`);
@@ -1601,6 +1783,7 @@ module.exports = function createUpdateService({ state, getWss }) {
       sourceVersion: report.currentVersion || null,
       targetVersion: report.targetVersion,
       latestVersion: report.latestVersion || null,
+      operation,
       mode,
       succeeded: false,
       rolledBack: false,
@@ -1857,6 +2040,7 @@ module.exports = function createUpdateService({ state, getWss }) {
     initialize,
     startStatusRefreshTimer,
     getStatus,
+    listAdvancedTargets,
     createPreflightCheck,
     getCheckById,
     applyUpdate,

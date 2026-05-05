@@ -150,7 +150,17 @@ async function fetchUpdateHistory() {
     return res.json();
 }
 
-function formatUpdateModeLabel(mode) {
+function formatUpdateModeLabel(mode, operation = 'update') {
+    if (operation === 'downgrade') {
+        switch (mode) {
+            case 'server_and_compatible_mods':
+                return 'Downgrade + Compatible Mods';
+            case 'server_only_move_all_mods':
+                return 'Downgrade + Move Mods';
+            default:
+                return mode || 'Unknown';
+        }
+    }
     switch (mode) {
         case 'server_and_compatible_mods':
             return 'Server + Compatible Mods';
@@ -171,7 +181,15 @@ function extractFileName(filePath) {
     return parts[parts.length - 1] || String(filePath);
 }
 
-function formatSummaryMode(mode) {
+function formatSummaryMode(mode, operation = 'update') {
+    if (operation === 'downgrade') {
+        if (mode === 'server_only_move_all_mods') {
+            return 'Downgrade server only and move all mods';
+        }
+        if (mode === 'server_and_compatible_mods') {
+            return 'Downgrade server and keep only compatible mods';
+        }
+    }
     if (mode === 'server_only_move_all_mods') {
         return 'Update server only and move all mods';
     }
@@ -231,8 +249,11 @@ function openUpdateSummaryModal(result) {
     const notUpdatedMods = movedMods.filter(mod => mod.reason !== 'replaced_by_update');
     const preCount = Array.isArray(result && result.preModManifest) ? result.preModManifest.length : null;
     const postCount = Array.isArray(result && result.postModManifest) ? result.postModManifest.length : null;
+    const operation = result && result.operation === 'downgrade' ? 'downgrade' : 'update';
 
-    title.textContent = result && result.succeeded === false ? 'Update Failed Summary' : 'Update Summary';
+    title.textContent = result && result.succeeded === false
+        ? `${operation === 'downgrade' ? 'Downgrade' : 'Update'} Failed Summary`
+        : `${operation === 'downgrade' ? 'Downgrade' : 'Update'} Summary`;
 
     const overview = document.createElement('section');
     overview.className = 'update-summary-section';
@@ -242,7 +263,8 @@ function openUpdateSummaryModal(result) {
 
     const overviewLines = [
         `Server version: ${result && result.targetVersion ? result.targetVersion : 'unknown'}`,
-        `Mode: ${formatSummaryMode(result && result.mode)}`,
+        `Operation: ${operation}`,
+        `Mode: ${formatSummaryMode(result && result.mode, operation)}`,
         `Mods updated: ${updatedMods.length}`,
         `Mods not updated: ${notUpdatedMods.length}`,
         `Archive folder: ${result && result.archiveDir ? result.archiveDir : 'Not created'}`,
@@ -303,6 +325,7 @@ function openUpdateSummaryFromRun(run) {
     const result = {
         ...summary,
         mode: summary.mode || run.mode || null,
+        operation: summary.operation || run.operation || 'update',
         targetVersion: summary.targetVersion || run.targetVersion || null
     };
     openUpdateSummaryModal(result);
@@ -341,7 +364,7 @@ function renderUpdateHistory(runs) {
         targetCell.title = targetCell.textContent;
 
         const modeCell = document.createElement('td');
-        const modeText = run.modeLabel || formatUpdateModeLabel(run.mode);
+        const modeText = run.modeLabel || formatUpdateModeLabel(run.mode, run.operation || 'update');
         modeCell.title = modeText;
         const modeSpan = document.createElement('span');
         modeSpan.classList.add('mode-text');

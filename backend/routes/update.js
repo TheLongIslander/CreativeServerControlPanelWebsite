@@ -52,6 +52,59 @@ module.exports = function createUpdateRoutes({ updateService }) {
     }
   });
 
+  router.get('/updates/advanced/versions', authenticateJWT, requireOnboarded, async (req, res) => {
+    try {
+      const direction = req.query && req.query.direction === 'downgrade' ? 'downgrade' : 'update';
+      const payload = await updateService.listAdvancedTargets({ direction });
+      res.json(payload);
+    } catch (err) {
+      console.error('Failed to load advanced update versions:', err);
+      res.status(500).json({ message: 'Failed to load advanced update versions.' });
+    }
+  });
+
+  router.post('/updates/advanced/check', authenticateJWT, requireOnboarded, async (req, res) => {
+    try {
+      const targetVersion = req.body && typeof req.body.targetVersion === 'string'
+        ? req.body.targetVersion.trim()
+        : '';
+      const direction = req.body && req.body.direction === 'downgrade' ? 'downgrade' : 'update';
+      if (!targetVersion) {
+        return res.status(400).json({ message: 'targetVersion is required.' });
+      }
+
+      const check = await updateService.createPreflightCheck({
+        targetVersion,
+        operation: direction,
+        advanced: true
+      });
+      try {
+        await usersDb.logAuditEvent({
+          actorUserId: req.user.id,
+          targetUserId: null,
+          action: 'server.update.advanced_check',
+          metadata: {
+            checkId: check.checkId,
+            targetVersion: check.targetVersion,
+            operation: check.operation,
+            canApply: check.canApply
+          },
+          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+        });
+      } catch (logErr) {
+        console.warn('Failed to log advanced update check audit event:', logErr.message);
+      }
+      res.json(check);
+    } catch (err) {
+      const msg = err && err.message ? err.message : 'Failed to run advanced update preflight check.';
+      const isBadRequest = msg.includes('required')
+        || msg.includes('not allowed')
+        || msg.includes('not an allowed release');
+      console.error('Failed to run advanced update preflight:', err);
+      res.status(isBadRequest ? 400 : 500).json({ message: msg });
+    }
+  });
+
   router.get('/updates/check/:id', authenticateJWT, requireOnboarded, async (req, res) => {
     const checkId = Number(req.params.id);
     if (!Number.isFinite(checkId) || checkId <= 0) {
@@ -72,6 +125,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
   router.post('/updates/apply', authenticateJWT, requireOnboarded, async (req, res) => {
     const checkId = Number(req.body && req.body.checkId);
     const mode = req.body && req.body.mode;
+    const acknowledgeDowngradeRisk = Boolean(req.body && req.body.acknowledgeDowngradeRisk);
 
     if (!Number.isFinite(checkId) || checkId <= 0) {
       return res.status(400).json({ message: 'checkId is required.' });
@@ -84,7 +138,8 @@ module.exports = function createUpdateRoutes({ updateService }) {
       const result = await updateService.applyUpdate({
         checkId,
         mode,
-        actorUserId: req.user.id
+        actorUserId: req.user.id,
+        acknowledgeDowngradeRisk
       });
       try {
         await usersDb.logAuditEvent({
@@ -94,6 +149,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
           metadata: {
             checkId,
             mode,
+            operation: result.operation || 'update',
             targetVersion: result.targetVersion,
             archiveDir: result.archiveDir || null,
             movedMods: Array.isArray(result.movedMods) ? result.movedMods.length : 0,
@@ -132,6 +188,9 @@ module.exports = function createUpdateRoutes({ updateService }) {
         return res.status(409).json({ message: msg });
       }
       if (msg.includes('blocked')) {
+        return res.status(409).json({ message: msg });
+      }
+      if (msg.includes('acknowledgement') || msg.includes('eligible version change')) {
         return res.status(409).json({ message: msg });
       }
       console.error('Failed to apply update:', err);

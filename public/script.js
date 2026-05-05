@@ -19,6 +19,10 @@ const BACKGROUND_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
 const UPDATE_STATUS_POLL_INTERVAL_MS = 5 * 60 * 1000;
 let updateStatusPollTimer = null;
 let updateStatusPollInFlight = false;
+let advancedUpdateDirection = 'update';
+const advancedVersionCache = {
+    all: null
+};
 
 function redirectToLogin() {
     localStorage.removeItem('token');
@@ -147,6 +151,27 @@ function formatVersionWithRelease(versionInfo, fallbackVersion) {
         return `${version} (release date unknown)`;
     }
     return `${version} (released ${releaseLabel})`;
+}
+
+function getCheckOperation(check) {
+    return check && check.operation === 'downgrade' ? 'downgrade' : 'update';
+}
+
+function getOperationVerb(operation, lower = false) {
+    const text = operation === 'downgrade' ? 'Downgrade' : 'Update';
+    return lower ? text.toLowerCase() : text;
+}
+
+function formatCompatibleTargetButtonLabel(target, operation) {
+    const version = target && target.targetVersion ? target.targetVersion : 'target';
+    const releaseLabel = formatReleaseDateLabel(
+        target && target.targetReleaseTime,
+        target && target.targetReleaseDate
+    );
+    const prefix = operation === 'downgrade' ? 'Downgrade Compatible Version' : 'Update Compatible Version';
+    return releaseLabel
+        ? `${prefix} (${version} - ${releaseLabel})`
+        : `${prefix} (${version})`;
 }
 
 function setUpdateButtonSeverity(severity) {
@@ -412,6 +437,9 @@ function setUpdateActionDisabled(disabled) {
     if (compatibleVersionBtn) {
         compatibleVersionBtn.disabled = disabled;
     }
+    document.querySelectorAll('.compatible-version-option-btn').forEach(node => {
+        node.disabled = disabled;
+    });
 }
 
 function setMainServerControlsDisabled(disabled) {
@@ -444,7 +472,9 @@ function isModalVisible(modalId) {
 }
 
 function syncModalOpenState() {
-    const hasVisibleModal = isModalVisible('update-modal') || isModalVisible('update-summary-modal');
+    const hasVisibleModal = isModalVisible('update-modal')
+        || isModalVisible('update-summary-modal')
+        || isModalVisible('update-advanced-modal');
     document.body.classList.toggle('modal-open', hasVisibleModal);
 }
 
@@ -460,6 +490,16 @@ function closeUpdateModal() {
 
 function closeUpdateSummaryModal() {
     const modal = document.getElementById('update-summary-modal');
+    if (!modal) {
+        return;
+    }
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    syncModalOpenState();
+}
+
+function closeUpdateAdvancedModal() {
+    const modal = document.getElementById('update-advanced-modal');
     if (!modal) {
         return;
     }
@@ -491,7 +531,15 @@ function isAdminUser() {
     return Boolean(currentUser && currentUser.role === 'admin');
 }
 
-function formatUpdateMode(mode) {
+function formatUpdateMode(mode, operation = 'update') {
+    if (operation === 'downgrade') {
+        if (mode === 'server_only_move_all_mods') {
+            return 'Downgrade server only and move all mods';
+        }
+        if (mode === 'server_and_compatible_mods') {
+            return 'Downgrade server and keep only compatible mods';
+        }
+    }
     if (mode === 'server_only_move_all_mods') {
         return 'Update server only and move all mods';
     }
@@ -553,8 +601,11 @@ function openUpdateSummaryModal(result) {
     const postCount = Array.isArray(result && result.postModManifest) ? result.postModManifest.length : null;
     const adminView = isAdminUser();
     const archiveFolderName = result && result.archiveDir ? extractFileName(result.archiveDir) : null;
+    const operation = result && result.operation === 'downgrade' ? 'downgrade' : 'update';
 
-    title.textContent = result && result.succeeded === false ? 'Update Failed Summary' : 'Update Summary';
+    title.textContent = result && result.succeeded === false
+        ? `${getOperationVerb(operation)} Failed Summary`
+        : `${getOperationVerb(operation)} Summary`;
 
     const overview = document.createElement('section');
     overview.className = 'update-summary-section';
@@ -564,7 +615,8 @@ function openUpdateSummaryModal(result) {
 
     const overviewLines = [
         `Server version: ${result && result.targetVersion ? result.targetVersion : 'unknown'}`,
-        `Mode: ${formatUpdateMode(result && result.mode)}`,
+        `Operation: ${operation}`,
+        `Mode: ${formatUpdateMode(result && result.mode, operation)}`,
         `Mods updated: ${updatedMods.length}`,
         `Mods not updated: ${notUpdatedMods.length}`,
         `Archive folder: ${result && result.archiveDir ? (adminView ? result.archiveDir : `${archiveFolderName} (inside server directory)`) : 'Not created'}`,
@@ -625,7 +677,8 @@ function describeBlockingReasons(reasons) {
         blocked_by_disk: 'Insufficient disk space for safe update + rollback.',
         blocked_by_fabric_support: 'Fabric loader support for the target version was not found.',
         blocked_by_mod_scan_failure: 'Mod compatibility scan failed.',
-        blocked_by_minecraft_manifest: 'Minecraft version metadata lookup failed.'
+        blocked_by_minecraft_manifest: 'Minecraft version metadata lookup failed.',
+        blocked_by_version_direction: 'Selected target is not an eligible version change.'
     };
     return (reasons || []).map(reason => lookup[reason] || reason);
 }
@@ -639,23 +692,61 @@ function getVersionInfo(check, key, fallbackVersion) {
     };
 }
 
+function renderCompatibleTargetOptions(check, container) {
+    if (!container) {
+        return false;
+    }
+    container.innerHTML = '';
+    const operation = getCheckOperation(check);
+    const targets = Array.isArray(check && check.compatibleTargets)
+        ? check.compatibleTargets
+        : [];
+    const usableTargets = targets.filter(target => target && target.targetVersion);
+    if (!usableTargets.length) {
+        container.classList.add('hidden');
+        return false;
+    }
+
+    usableTargets.forEach(target => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'compatible-version-option-btn';
+        button.textContent = formatCompatibleTargetButtonLabel(target, operation);
+        button.dataset.targetVersion = target.targetVersion;
+        button.dataset.direction = operation;
+        button.dataset.advanced = 'true';
+        button.disabled = target.javaCompatible === false;
+        if (button.disabled) {
+            button.title = 'Java is too old for this target.';
+        }
+        button.addEventListener('click', useCompatibleVersionTarget);
+        container.appendChild(button);
+    });
+    container.classList.remove('hidden');
+    return true;
+}
+
 function openUpdateModal(check) {
     activeUpdateCheck = check;
     const modal = document.getElementById('update-modal');
     const summary = document.getElementById('update-modal-summary');
     const modWarning = document.getElementById('update-mod-warning');
     const javaWarning = document.getElementById('update-java-warning');
+    const downgradeWarning = document.getElementById('update-downgrade-warning');
     const conflicts = document.getElementById('update-conflicts');
     const conflictList = document.getElementById('update-conflict-list');
     const compatibleBtn = document.getElementById('update-compatible-btn');
     const serverOnlyBtn = document.getElementById('update-server-only-btn');
     const compatibleVersionBtn = document.getElementById('update-compatible-version-btn');
+    const compatibleVersionOptions = document.getElementById('update-compatible-version-options');
     const cancelBtn = document.getElementById('update-cancel-btn');
+    const title = document.getElementById('update-modal-title');
 
     if (!modal || !summary || !modWarning || !javaWarning || !conflicts || !conflictList || !compatibleBtn || !serverOnlyBtn || !compatibleVersionBtn || !cancelBtn) {
         return;
     }
 
+    const operation = getCheckOperation(check);
     const conflictMods = getConflictMods(check);
     const hasConflicts = conflictMods.length > 0;
     const canApply = Boolean(check && check.canApply);
@@ -664,7 +755,20 @@ function openUpdateModal(check) {
     const currentInfo = getVersionInfo(check, 'current', check.currentVersion);
     const targetInfo = getVersionInfo(check, 'target', check.targetVersion);
 
+    if (title) {
+        title.textContent = operation === 'downgrade' ? 'Server Downgrade' : 'Server Update';
+    }
     summary.textContent = `Current: ${formatVersionWithRelease(currentInfo, check.currentVersion)} | Target: ${formatVersionWithRelease(targetInfo, check.targetVersion)}.`;
+
+    if (downgradeWarning) {
+        if (operation === 'downgrade') {
+            downgradeWarning.classList.remove('hidden');
+            downgradeWarning.textContent = 'Downgrading can cause data loss or corrupt the world. The updater will create a snapshot first, but you should only continue if you know what you are doing.';
+        } else {
+            downgradeWarning.classList.add('hidden');
+            downgradeWarning.textContent = '';
+        }
+    }
 
     if (hasConflicts) {
         modWarning.classList.remove('hidden');
@@ -710,8 +814,12 @@ function openUpdateModal(check) {
     compatibleBtn.classList.remove('hidden');
     serverOnlyBtn.classList.remove('hidden');
     compatibleVersionBtn.classList.add('hidden');
-    compatibleBtn.textContent = 'Update Server and Only Compatible Mods';
-    serverOnlyBtn.textContent = 'Update Server Only and Delete All Mods';
+    if (compatibleVersionOptions) {
+        compatibleVersionOptions.innerHTML = '';
+        compatibleVersionOptions.classList.add('hidden');
+    }
+    compatibleBtn.textContent = `${getOperationVerb(operation)} Server and Only Compatible Mods`;
+    serverOnlyBtn.textContent = `${getOperationVerb(operation)} Server Only and Move All Mods`;
     cancelBtn.disabled = false;
     serverOnlyBtn.disabled = !canApply;
     compatibleBtn.disabled = !canApply;
@@ -720,18 +828,21 @@ function openUpdateModal(check) {
         serverOnlyBtn.classList.add('hidden');
     }
 
-    if (check.recommendedTargetVersion && hasConflicts) {
+    const hasAdvancedCompatibleTargets = hasConflicts && renderCompatibleTargetOptions(check, compatibleVersionOptions);
+    if (!hasAdvancedCompatibleTargets && check.recommendedTargetVersion && hasConflicts) {
         compatibleVersionBtn.classList.remove('hidden');
         const recommendedReleaseLabel = formatReleaseDateLabel(
             check.recommendedTargetReleaseTime,
             check.recommendedTargetReleaseDate
         );
         if (recommendedReleaseLabel) {
-            compatibleVersionBtn.textContent = `Update Compatible Version (${check.recommendedTargetVersion} - ${recommendedReleaseLabel})`;
+            compatibleVersionBtn.textContent = `${getOperationVerb(operation)} Compatible Version (${check.recommendedTargetVersion} - ${recommendedReleaseLabel})`;
         } else {
-            compatibleVersionBtn.textContent = `Update Compatible Version (${check.recommendedTargetVersion})`;
+            compatibleVersionBtn.textContent = `${getOperationVerb(operation)} Compatible Version (${check.recommendedTargetVersion})`;
         }
         compatibleVersionBtn.dataset.targetVersion = check.recommendedTargetVersion;
+        compatibleVersionBtn.dataset.direction = operation;
+        compatibleVersionBtn.dataset.advanced = check.advanced ? 'true' : 'false';
         if (check.recommendedTargetCanApply === false) {
             compatibleVersionBtn.disabled = true;
         } else {
@@ -740,6 +851,8 @@ function openUpdateModal(check) {
     } else {
         compatibleVersionBtn.classList.add('hidden');
         compatibleVersionBtn.removeAttribute('data-target-version');
+        compatibleVersionBtn.removeAttribute('data-direction');
+        compatibleVersionBtn.removeAttribute('data-advanced');
     }
 
     modal.classList.remove('hidden');
@@ -751,11 +864,14 @@ async function runUpdatePreflight() {
     return runUpdatePreflightForTarget(null);
 }
 
-async function runUpdatePreflightForTarget(targetVersion) {
+async function runUpdatePreflightForTarget(targetVersion, options = {}) {
     const button = document.getElementById('update-server');
     if (!button || isApplyingUpdate) {
         return null;
     }
+    const advanced = Boolean(options.advanced);
+    const direction = options.direction === 'downgrade' ? 'downgrade' : 'update';
+    const acknowledgeDowngradeRisk = Boolean(options.acknowledgeDowngradeRisk);
 
     const token = getAuthToken();
     if (!token) {
@@ -769,10 +885,12 @@ async function runUpdatePreflightForTarget(targetVersion) {
     setUpdateButtonLabel('Checking...', { includeSeverityIcon: false });
 
     try {
-        const response = await fetch('/updates/check', {
+        const response = await fetch(advanced ? '/updates/advanced/check' : '/updates/check', {
             method: 'POST',
             headers: getAuthHeaders(true),
-            body: JSON.stringify(targetVersion ? { targetVersion } : {})
+            body: JSON.stringify(advanced
+                ? { targetVersion, direction }
+                : (targetVersion ? { targetVersion } : {}))
         });
         if (response.status === 428) {
             alert('You must set a new password before continuing.');
@@ -790,7 +908,14 @@ async function runUpdatePreflightForTarget(targetVersion) {
         }
 
         const check = await response.json();
-        if (!check.updateAvailable) {
+        const hasVersionChange = advanced
+            ? Boolean(check.versionChangeAvailable)
+            : Boolean(check.updateAvailable);
+        if (!hasVersionChange) {
+            if (advanced) {
+                setUpdateStatusMessage('Selected version is not an eligible version change.', true);
+                return null;
+            }
             latestUpdateStatus = {
                 ...(latestUpdateStatus || {}),
                 updateAvailable: false,
@@ -811,7 +936,10 @@ async function runUpdatePreflightForTarget(targetVersion) {
         backgroundPreflightLastAt = Date.now();
 
         if (!hasConflicts && check.canApply) {
-            activeUpdateCheck = check;
+            activeUpdateCheck = {
+                ...check,
+                downgradeRiskAcknowledged: acknowledgeDowngradeRisk
+            };
             const targetReleaseLabel = formatReleaseDateLabel(
                 check && check.versionInfo && check.versionInfo.target
                     ? check.versionInfo.target.releaseTime
@@ -820,15 +948,19 @@ async function runUpdatePreflightForTarget(targetVersion) {
                     ? check.versionInfo.target.releaseDate
                     : null
             );
+            const operation = getCheckOperation(check);
             if (targetReleaseLabel) {
-                setUpdateStatusMessage(`No compatibility issues detected. Starting update to ${check.targetVersion} (released ${targetReleaseLabel})...`);
+                setUpdateStatusMessage(`No compatibility issues detected. Starting ${getOperationVerb(operation, true)} to ${check.targetVersion} (released ${targetReleaseLabel})...`);
             } else {
-                setUpdateStatusMessage(`No compatibility issues detected. Starting update to ${check.targetVersion}...`);
+                setUpdateStatusMessage(`No compatibility issues detected. Starting ${getOperationVerb(operation, true)} to ${check.targetVersion}...`);
             }
             await applyUpdateMode('server_and_compatible_mods');
             return check;
         }
 
+        if (advanced) {
+            check.downgradeRiskAcknowledged = acknowledgeDowngradeRisk;
+        }
         openUpdateModal(check);
         return check;
     } catch (err) {
@@ -865,11 +997,13 @@ async function applyUpdateMode(mode) {
     }
 
     isApplyingUpdate = true;
-    startUpdateButtonAnimation('Updating');
+    const operation = getCheckOperation(activeUpdateCheck);
+    startUpdateButtonAnimation(operation === 'downgrade' ? 'Downgrading' : 'Updating');
     setUpdateActionDisabled(true);
     setMainServerControlsDisabled(true);
     closeUpdateModal();
-    setUpdateStatusMessage('Update started. Waiting for completion...');
+    closeUpdateAdvancedModal();
+    setUpdateStatusMessage(`${getOperationVerb(operation)} started. Waiting for completion...`);
 
     try {
         const response = await fetch('/updates/apply', {
@@ -877,7 +1011,10 @@ async function applyUpdateMode(mode) {
             headers: getAuthHeaders(true),
             body: JSON.stringify({
                 checkId: activeUpdateCheck.checkId,
-                mode
+                mode,
+                acknowledgeDowngradeRisk: operation === 'downgrade'
+                    ? Boolean(activeUpdateCheck.downgradeRiskAcknowledged)
+                    : undefined
             })
         });
 
@@ -915,22 +1052,297 @@ async function applyUpdateMode(mode) {
     }
 }
 
-async function useCompatibleVersionTarget() {
-    const button = document.getElementById('update-compatible-version-btn');
+async function useCompatibleVersionTarget(event) {
+    const button = event && event.currentTarget
+        ? event.currentTarget
+        : document.getElementById('update-compatible-version-btn');
     const targetVersion = button ? button.dataset.targetVersion : null;
     if (!targetVersion || isApplyingUpdate) {
         return;
     }
+    const advanced = button.dataset.advanced === 'true';
+    const direction = button.dataset.direction || getCheckOperation(activeUpdateCheck);
+    const acknowledgeDowngradeRisk = Boolean(activeUpdateCheck && activeUpdateCheck.downgradeRiskAcknowledged);
     closeUpdateModal();
     setUpdateStatusMessage(`Checking compatible version ${targetVersion}...`);
-    await runUpdatePreflightForTarget(targetVersion);
+    await runUpdatePreflightForTarget(targetVersion, {
+        advanced,
+        direction,
+        acknowledgeDowngradeRisk
+    });
+}
+
+function closeUpdateAdvancedMenu() {
+    const menu = document.getElementById('update-advanced-menu');
+    if (!menu) {
+        return;
+    }
+    menu.classList.add('hidden');
+    menu.setAttribute('aria-hidden', 'true');
+}
+
+function openUpdateAdvancedMenu(event) {
+    const menu = document.getElementById('update-advanced-menu');
+    if (!menu || isApplyingUpdate || (latestUpdateStatus && latestUpdateStatus.updateInProgress)) {
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const padding = 8;
+    const anchor = event.currentTarget || document.getElementById('update-server');
+    menu.classList.remove('hidden');
+    menu.setAttribute('aria-hidden', 'false');
+    const menuRect = menu.getBoundingClientRect();
+    const anchorRect = anchor ? anchor.getBoundingClientRect() : null;
+    if (anchorRect) {
+        const left = Math.min(anchorRect.left, window.innerWidth - menuRect.width - padding);
+        const preferredTop = anchorRect.top - menuRect.height - 12;
+        const fallbackTop = anchorRect.bottom + 12;
+        const top = preferredTop >= padding
+            ? preferredTop
+            : Math.min(fallbackTop, window.innerHeight - menuRect.height - padding);
+        menu.style.left = `${Math.max(padding, left)}px`;
+        menu.style.top = `${Math.max(padding, top)}px`;
+        return;
+    }
+    const left = Math.min(event.clientX + 12, window.innerWidth - menuRect.width - padding);
+    const top = Math.min(event.clientY + 12, window.innerHeight - menuRect.height - padding);
+    menu.style.left = `${Math.max(padding, left)}px`;
+    menu.style.top = `${Math.max(padding, top)}px`;
+}
+
+function setAdvancedVersionError(message) {
+    const error = document.getElementById('advanced-version-error');
+    if (!error) {
+        return;
+    }
+    if (!message) {
+        error.textContent = '';
+        error.classList.add('hidden');
+        return;
+    }
+    error.textContent = message;
+    error.classList.remove('hidden');
+}
+
+function getSelectedAdvancedVersionOption() {
+    const select = document.getElementById('advanced-version-select');
+    if (!select || select.selectedIndex < 0) {
+        return null;
+    }
+    return select.options[select.selectedIndex] || null;
+}
+
+function getSelectedAdvancedDirection() {
+    const option = getSelectedAdvancedVersionOption();
+    return option && option.dataset.direction === 'downgrade' ? 'downgrade' : 'update';
+}
+
+function syncAdvancedModeUi() {
+    const warning = document.getElementById('advanced-downgrade-warning');
+    const ackRow = document.getElementById('advanced-downgrade-ack-row');
+    const checkBtn = document.getElementById('advanced-check-btn');
+    const ack = document.getElementById('advanced-downgrade-ack');
+    const select = document.getElementById('advanced-version-select');
+    const isDowngrade = getSelectedAdvancedDirection() === 'downgrade';
+    advancedUpdateDirection = isDowngrade ? 'downgrade' : 'update';
+
+    if (warning) {
+        warning.classList.toggle('hidden', !isDowngrade);
+    }
+    if (ackRow) {
+        ackRow.classList.toggle('hidden', !isDowngrade);
+    }
+    if (checkBtn) {
+        checkBtn.textContent = isDowngrade ? 'Downgrade' : 'Update';
+        checkBtn.disabled = Boolean(select && select.disabled) || (isDowngrade && ack && !ack.checked);
+    }
+}
+
+function populateAdvancedVersionSelect(payload) {
+    const select = document.getElementById('advanced-version-select');
+    const summary = document.getElementById('update-advanced-summary');
+    if (!select) {
+        return;
+    }
+    select.innerHTML = '';
+    const versions = Array.isArray(payload && payload.versions) ? payload.versions : [];
+    const updateVersions = versions.filter(item => item && item.direction !== 'downgrade');
+    const downgradeVersions = versions.filter(item => item && item.direction === 'downgrade');
+
+    function appendOptions(groupLabel, items) {
+        if (!items.length) {
+            return;
+        }
+        const group = document.createElement('optgroup');
+        group.label = groupLabel;
+        items.forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.version;
+            option.dataset.direction = item.direction === 'downgrade' ? 'downgrade' : 'update';
+            const releaseLabel = formatReleaseDateLabel(item.releaseTime, item.releaseDate);
+            option.textContent = releaseLabel ? `${item.version} - ${releaseLabel}` : item.version;
+            group.appendChild(option);
+        });
+        select.appendChild(group);
+    }
+
+    appendOptions('Updates', updateVersions);
+    appendOptions('Downgrades', downgradeVersions);
+
+    if (!versions.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = 'No eligible version changes';
+        select.appendChild(option);
+    }
+    select.disabled = versions.length === 0;
+    if (summary) {
+        if (versions.length === 0) {
+            summary.textContent = 'No eligible update or downgrade targets are available.';
+        } else {
+            summary.textContent = `Current: ${payload.currentVersion || 'unknown'}. Choose any eligible release; the action changes based on the selected version.`;
+        }
+    }
+    syncAdvancedModeUi();
+}
+
+async function fetchAdvancedVersionDirection(direction) {
+    const response = await fetch(`/updates/advanced/versions?direction=${encodeURIComponent(direction)}`, {
+        headers: getAuthHeaders(false)
+    });
+    if (response.status === 428) {
+        redirectToSetPassword();
+        return null;
+    }
+    if (response.status === 401 || response.status === 403) {
+        redirectToLogin();
+        return null;
+    }
+    if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.message || `Failed to load ${direction} versions (${response.status})`);
+    }
+    return response.json();
+}
+
+async function loadAdvancedVersionOptions({ force = false } = {}) {
+    const select = document.getElementById('advanced-version-select');
+    const checkBtn = document.getElementById('advanced-check-btn');
+    setAdvancedVersionError('');
+    if (select) {
+        select.disabled = true;
+        select.innerHTML = '';
+        const loading = document.createElement('option');
+        loading.value = '';
+        loading.textContent = 'Loading versions...';
+        select.appendChild(loading);
+    }
+    if (checkBtn) {
+        checkBtn.disabled = true;
+    }
+
+    try {
+        if (!force && advancedVersionCache.all) {
+            populateAdvancedVersionSelect(advancedVersionCache.all);
+            syncAdvancedModeUi();
+            return;
+        }
+
+        const [updatePayload, downgradePayload] = await Promise.all([
+            fetchAdvancedVersionDirection('update'),
+            fetchAdvancedVersionDirection('downgrade')
+        ]);
+        if (!updatePayload || !downgradePayload) {
+            return;
+        }
+
+        const updateVersions = (Array.isArray(updatePayload.versions) ? updatePayload.versions : [])
+            .map(item => ({ ...item, direction: 'update' }));
+        const downgradeVersions = (Array.isArray(downgradePayload.versions) ? downgradePayload.versions : [])
+            .map(item => ({ ...item, direction: 'downgrade' }));
+        const payload = {
+            currentVersion: updatePayload.currentVersion || downgradePayload.currentVersion || null,
+            latestVersion: updatePayload.latestVersion || null,
+            latestMinecraftVersion: updatePayload.latestMinecraftVersion || null,
+            versions: [...updateVersions, ...downgradeVersions]
+        };
+        advancedVersionCache.all = payload;
+        populateAdvancedVersionSelect(payload);
+    } catch (err) {
+        console.error('Advanced version load failed:', err);
+        setAdvancedVersionError(err.message || 'Failed to load versions.');
+    } finally {
+        syncAdvancedModeUi();
+    }
+}
+
+async function openUpdateAdvancedModal() {
+    closeUpdateAdvancedMenu();
+    const modal = document.getElementById('update-advanced-modal');
+    if (!modal) {
+        return;
+    }
+    setAdvancedVersionError('');
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    syncModalOpenState();
+    await loadAdvancedVersionOptions();
+}
+
+async function runAdvancedVersionPreflight() {
+    const select = document.getElementById('advanced-version-select');
+    const ack = document.getElementById('advanced-downgrade-ack');
+    const targetVersion = select ? select.value : '';
+    const direction = getSelectedAdvancedDirection();
+    const isDowngrade = direction === 'downgrade';
+    if (!targetVersion) {
+        setAdvancedVersionError('Choose a Minecraft version first.');
+        return;
+    }
+    if (isDowngrade && (!ack || !ack.checked)) {
+        setAdvancedVersionError('You must acknowledge the downgrade risk before continuing.');
+        syncAdvancedModeUi();
+        return;
+    }
+
+    setAdvancedVersionError('');
+    closeUpdateAdvancedModal();
+    setUpdateStatusMessage(`Preparing ${getOperationVerb(direction, true)} to ${targetVersion}...`);
+    await runUpdatePreflightForTarget(targetVersion, {
+        advanced: true,
+        direction,
+        acknowledgeDowngradeRisk: isDowngrade
+    });
 }
 
 function setupUpdateModalHandlers() {
     const updateButton = document.getElementById('update-server');
     if (updateButton) {
         updateButton.addEventListener('click', runUpdatePreflight);
+        updateButton.addEventListener('contextmenu', openUpdateAdvancedMenu);
     }
+
+    const advancedOpenBtn = document.getElementById('update-advanced-open-btn');
+    if (advancedOpenBtn) {
+        advancedOpenBtn.addEventListener('click', openUpdateAdvancedModal);
+    }
+
+    document.addEventListener('click', event => {
+        const menu = document.getElementById('update-advanced-menu');
+        if (!menu || menu.classList.contains('hidden')) {
+            return;
+        }
+        if (!menu.contains(event.target)) {
+            closeUpdateAdvancedMenu();
+        }
+    });
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            closeUpdateAdvancedMenu();
+        }
+    });
 
     const cancelBtn = document.getElementById('update-cancel-btn');
     if (cancelBtn) {
@@ -954,6 +1366,37 @@ function setupUpdateModalHandlers() {
 
     document.querySelectorAll('[data-close-update-modal="true"]').forEach(node => {
         node.addEventListener('click', closeUpdateModal);
+    });
+
+    const advancedVersionSelect = document.getElementById('advanced-version-select');
+    if (advancedVersionSelect) {
+        advancedVersionSelect.addEventListener('change', () => {
+            const ack = document.getElementById('advanced-downgrade-ack');
+            if (ack && getSelectedAdvancedDirection() !== 'downgrade') {
+                ack.checked = false;
+            }
+            setAdvancedVersionError('');
+            syncAdvancedModeUi();
+        });
+    }
+
+    const advancedAck = document.getElementById('advanced-downgrade-ack');
+    if (advancedAck) {
+        advancedAck.addEventListener('change', syncAdvancedModeUi);
+    }
+
+    const advancedCancelBtn = document.getElementById('advanced-cancel-btn');
+    if (advancedCancelBtn) {
+        advancedCancelBtn.addEventListener('click', closeUpdateAdvancedModal);
+    }
+
+    const advancedCheckBtn = document.getElementById('advanced-check-btn');
+    if (advancedCheckBtn) {
+        advancedCheckBtn.addEventListener('click', runAdvancedVersionPreflight);
+    }
+
+    document.querySelectorAll('[data-close-update-advanced="true"]').forEach(node => {
+        node.addEventListener('click', closeUpdateAdvancedModal);
     });
 
     const summaryCloseBtn = document.getElementById('update-summary-close-btn');

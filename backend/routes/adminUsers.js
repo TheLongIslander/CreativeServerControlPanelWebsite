@@ -20,7 +20,15 @@ function generateTempPassword() {
   return crypto.randomBytes(16).toString('base64url');
 }
 
-function formatUpdateModeLabel(mode, { targetVersion, latestVersion } = {}) {
+function formatUpdateModeLabel(mode, { targetVersion, latestVersion, operation } = {}) {
+  if (operation === 'downgrade') {
+    if (mode === 'server_and_compatible_mods') {
+      return 'Downgrade + Compatible Mods';
+    }
+    if (mode === 'server_only_move_all_mods') {
+      return 'Downgrade + Move All Mods';
+    }
+  }
   const isLatestTarget = Boolean(targetVersion && latestVersion && String(targetVersion) === String(latestVersion));
   if (mode === 'server_and_compatible_mods') {
     return isLatestTarget
@@ -179,8 +187,11 @@ module.exports = function createAdminUserRoutes() {
           || (checkReport && checkReport.latestVersion)
           || (check && check.latestVersion)
           || null;
+        const operation = details.operation
+          || (checkReport && checkReport.operation)
+          || 'update';
         const versionPath = `${sourceVersion || 'unknown'} -> ${targetVersion || 'unknown'}`;
-        const modeLabel = formatUpdateModeLabel(run.mode, { targetVersion, latestVersion });
+        const modeLabel = formatUpdateModeLabel(run.mode, { targetVersion, latestVersion, operation });
         const notes = (typeof details.summaryText === 'string' && details.summaryText.trim())
           ? details.summaryText
           : buildFallbackNotes({
@@ -199,6 +210,7 @@ module.exports = function createAdminUserRoutes() {
           actorUserId: run.actorUserId || null,
           actorUsername: run.actorUserId ? (usernamesById.get(run.actorUserId) || 'Unknown') : 'System',
           mode: run.mode || 'unknown',
+          operation,
           modeLabel,
           sourceVersion,
           targetVersion,

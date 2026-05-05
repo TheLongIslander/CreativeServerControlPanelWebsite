@@ -274,11 +274,13 @@ body.control-panel main {
     z-index: 1;
 }
 
-.modal-content input {
+.modal-content input,
+.modal-content select {
     padding: 12px 14px;
     border-radius: 12px;
     border: 1px solid #cfd6de;
     background: #ffffff;
+    color: #333;
 }
 
 .modal-actions {
@@ -503,6 +505,19 @@ button {
     padding: 14px 16px;
 }
 
+.update-downgrade-warning {
+    border: 2px solid rgba(220, 38, 38, 0.78);
+    background: linear-gradient(180deg, rgba(127, 29, 29, 0.94), rgba(153, 27, 27, 0.9));
+    color: #fff1f2;
+    padding: 14px 16px;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: 800;
+    line-height: 1.5;
+    text-shadow: none;
+    box-shadow: 0 12px 28px rgba(127, 29, 29, 0.28);
+}
+
 .update-conflicts h3 {
     margin: 4px 0 8px;
     font-size: 1rem;
@@ -634,6 +649,110 @@ button {
 
 #update-compatible-version-btn:hover {
     background-color: #4338ca;
+}
+
+.compatible-version-options {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 10px;
+}
+
+.compatible-version-options.hidden {
+    display: none;
+}
+
+.compatible-version-options button {
+    background-color: #4f46e5;
+}
+
+.compatible-version-options button:hover {
+    background-color: #4338ca;
+}
+
+.update-advanced-menu {
+    position: fixed;
+    z-index: 70;
+    min-width: 150px;
+    padding: 8px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+
+.update-advanced-menu.hidden {
+    display: none;
+}
+
+.update-advanced-menu button {
+    width: 100% !important;
+    margin: 0;
+    padding: 10px 16px;
+    font-size: 0.95rem;
+    border-radius: 10px;
+    background-color: #4f46e5;
+}
+
+.update-advanced-menu button:hover {
+    background-color: #4338ca;
+}
+
+.update-advanced-modal-content {
+    width: min(680px, 94vw);
+}
+
+.update-advanced-modal-content h2 {
+    margin: 0;
+}
+
+.advanced-version-label,
+.advanced-downgrade-ack {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.advanced-downgrade-ack {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    line-height: 1.35;
+}
+
+.advanced-downgrade-ack.hidden {
+    display: none;
+}
+
+.advanced-downgrade-ack input {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.advanced-version-error {
+    color: #b91c1c;
+    font-weight: 700;
+    line-height: 1.45;
+}
+
+.update-advanced-actions {
+    justify-content: flex-end;
+}
+
+#advanced-cancel-btn {
+    background-color: #6b7280;
+}
+
+#advanced-cancel-btn:hover {
+    background-color: #4b5563;
+}
+
+#advanced-check-btn {
+    background-color: #0f8fba;
+}
+
+#advanced-check-btn:hover {
+    background-color: #0a6a8b;
 }
 
 #update-restore-btn {
@@ -937,7 +1056,8 @@ body[data-color-scheme="dark"] .modal-content {
     color: #e5e7eb;
 }
 
-body[data-color-scheme="dark"] .modal-content input {
+body[data-color-scheme="dark"] .modal-content input,
+body[data-color-scheme="dark"] .modal-content select {
     background: #0f1115;
     border-color: #2a2f38;
     color: #e5e7eb;
@@ -963,6 +1083,11 @@ body[data-color-scheme="dark"] .update-mod-warning {
     border-color: #ffe15a;
     background: linear-gradient(180deg, rgba(255, 235, 59, 0.98), rgba(255, 214, 0, 0.96));
     color: #2b1a00;
+}
+
+body[data-color-scheme="dark"] .advanced-version-label,
+body[data-color-scheme="dark"] .advanced-downgrade-ack {
+    color: #e5e7eb;
 }
 
 body[data-color-scheme="dark"] .update-status-message {
@@ -1031,7 +1156,8 @@ body[data-color-scheme="light"] .modal-content {
     color: #333;
 }
 
-body[data-color-scheme="light"] .modal-content input {
+body[data-color-scheme="light"] .modal-content input,
+body[data-color-scheme="light"] .modal-content select {
     background: #ffffff;
     border-color: #cfd6de;
     color: #333;
@@ -1057,6 +1183,11 @@ body[data-color-scheme="light"] .update-mod-warning {
     border-color: #ffd600;
     background: linear-gradient(180deg, rgba(255, 235, 59, 0.96), rgba(255, 214, 0, 0.95));
     color: #241400;
+}
+
+body[data-color-scheme="light"] .advanced-version-label,
+body[data-color-scheme="light"] .advanced-downgrade-ack {
+    color: #334155;
 }
 
 body[data-color-scheme="light"] .update-status-message {

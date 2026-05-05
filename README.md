@@ -7,7 +7,7 @@ Engineering specification for the current implementation.
 This service is a self-hosted web control plane for:
 
 - Minecraft server lifecycle operations (start, stop, restart).
-- Compatibility-aware Minecraft/Fabric server updates with preflight checks, rollback snapshots, and mod migration.
+- Compatibility-aware Minecraft/Fabric server version changes with preflight checks, rollback snapshots, and mod migration.
 - Scheduled backup execution and backup browsing over SFTP.
 - Multi-user authentication with admin-managed accounts.
 - Optional passkey (WebAuthn) login and passkey lifecycle management.
@@ -23,7 +23,7 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 - Admin user management and user audit trails.
 - SFTP file browsing, upload, preview, and download orchestration.
 - Backup execution with progress telemetry.
-- End-to-end update orchestration (status detection, preflight, apply, rollback, and update history).
+- End-to-end update/downgrade orchestration (status detection, preflight, apply, rollback, and update history).
 - Graceful maintenance broadcast + process shutdown.
 - User appearance preferences (theme + color mode).
 
@@ -264,7 +264,7 @@ All `/admin/*` routes require `authenticateJWT + requireOnboarded + requireAdmin
 | `GET` | `/admin/users` | None | Array of users with admin-facing state fields (including decrypted temp password where available). |
 | `GET` | `/admin/users/:id/logins` | None | `{ user, logins[] }` |
 | `GET` | `/admin/audit` | Query: `actor,target,action,ip,from,to,limit` | Array of audit events (limit max 500). |
-| `GET` | `/admin/updates` | Query: `limit` | Update run history with mode labels, version path, counts, status, and detailed summary payload. |
+| `GET` | `/admin/updates` | Query: `limit` | Update/downgrade run history with operation-aware mode labels, version path, counts, status, and detailed summary payload. |
 | `POST` | `/admin/users` | `{ username }` | Created user payload with generated temp password. |
 | `PATCH` | `/admin/users/:id` | `{ disabled: boolean }` | `{ message: 'User updated' }` |
 | `POST` | `/admin/users/:id/reset-temp-password` | None | `{ message, tempPassword }` |
@@ -376,14 +376,24 @@ All update routes require `authenticateJWT + requireOnboarded`.
 |---|---|---|---|
 | `GET` | `/updates/status` | Query: `refresh=1|true` (optional) | Returns update status snapshot: current version, latest Mojang release, latest Fabric-supported release, availability, lock state, and snapshot-restorability state. |
 | `POST` | `/updates/check` | `{ targetVersion? }` | Runs preflight: Java, disk, Fabric support, mod compatibility, conflict analysis, recommended compatible target lookup. Persists check in `updates.db`. |
+| `GET` | `/updates/advanced/versions` | Query: `direction=update|downgrade` | Returns eligible release targets for the requested advanced direction. Update targets are newer than current; downgrade targets are older than current and filtered by backend policy. |
+| `POST` | `/updates/advanced/check` | `{ targetVersion, direction }` | Runs advanced preflight for an explicit target. Supports update and downgrade operations, returns operation metadata and compatible alternative targets when conflicts exist. |
 | `GET` | `/updates/check/:id` | None | Returns a stored preflight check report by id. |
-| `POST` | `/updates/apply` | `{ checkId, mode }` | Applies update using a fresh preflight check (`<= 30m`), with lock, snapshot, artifact install, mod migration, smoke test, auto-rollback on failure, and run summary persistence. |
+| `POST` | `/updates/apply` | `{ checkId, mode, acknowledgeDowngradeRisk? }` | Applies a version change using a fresh preflight check (`<= 30m`), with lock, snapshot, artifact install, mod migration, smoke test, auto-rollback on failure, and run summary persistence. Downgrade checks require explicit acknowledgement. |
 | `POST` | `/updates/restore-latest` | None | Restores latest snapshot-bearing update run. Intended for administrative/manual recovery paths. |
 
 Supported apply modes:
 
-- `server_and_compatible_mods`: update server and keep compatible mods (archive moved/replaced jars).
-- `server_only_move_all_mods`: update server and move all current mods out of `mods/` into versioned archive folder.
+- `server_and_compatible_mods`: change server version and keep compatible mods (archive moved/replaced jars).
+- `server_only_move_all_mods`: change server version and move all current mods out of `mods/` into versioned archive folder.
+
+Advanced version-change policy:
+
+- Normal left-click update flow remains update-only and targets the latest Fabric-supported release.
+- Right-click Advanced flow accepts an explicit Minecraft release target and derives update vs downgrade from the selected version.
+- Advanced downgrade targets are constrained server-side by a hardcoded minimum release policy.
+- Downgrade apply requests must include `acknowledgeDowngradeRisk: true`; otherwise `/updates/apply` rejects the run.
+- Advanced conflict checks may return multiple `compatibleTargets`; the frontend can let the user switch to one before applying.
 
 Apply pipeline (high-level):
 
@@ -541,8 +551,8 @@ Purpose:
 Tables:
 
 - `update_state(key, value, updated_at)`: latest/current version cache and refresh timestamps.
-- `update_checks(...)`: persisted preflight reports (`report_json`) including Java, disk, Fabric, mods, and recommendation metadata.
-- `update_runs(...)`: apply/restore run records, status, error, timings, and full summary payload (`details_json`).
+- `update_checks(...)`: persisted preflight reports (`report_json`) including Java, disk, Fabric, mods, operation, recommendation metadata, and advanced compatible-target metadata.
+- `update_runs(...)`: apply/restore run records, status, error, timings, operation-aware mode details, and full summary payload (`details_json`).
 - `mod_source_cache(...)`: Modrinth resolution cache keyed by file SHA-1.
 - `update_lock(id=1, owner, created_at)`: single-writer lock to prevent concurrent updates.
 
@@ -606,16 +616,18 @@ Responsibilities:
 
 - Update button is hidden when no newer Fabric-supported Minecraft target exists (`latestFabricSupportedVersion <= currentVersion`).
 - Update button severity icon is yellow hazard for compatibility warnings and red stop for Java-blocking conditions.
-- Clicking update always runs preflight before apply.
+- Clicking update always runs preflight before apply and preserves the normal update-only latest-target flow.
+- Right-clicking the update button opens an Advanced option. Advanced uses one Minecraft version dropdown; the action button changes between update and downgrade based on the selected version.
+- Advanced downgrade selections show a prominent warning and an acknowledgement checkbox. That warning/checkbox is not shown for update selections.
 - If no conflicts and preflight is clear, update starts immediately (no choice modal).
-- If conflicts exist, modal presents explicit options (Cancel, update server + compatible mods, or update server-only with mods moved out).
-- Optional compatible intermediate target button is shown when discovered.
-- During update apply, main server controls are disabled.
-- During update apply, update button switches to animated `Updating...`.
-- During update apply, status text and WS progress messages drive in-page progress feedback.
+- If conflicts exist, modal presents explicit options (Cancel, change server + compatible mods, or server-only with mods moved out).
+- Regular update conflicts may show a compatible intermediate target button when discovered. Advanced conflicts may show multiple compatible target options.
+- During update/downgrade apply, main server controls are disabled.
+- During apply, the update button switches to animated `Updating...` or `Downgrading...`.
+- During apply, status text and WS progress messages drive in-page progress feedback.
 - On completion/failure, a summary modal renders updated vs not-updated mods plus run metadata.
 - Summary metadata/path details are role-aware: admins can see full archive/snapshot paths, non-admin users see sanitized labels.
-- Admin Management includes a server update history table with one-click summary modal replay per run.
+- Admin Management includes a server update history table with operation-aware labels and one-click summary modal replay per run.
 
 ### Theme system
 
@@ -666,7 +678,8 @@ Important design properties to be aware of:
 - Backup and download share WS `type: 'progress'` with different payload shapes.
 - Download worker requires `stdbuf`; missing utility will break directory zip progress pipeline.
 - Recommended compatible-target lookup scans a bounded release window (currently first 15 candidates between current and latest).
-- Update apply requires a non-stale preflight check (`<= 30 minutes`).
+- Advanced compatible-target lookup scans a bounded release window and returns a limited set of compatible alternatives.
+- Update/downgrade apply requires a non-stale preflight check (`<= 30 minutes`).
 
 ## 18. Local Development and Runbook
 
