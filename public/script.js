@@ -157,6 +157,11 @@ function formatVersionWithRelease(versionInfo, fallbackVersion) {
     return `${version} (released ${releaseLabel})`;
 }
 
+function formatLoaderVersionLabel(loader, loaderVersion) {
+    const loaderName = loader === 'fabric' ? 'Fabric Loader' : 'Mod Loader';
+    return loaderVersion ? `${loaderName} ${loaderVersion}` : `${loaderName} unknown`;
+}
+
 function getCheckOperation(check) {
     return check && check.operation === 'downgrade' ? 'downgrade' : 'update';
 }
@@ -1220,8 +1225,7 @@ function populateAdvancedVersionSelect(payload) {
             const option = document.createElement('option');
             option.value = item.version;
             option.dataset.direction = item.direction === 'downgrade' ? 'downgrade' : 'update';
-            const releaseLabel = formatReleaseDateLabel(item.releaseTime, item.releaseDate);
-            option.textContent = releaseLabel ? `${item.version} - ${releaseLabel}` : item.version;
+            option.textContent = formatVersionWithRelease(item, item.version);
             group.appendChild(option);
         });
         select.appendChild(group);
@@ -1238,11 +1242,7 @@ function populateAdvancedVersionSelect(payload) {
     }
     select.disabled = versions.length === 0;
     if (summary) {
-        if (versions.length === 0) {
-            summary.textContent = 'No eligible update or downgrade targets are available.';
-        } else {
-            summary.textContent = `Current: ${payload.currentVersion || 'unknown'}. Choose any eligible release; the action changes based on the selected version.`;
-        }
+        summary.textContent = `Current: ${formatVersionWithRelease(payload.currentVersionInfo, payload.currentVersion)} | ${formatLoaderVersionLabel(payload.currentLoader, payload.currentLoaderVersion)}.`;
     }
     syncAdvancedModeUi();
 }
@@ -1303,6 +1303,9 @@ async function loadAdvancedVersionOptions({ force = false } = {}) {
             .map(item => ({ ...item, direction: 'downgrade' }));
         const payload = {
             currentVersion: updatePayload.currentVersion || downgradePayload.currentVersion || null,
+            currentVersionInfo: updatePayload.currentVersionInfo || downgradePayload.currentVersionInfo || null,
+            currentLoader: updatePayload.currentLoader || downgradePayload.currentLoader || 'fabric',
+            currentLoaderVersion: updatePayload.currentLoaderVersion || downgradePayload.currentLoaderVersion || null,
             latestVersion: updatePayload.latestVersion || null,
             latestMinecraftVersion: updatePayload.latestMinecraftVersion || null,
             versions: [...updateVersions, ...downgradeVersions]

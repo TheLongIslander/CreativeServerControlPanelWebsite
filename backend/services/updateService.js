@@ -850,6 +850,23 @@ module.exports = function createUpdateService({ state, getWss }) {
     };
   }
 
+  async function getCurrentFabricLoaderVersion() {
+    const fabricLoaderDir = path.join(getServerPath(), 'libraries', 'net', 'fabricmc', 'fabric-loader');
+    try {
+      const entries = await fsp.readdir(fabricLoaderDir, { withFileTypes: true });
+      const versions = entries
+        .filter(entry => entry.isDirectory() && entry.name)
+        .map(entry => entry.name)
+        .sort(compareVersions);
+      return versions.length ? versions[versions.length - 1] : null;
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return null;
+      }
+      throw err;
+    }
+  }
+
   async function resolveJavaBinaryPath() {
     const startScript = getStartCommandPath();
     const scriptContent = await readTextIfExists(startScript);
@@ -1102,10 +1119,19 @@ module.exports = function createUpdateService({ state, getWss }) {
           releaseDate: releaseInfo.releaseDate
         };
       });
+    let currentLoaderVersion = null;
+    try {
+      currentLoaderVersion = await getCurrentFabricLoaderVersion();
+    } catch (_) {
+      currentLoaderVersion = null;
+    }
 
     return {
       direction: operation,
       currentVersion: status.currentVersion,
+      currentVersionInfo: buildVersionReleaseInfo(manifest, status.currentVersion),
+      currentLoader: 'fabric',
+      currentLoaderVersion,
       latestVersion: status.latestVersion || null,
       latestMinecraftVersion: status.latestMinecraftVersion || null,
       minDowngradeVersion: ADVANCED_DOWNGRADE_MIN_VERSION,
