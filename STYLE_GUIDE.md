@@ -279,6 +279,8 @@ This smoothing constant (`0.18`) is intentional and should not be changed withou
 opens from `#server-info-button`, fetches `GET /server-info`, closes on backdrop, close button, and Escape.
 - Gallery behavior:
 era tabs change screenshot groups, thumbnails choose the active screenshot, the thumbnail rail scrolls vertically when it exceeds the stage height, hidden thumbnails are hinted by scroll-linked blurred top/bottom edge flows rather than covering visible thumbnails, Prev/Next and left/right arrow keys advance within the active group, and `Full Resolution` points to the original asset while the stage uses optimized derivatives when available.
+- Thumbnail overflow tuning:
+keep the blurred edge flows aligned to the rail width and tune the transition through `--server-info-thumb-flow-top-height`, `--server-info-thumb-flow-bottom-height`, and `--server-info-thumb-flow-feather`; the visible thumbnails and blurred clone should overlap through the same feather distance so there is no sharp normal-to-blur cutoff.
 - Image inspection:
 clicking the active stage image opens `#server-info-image-viewer`; mouse wheel zooms, dragging pans while zoomed, and the toolbar provides zoom/reset/close controls.
 - Overview behavior:

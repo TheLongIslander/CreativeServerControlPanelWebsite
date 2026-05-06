@@ -9,6 +9,7 @@ This service is a self-hosted web control plane for:
 - Minecraft server lifecycle operations (start, stop, restart).
 - Compatibility-aware Minecraft/Fabric server version changes with preflight checks, rollback snapshots, and mod migration.
 - Scheduled backup execution and backup browsing over SFTP.
+- Read-only server information, installed-mod metadata, server lore, and screenshot gallery browsing.
 - Multi-user authentication with admin-managed accounts.
 - Optional passkey (WebAuthn) login and passkey lifecycle management.
 
@@ -24,6 +25,7 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 - SFTP file browsing, upload, preview, and download orchestration.
 - Backup execution with progress telemetry.
 - End-to-end update/downgrade orchestration (status detection, preflight, apply, rollback, and update history).
+- Server Info modal data API, dynamic screenshot discovery, and installed-mod inventory display.
 - Graceful maintenance broadcast + process shutdown.
 - User appearance preferences (theme + color mode).
 
@@ -148,6 +150,7 @@ Static serving:
 
 - `express.static('public')`
 - `express.static('assets')` mounted at `/assets`
+- Server Info screenshots are served from `assets/server-info/`; generated optimized display/thumb assets may live under `assets/server-info/_generated/`.
 
 ## 7. In-Memory Runtime State
 
@@ -368,7 +371,24 @@ File-type handling:
 - PDF: first-page render + cache.
 - Other: raw octet-stream relay.
 
-### 10.11 Update routes
+### 10.11 Server info route
+
+Requires `authenticateJWT + requireOnboarded`.
+
+| Method | Path | Request | Behavior |
+|---|---|---|---|
+| `GET` | `/server-info` | None | Returns current server version, installed mods, founding/start metadata, lore sections, and dynamic screenshot gallery groups. |
+
+Data behavior:
+
+- Current version comes from the update service when available.
+- Mods are read from `$MINECRAFT_SERVER_PATH/mods` and parsed from Fabric `fabric.mod.json` metadata when possible.
+- Curated screenshot groups are loaded from `assets/server-info/<era>/`.
+- Additional subfolders under `assets/server-info/` are discovered automatically after curated eras.
+- Root-level screenshots under `assets/server-info/` appear in an `Unsorted` group.
+- Optimized derivatives under `assets/server-info/_generated/display/<era>/` and `assets/server-info/_generated/thumbs/<era>/` are preferred when present; originals remain the fallback and full-resolution target.
+
+### 10.12 Update routes
 
 All update routes require `authenticateJWT + requireOnboarded`.
 
@@ -603,7 +623,7 @@ Responsibilities:
 ### Frontend script ownership
 
 - `public/login.js`: password and passkey login flows.
-- `public/script.js`: control panel actions + backup progress UI + update status polling/preflight/apply UX + WS handling.
+- `public/script.js`: control panel actions + backup progress UI + Server Info modal/gallery + update status polling/preflight/apply UX + WS handling.
 - `public/sftp.js`: browse/upload/download/preview UX + WS download tracking.
 - `public/account.js`: password change and passkey CRUD.
 - `public/admin.js`: admin user lifecycle UI + update history table + update summary modal.
@@ -629,6 +649,15 @@ Responsibilities:
 - Summary metadata/path details are role-aware: admins can see full archive/snapshot paths, non-admin users see sanitized labels.
 - Admin Management includes a server update history table with operation-aware labels and one-click summary modal replay per run.
 
+### Server Info UX contract
+
+- Server Management > Server Info opens the read-only Server Info modal.
+- The modal fetches `/server-info`, renders server facts, lore, screenshot eras, and installed mods.
+- The `Current Mods` fact is an in-modal jump link to the installed-mods section.
+- Screenshot tabs switch eras; thumbnail clicks switch the active image; Prev/Next and arrow keys move through the active era.
+- The thumbnail rail scrolls vertically when image count exceeds the main screenshot stage height. Hidden thumbnails are hinted through scroll-linked blurred top/bottom edge flows so the rail does not become a long unbounded column.
+- Clicking the stage image opens a full image viewer with wheel zoom and drag-to-pan. `Full Resolution` links to the original asset.
+
 ### Theme system
 
 - Base glass theme: `public/style.css`
@@ -645,6 +674,7 @@ Detailed UI contract is documented in `STYLE_GUIDE.md`.
 - Maintenance mode flag is in-memory; process restart clears it.
 - Update status refresh is cached/polled on multiple layers: backend refresh timer every 6 hours (`updateService.startStatusRefreshTimer`), frontend status polling every 5 minutes plus tab-visibility return, and frontend background preflight TTL of 10 minutes for warning/icon refresh.
 - Video thumbnail pre-caching can be expensive on large SFTP trees because it recursively crawls from `/` at startup.
+- Server Info screenshot assets are intentionally ignored by git via `assets/server-info/`; dropping new supported images into that folder tree is enough for the endpoint to discover them on the next request.
 - Logging timestamps are written using `America/New_York` locale formatting, not ISO-8601.
 - Backup hour-gating uses Eastern date-hour keying and in-memory state only.
 
@@ -711,12 +741,12 @@ npm run start
 - `backend/db/`: SQLite adapters and schema evolution.
 - `backend/middleware/`: auth/role/onboarding enforcement.
 - `backend/routes/`: all HTTP API/page routes.
-- `backend/services/`: maintenance/server-control services.
+- `backend/services/`: maintenance/server-control/update/server-info services.
 - `backend/state.js`: in-memory runtime state.
 - `backend/utils/`: logging, crypto, validation, parsing helpers.
 - `backend/workers/`: worker thread implementations.
 - `public/`: HTML/CSS/JS frontend.
-- `assets/`: icons and static images.
+- `assets/`: icons, static images, and ignored Server Info screenshots.
 - `STYLE_GUIDE.md`: frontend appearance contract.
 
 ## 20. Direct NPM Runtime Dependencies
