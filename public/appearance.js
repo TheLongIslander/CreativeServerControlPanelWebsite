@@ -1,5 +1,5 @@
 (function() {
-    const STYLE_VERSION = '20260505-2';
+    const STYLE_VERSION = '20260505-10';
 
     let appearanceState = {
         uiTheme: 'glass',

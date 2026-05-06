@@ -21,6 +21,7 @@ const createWebAuthnRoutes = require('./backend/routes/webauthn');
 const createMaintenanceService = require('./backend/services/maintenance');
 const createUpdateService = require('./backend/services/updateService');
 const createUpdateRoutes = require('./backend/routes/update');
+const createServerInfoRoutes = require('./backend/routes/serverInfo');
 
 const app = express();
 const port = Number(process.env.PORT) || 8087;
@@ -65,6 +66,7 @@ app.use(createSftpRoutes());
 app.use(createDownloadRoutes({ getWss: () => wss }));
 app.use(createUploadRoutes());
 app.use(createPreviewRoutes());
+app.use(createServerInfoRoutes({ updateService }));
 app.use(createUpdateRoutes({ updateService }));
 
 async function startServer() {

@@ -101,6 +101,7 @@ The control panel header uses a left-side management dropdown instead of a stand
   <button id="server-management-button" type="button" aria-haspopup="true" aria-expanded="false">Server Management</button>
   <div id="server-management-dropdown" class="server-management-dropdown hidden" role="menu" aria-hidden="true">
     <button id="sftp-button" class="sftp-button" type="button" role="menuitem">Server Backups Browser</button>
+    <button id="server-info-button" type="button" role="menuitem">Server Info</button>
     <button id="server-version-button" type="button" role="menuitem">Server Version</button>
   </div>
 </div>
@@ -190,10 +191,11 @@ dropdown opens/closes via account button, closes on outside click, appearance pa
 
 ### Control panel server management dropdown
 - Required selectors:
-`.server-management-container`, `#server-management-button`, `.server-management-dropdown`, `#sftp-button`, `#server-version-button`.
+`.server-management-container`, `#server-management-button`, `.server-management-dropdown`, `#sftp-button`, `#server-info-button`, `#server-version-button`.
 - Required behavior:
 dropdown opens/closes via Server Management, closes on outside click and Escape, and closes when Account opens.
 - `Server Backups Browser` keeps the existing blue backup-browser color.
+- `Server Info` opens the read-only server info modal and remains available while server actions are locked.
 - `Server Version` opens the advanced version selector and must remain available even when no update button is visible, except while server controls are locked.
 - Keep dropdown button width consistent with account dropdown rhythm (`~180px`).
 
@@ -269,6 +271,22 @@ This smoothing constant (`0.18`) is intentional and should not be changed withou
 - Keep selector contract stable:
 `.modal`, `.modal-backdrop`, `.modal-content`, `.modal-actions`, `.modal-message`.
 - Mode overrides must preserve input readability.
+
+### Control panel server info modal
+- Required selectors:
+`#server-info-modal`, `.server-info-modal-content`, `#server-info-status`, `#server-info-body`, `#server-info-overview`, `#server-info-era-tabs`, `#server-info-gallery-content`, `#server-info-full-link`, `#server-info-image-viewer`, `#server-info-lore-content`, `#server-info-mods-section`, `#server-info-mod-filter`, `#server-info-mod-list`.
+- Required behavior:
+opens from `#server-info-button`, fetches `GET /server-info`, closes on backdrop, close button, and Escape.
+- Gallery behavior:
+era tabs change screenshot groups, thumbnails choose the active screenshot, the thumbnail rail scrolls vertically when it exceeds the stage height, hidden thumbnails are hinted by scroll-linked blurred top/bottom edge flows rather than covering visible thumbnails, Prev/Next and left/right arrow keys advance within the active group, and `Full Resolution` points to the original asset while the stage uses optimized derivatives when available.
+- Image inspection:
+clicking the active stage image opens `#server-info-image-viewer`; mouse wheel zooms, dragging pans while zoomed, and the toolbar provides zoom/reset/close controls.
+- Overview behavior:
+the `Current Mods` fact card jumps to `#server-info-mods-section` and focuses the mod filter.
+- Data contract:
+server facts, lore sections, display-safe mod metadata, and screenshot groups are returned by `backend/routes/serverInfo.js` through `backend/services/serverInfoService.js`.
+- Asset contract:
+source screenshots live under `assets/server-info/<era>/`; additional subfolders are discovered after the curated eras, and root-level screenshots appear in an `Unsorted` group. Optimized WebP derivatives live under `assets/server-info/_generated/display/<era>/` and `assets/server-info/_generated/thumbs/<era>/`. The endpoint falls back to originals if derivatives are absent.
 
 ### Control panel backup progress
 - Engine file: `public/script.js`.

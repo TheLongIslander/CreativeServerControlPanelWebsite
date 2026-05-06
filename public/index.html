@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Creative Server Control Panel</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-2">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
@@ -44,6 +44,7 @@
             <button id="server-management-button" type="button" aria-haspopup="true" aria-expanded="false">Server Management</button>
             <div id="server-management-dropdown" class="server-management-dropdown hidden" role="menu" aria-hidden="true">
                 <button id="sftp-button" class="sftp-button" type="button" role="menuitem">Server Backups Browser</button>
+                <button id="server-info-button" type="button" role="menuitem">Server Info</button>
                 <button id="server-version-button" type="button" role="menuitem">Server Version</button>
             </div>
         </div>
@@ -61,6 +62,71 @@
                 <div id="progress-bar"></div>
             </div>
             <div id="progress-percentage">0%</div>
+        </div>
+    </div>
+
+    <div id="server-info-modal" class="modal hidden server-info-modal" aria-hidden="true">
+        <div class="modal-backdrop" data-close-server-info="true"></div>
+        <div class="modal-content server-info-modal-content" role="dialog" aria-modal="true" aria-labelledby="server-info-title">
+            <div class="server-info-heading">
+                <div>
+                    <div class="server-info-kicker">El Capital Archive</div>
+                    <h2 id="server-info-title">Server Info</h2>
+                </div>
+                <button id="server-info-close-btn" class="server-info-close-btn" type="button">Close</button>
+            </div>
+            <div id="server-info-status" class="server-info-status">Loading server info...</div>
+            <div id="server-info-body" class="server-info-body hidden">
+                <section id="server-info-overview" class="server-info-overview" aria-label="Server facts"></section>
+                <section class="server-info-gallery" aria-labelledby="server-info-gallery-title">
+                    <div class="server-info-section-header">
+                        <div>
+                            <div class="server-info-kicker">Screenshot Gallery</div>
+                            <h3 id="server-info-gallery-title">World Through the Years</h3>
+                        </div>
+                        <a id="server-info-full-link" class="server-info-full-link" href="#" target="_blank" rel="noopener">Full Resolution</a>
+                    </div>
+                    <div id="server-info-era-tabs" class="server-info-era-tabs" role="tablist" aria-label="Screenshot eras"></div>
+                    <div id="server-info-gallery-content" class="server-info-gallery-content"></div>
+                </section>
+                <section class="server-info-lore" aria-labelledby="server-info-lore-title">
+                    <div class="server-info-section-header">
+                        <div>
+                            <div class="server-info-kicker">Server Lore</div>
+                            <h3 id="server-info-lore-title">History of El Capital</h3>
+                        </div>
+                    </div>
+                    <div id="server-info-lore-content" class="server-info-lore-content"></div>
+                </section>
+                <section id="server-info-mods-section" class="server-info-mods" aria-labelledby="server-info-mods-title">
+                    <div class="server-info-section-header">
+                        <div>
+                            <div class="server-info-kicker">Current Setup</div>
+                            <h3 id="server-info-mods-title">Installed Mods</h3>
+                        </div>
+                        <input id="server-info-mod-filter" class="server-info-mod-filter" type="search" placeholder="Filter mods" autocomplete="off">
+                    </div>
+                    <div id="server-info-mod-list" class="server-info-mod-list"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <div id="server-info-image-viewer" class="server-info-image-viewer hidden" aria-hidden="true">
+        <div class="server-info-image-viewer-backdrop" data-close-server-info-image="true"></div>
+        <div class="server-info-image-viewer-content" role="dialog" aria-modal="true" aria-label="Screenshot viewer">
+            <div class="server-info-image-viewer-toolbar">
+                <div id="server-info-image-viewer-title" class="server-info-image-viewer-title">Screenshot</div>
+                <div class="server-info-image-viewer-actions">
+                    <button id="server-info-zoom-out-btn" type="button">Zoom Out</button>
+                    <button id="server-info-zoom-reset-btn" type="button">Reset</button>
+                    <button id="server-info-zoom-in-btn" type="button">Zoom In</button>
+                    <button id="server-info-image-close-btn" type="button">Close</button>
+                </div>
+            </div>
+            <div id="server-info-image-pan-area" class="server-info-image-pan-area">
+                <img id="server-info-image-viewer-img" class="server-info-image-viewer-img" alt="">
+            </div>
         </div>
     </div>
 
@@ -122,7 +188,7 @@
             </div>
         </div>
     </div>
-    <script src="appearance.js?v=20260505-2"></script>
-    <script src="script.js?v=20260505-4"></script>
+    <script src="appearance.js?v=20260505-10"></script>
+    <script src="script.js?v=20260505-14"></script>
 </body>
 </html>

@@ -23,6 +23,17 @@ let advancedUpdateDirection = 'update';
 const advancedVersionCache = {
     all: null
 };
+const serverInfoState = {
+    payload: null,
+    groupIndex: 0,
+    imageIndex: 0,
+    zoomScale: 1,
+    zoomX: 0,
+    zoomY: 0,
+    zoomDragging: false,
+    zoomPointerX: 0,
+    zoomPointerY: 0
+};
 
 function clearAdvancedVersionCache() {
     advancedVersionCache.all = null;
@@ -493,7 +504,8 @@ function isModalVisible(modalId) {
 function syncModalOpenState() {
     const hasVisibleModal = isModalVisible('update-modal')
         || isModalVisible('update-summary-modal')
-        || isModalVisible('update-advanced-modal');
+        || isModalVisible('update-advanced-modal')
+        || isModalVisible('server-info-modal');
     document.body.classList.toggle('modal-open', hasVisibleModal);
 }
 
@@ -527,6 +539,17 @@ function closeUpdateAdvancedModal() {
     syncModalOpenState();
 }
 
+function closeServerInfoModal() {
+    const modal = document.getElementById('server-info-modal');
+    if (!modal) {
+        return;
+    }
+    closeServerInfoImageViewer();
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    syncModalOpenState();
+}
+
 function closeServerManagementDropdown() {
     const button = document.getElementById('server-management-button');
     const dropdown = document.getElementById('server-management-dropdown');
@@ -549,6 +572,642 @@ function closeAccountDropdown() {
     if (appearancePanel) {
         appearancePanel.classList.add('hidden');
     }
+}
+
+function setServerInfoStatus(message, isError = false) {
+    const status = document.getElementById('server-info-status');
+    if (!status) {
+        return;
+    }
+    if (!message) {
+        status.textContent = '';
+        status.classList.add('hidden');
+        status.classList.remove('is-error');
+        return;
+    }
+    status.textContent = message;
+    status.classList.remove('hidden');
+    status.classList.toggle('is-error', Boolean(isError));
+}
+
+function createServerInfoNode(tagName, className, text) {
+    const node = document.createElement(tagName);
+    if (className) {
+        node.className = className;
+    }
+    if (text != null) {
+        node.textContent = text;
+    }
+    return node;
+}
+
+function scrollServerInfoModsIntoView() {
+    const section = document.getElementById('server-info-mods-section');
+    if (!section) {
+        return;
+    }
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const filter = document.getElementById('server-info-mod-filter');
+    if (filter) {
+        window.setTimeout(() => filter.focus({ preventScroll: true }), 350);
+    }
+}
+
+function getServerInfoGalleryGroups() {
+    const payload = serverInfoState.payload || {};
+    return Array.isArray(payload.gallery)
+        ? payload.gallery.filter(group => group && Array.isArray(group.images) && group.images.length > 0)
+        : [];
+}
+
+function clampServerInfoGallerySelection() {
+    const groups = getServerInfoGalleryGroups();
+    if (!groups.length) {
+        serverInfoState.groupIndex = 0;
+        serverInfoState.imageIndex = 0;
+        return null;
+    }
+    serverInfoState.groupIndex = Math.min(Math.max(serverInfoState.groupIndex, 0), groups.length - 1);
+    const group = groups[serverInfoState.groupIndex];
+    serverInfoState.imageIndex = Math.min(Math.max(serverInfoState.imageIndex, 0), group.images.length - 1);
+    return group;
+}
+
+function getActiveServerInfoImage() {
+    const group = clampServerInfoGallerySelection();
+    if (!group) {
+        return null;
+    }
+    return {
+        group,
+        image: group.images[serverInfoState.imageIndex]
+    };
+}
+
+function clampServerInfoZoom(value) {
+    return Math.min(6, Math.max(1, Number(value) || 1));
+}
+
+function applyServerInfoZoomTransform() {
+    const img = document.getElementById('server-info-image-viewer-img');
+    if (!img) {
+        return;
+    }
+    img.style.transform = `translate(${serverInfoState.zoomX}px, ${serverInfoState.zoomY}px) scale(${serverInfoState.zoomScale})`;
+}
+
+function resetServerInfoZoom() {
+    serverInfoState.zoomScale = 1;
+    serverInfoState.zoomX = 0;
+    serverInfoState.zoomY = 0;
+    applyServerInfoZoomTransform();
+}
+
+function setServerInfoZoom(scale, anchorX, anchorY) {
+    const nextScale = clampServerInfoZoom(scale);
+    const previousScale = serverInfoState.zoomScale || 1;
+    if (anchorX != null && anchorY != null && previousScale > 0) {
+        const factor = nextScale / previousScale;
+        serverInfoState.zoomX = anchorX - ((anchorX - serverInfoState.zoomX) * factor);
+        serverInfoState.zoomY = anchorY - ((anchorY - serverInfoState.zoomY) * factor);
+    }
+    serverInfoState.zoomScale = nextScale;
+    if (serverInfoState.zoomScale === 1) {
+        serverInfoState.zoomX = 0;
+        serverInfoState.zoomY = 0;
+    }
+    applyServerInfoZoomTransform();
+}
+
+function closeServerInfoImageViewer() {
+    const viewer = document.getElementById('server-info-image-viewer');
+    if (!viewer) {
+        return;
+    }
+    viewer.classList.add('hidden');
+    viewer.setAttribute('aria-hidden', 'true');
+    serverInfoState.zoomDragging = false;
+    resetServerInfoZoom();
+}
+
+function openServerInfoImageViewer() {
+    const active = getActiveServerInfoImage();
+    const viewer = document.getElementById('server-info-image-viewer');
+    const img = document.getElementById('server-info-image-viewer-img');
+    const title = document.getElementById('server-info-image-viewer-title');
+    if (!active || !viewer || !img) {
+        return;
+    }
+
+    const { group, image } = active;
+    resetServerInfoZoom();
+    img.src = image.src || image.fullSrc || '';
+    img.alt = `${group.title || 'Server'} screenshot${image.label ? ` from ${image.label}` : ''}`;
+    if (title) {
+        title.textContent = `${group.title || 'Screenshot'}${image.label ? ` | ${image.label}` : ''}`;
+    }
+    viewer.classList.remove('hidden');
+    viewer.setAttribute('aria-hidden', 'false');
+}
+
+function renderServerInfoOverview(payload) {
+    const overview = document.getElementById('server-info-overview');
+    if (!overview) {
+        return;
+    }
+    overview.innerHTML = '';
+    const mods = Array.isArray(payload && payload.mods) ? payload.mods : [];
+    const facts = [
+        { label: 'Current Version', value: payload && payload.currentVersion ? payload.currentVersion : 'Unknown' },
+        { label: 'Current Mods', value: String(mods.length) },
+        { label: 'Founded', value: payload && payload.startedLabel ? payload.startedLabel : 'April 23, 2020' },
+        { label: 'Start Version', value: payload && payload.startVersion ? payload.startVersion : '1.15.2' }
+    ];
+
+    facts.forEach(fact => {
+        const card = createServerInfoNode('article', 'server-info-fact');
+        const value = createServerInfoNode('div', 'server-info-fact-value', fact.value);
+        const label = createServerInfoNode('div', 'server-info-fact-label', fact.label);
+        card.appendChild(value);
+        card.appendChild(label);
+        if (fact.label === 'Current Mods') {
+            card.classList.add('server-info-fact-action');
+            card.setAttribute('role', 'button');
+            card.tabIndex = 0;
+            card.title = 'Jump to installed mods';
+            card.addEventListener('click', scrollServerInfoModsIntoView);
+            card.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    scrollServerInfoModsIntoView();
+                }
+            });
+        }
+        overview.appendChild(card);
+    });
+}
+
+function renderServerInfoTabs() {
+    const tabs = document.getElementById('server-info-era-tabs');
+    if (!tabs) {
+        return;
+    }
+    tabs.innerHTML = '';
+    const groups = getServerInfoGalleryGroups();
+    groups.forEach((group, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'server-info-era-tab';
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', index === serverInfoState.groupIndex ? 'true' : 'false');
+        button.classList.toggle('active', index === serverInfoState.groupIndex);
+
+        const title = createServerInfoNode('span', 'server-info-era-title', group.title || 'Era');
+        const meta = createServerInfoNode('span', 'server-info-era-meta', `${group.eyebrow || ''}${group.eyebrow ? ' | ' : ''}${group.images.length} image${group.images.length === 1 ? '' : 's'}`);
+        button.appendChild(title);
+        button.appendChild(meta);
+        button.addEventListener('click', () => {
+            serverInfoState.groupIndex = index;
+            serverInfoState.imageIndex = 0;
+            renderServerInfoGallery();
+        });
+        tabs.appendChild(button);
+    });
+}
+
+function moveServerInfoImage(delta) {
+    const group = clampServerInfoGallerySelection();
+    if (!group || group.images.length < 2) {
+        return;
+    }
+    const next = (serverInfoState.imageIndex + delta + group.images.length) % group.images.length;
+    serverInfoState.imageIndex = next;
+    renderServerInfoGallery();
+}
+
+function updateServerInfoThumbnailOverflow(rail) {
+    if (!rail) {
+        return;
+    }
+    const thumbs = rail.querySelector('.server-info-thumbnails');
+    const topFlow = rail.querySelector('.server-info-thumb-flow-top');
+    const bottomFlow = rail.querySelector('.server-info-thumb-flow-bottom');
+    const topTrack = topFlow ? topFlow.querySelector('.server-info-thumb-flow-track') : null;
+    const bottomTrack = bottomFlow ? bottomFlow.querySelector('.server-info-thumb-flow-track') : null;
+    if (!thumbs || !topFlow || !bottomFlow || !topTrack || !bottomTrack) {
+        return;
+    }
+
+    const top = thumbs.scrollTop;
+    const overflowRemaining = thumbs.scrollHeight - thumbs.scrollTop - thumbs.clientHeight;
+    const hasMoreAbove = top > 4;
+    const hasMoreBelow = overflowRemaining > 4;
+    const railStyles = getComputedStyle(rail);
+    const topEdgeHeight = parseFloat(railStyles.getPropertyValue('--server-info-thumb-flow-top-height')) || 54;
+    const bottomEdgeHeight = parseFloat(railStyles.getPropertyValue('--server-info-thumb-flow-bottom-height')) || 86;
+    const featherHeight = parseFloat(railStyles.getPropertyValue('--server-info-thumb-flow-feather')) || 56;
+    rail.classList.toggle('has-more-above', hasMoreAbove);
+    rail.classList.toggle('has-more-below', hasMoreBelow);
+    topTrack.style.transform = `translateY(${topEdgeHeight - top}px)`;
+    bottomTrack.style.transform = `translateY(${featherHeight - top - thumbs.clientHeight}px)`;
+}
+
+function syncServerInfoThumbnailRails() {
+    document.querySelectorAll('.server-info-thumbnail-rail').forEach(rail => {
+        const layout = rail.closest('.server-info-gallery-layout');
+        const stage = layout ? layout.querySelector('.server-info-stage') : null;
+        const thumbs = rail.querySelector('.server-info-thumbnails');
+        const isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+        if (!stage || !thumbs || isMobile) {
+            rail.style.height = '';
+            thumbs.style.height = '';
+            rail.classList.remove('has-more-above', 'has-more-below');
+            return;
+        }
+        const stageHeight = Math.round(stage.getBoundingClientRect().height);
+        if (stageHeight > 0) {
+            rail.style.height = `${stageHeight}px`;
+            thumbs.style.height = `${stageHeight}px`;
+        }
+        updateServerInfoThumbnailOverflow(rail);
+    });
+}
+
+function renderServerInfoGallery() {
+    const content = document.getElementById('server-info-gallery-content');
+    const fullLink = document.getElementById('server-info-full-link');
+    if (!content) {
+        return;
+    }
+    const group = clampServerInfoGallerySelection();
+    renderServerInfoTabs();
+    content.innerHTML = '';
+
+    if (!group) {
+        if (fullLink) {
+            fullLink.classList.add('hidden');
+            fullLink.removeAttribute('href');
+        }
+        content.appendChild(createServerInfoNode('p', 'server-info-empty', 'No screenshots were found.'));
+        return;
+    }
+
+    const image = group.images[serverInfoState.imageIndex];
+    if (fullLink) {
+        fullLink.classList.remove('hidden');
+        fullLink.href = image.fullSrc || image.src || '#';
+    }
+
+    const layout = createServerInfoNode('div', 'server-info-gallery-layout');
+    const stage = createServerInfoNode('div', 'server-info-stage');
+
+    const previous = createServerInfoNode('button', 'server-info-gallery-nav server-info-gallery-nav-prev', 'Prev');
+    previous.type = 'button';
+    previous.setAttribute('aria-label', 'Previous screenshot');
+    previous.disabled = group.images.length < 2;
+    previous.addEventListener('click', () => moveServerInfoImage(-1));
+
+    const next = createServerInfoNode('button', 'server-info-gallery-nav server-info-gallery-nav-next', 'Next');
+    next.type = 'button';
+    next.setAttribute('aria-label', 'Next screenshot');
+    next.disabled = group.images.length < 2;
+    next.addEventListener('click', () => moveServerInfoImage(1));
+
+    const img = document.createElement('img');
+    img.className = 'server-info-stage-image';
+    img.src = image.src || image.fullSrc || '';
+    img.alt = `${group.title || 'Server'} screenshot${image.label ? ` from ${image.label}` : ''}`;
+    img.decoding = 'async';
+    img.loading = 'eager';
+    img.addEventListener('click', openServerInfoImageViewer);
+
+    const caption = createServerInfoNode('div', 'server-info-stage-caption');
+    const captionTitle = createServerInfoNode('div', 'server-info-stage-title', group.title || 'Screenshot');
+    const captionText = createServerInfoNode('div', 'server-info-stage-text', `${image.label || image.fileName || 'Screenshot'}${group.description ? ` | ${group.description}` : ''}`);
+    caption.appendChild(captionTitle);
+    caption.appendChild(captionText);
+
+    stage.appendChild(img);
+    stage.appendChild(previous);
+    stage.appendChild(next);
+    stage.appendChild(caption);
+
+    const thumbRail = createServerInfoNode('div', 'server-info-thumbnail-rail');
+    const thumbs = createServerInfoNode('div', 'server-info-thumbnails');
+    group.images.forEach((item, index) => {
+        const thumb = document.createElement('button');
+        thumb.type = 'button';
+        thumb.className = 'server-info-thumb';
+        thumb.classList.toggle('active', index === serverInfoState.imageIndex);
+        thumb.setAttribute('aria-label', item.label || item.fileName || 'Screenshot');
+        const thumbImg = document.createElement('img');
+        thumbImg.src = item.thumbSrc || item.src || item.fullSrc || '';
+        thumbImg.alt = '';
+        thumbImg.loading = 'lazy';
+        thumbImg.decoding = 'async';
+        thumb.appendChild(thumbImg);
+        thumb.addEventListener('click', () => {
+            serverInfoState.imageIndex = index;
+            renderServerInfoGallery();
+        });
+        thumbs.appendChild(thumb);
+    });
+    thumbs.addEventListener('scroll', () => updateServerInfoThumbnailOverflow(thumbRail));
+
+    const createFlowPreview = className => {
+        const preview = createServerInfoNode('div', `server-info-thumb-flow ${className}`);
+        const track = createServerInfoNode('div', 'server-info-thumb-flow-track');
+        Array.from(thumbs.children).forEach(thumb => {
+            const clone = thumb.cloneNode(true);
+            clone.classList.remove('active');
+            clone.setAttribute('aria-hidden', 'true');
+            clone.tabIndex = -1;
+            track.appendChild(clone);
+        });
+        preview.setAttribute('aria-hidden', 'true');
+        preview.appendChild(track);
+        return preview;
+    };
+
+    thumbRail.appendChild(createFlowPreview('server-info-thumb-flow-top'));
+    thumbRail.appendChild(thumbs);
+    thumbRail.appendChild(createFlowPreview('server-info-thumb-flow-bottom'));
+
+    layout.appendChild(stage);
+    layout.appendChild(thumbRail);
+    content.appendChild(layout);
+    img.addEventListener('load', syncServerInfoThumbnailRails, { once: true });
+    window.requestAnimationFrame(() => {
+        const activeThumb = thumbs.querySelector('.server-info-thumb.active');
+        if (activeThumb) {
+            activeThumb.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+        syncServerInfoThumbnailRails();
+    });
+}
+
+function renderServerInfoLore(payload) {
+    const content = document.getElementById('server-info-lore-content');
+    if (!content) {
+        return;
+    }
+    content.innerHTML = '';
+    const sections = Array.isArray(payload && payload.loreSections) ? payload.loreSections : [];
+    if (!sections.length) {
+        content.appendChild(createServerInfoNode('p', 'server-info-empty', 'No server history has been added yet.'));
+        return;
+    }
+
+    sections.forEach(section => {
+        const item = createServerInfoNode('article', 'server-info-lore-item');
+        const marker = createServerInfoNode('div', 'server-info-lore-marker');
+        const body = createServerInfoNode('div', 'server-info-lore-body');
+        const eyebrow = createServerInfoNode('div', 'server-info-lore-eyebrow', section.eyebrow || '');
+        const title = createServerInfoNode('h4', null, section.title || 'History');
+        const paragraph = createServerInfoNode('p', null, section.body || '');
+        body.appendChild(eyebrow);
+        body.appendChild(title);
+        body.appendChild(paragraph);
+        item.appendChild(marker);
+        item.appendChild(body);
+        content.appendChild(item);
+    });
+}
+
+function getFilteredServerInfoMods(payload) {
+    const input = document.getElementById('server-info-mod-filter');
+    const query = input ? input.value.trim().toLowerCase() : '';
+    const mods = Array.isArray(payload && payload.mods) ? payload.mods : [];
+    if (!query) {
+        return mods;
+    }
+    return mods.filter(mod => {
+        const haystack = [
+            mod.name,
+            mod.id,
+            mod.version,
+            mod.fileName,
+            mod.description,
+            ...(Array.isArray(mod.authors) ? mod.authors : [])
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function renderServerInfoMods(payload) {
+    const list = document.getElementById('server-info-mod-list');
+    if (!list) {
+        return;
+    }
+    list.innerHTML = '';
+
+    if (payload && payload.modsError) {
+        list.appendChild(createServerInfoNode('p', 'server-info-empty is-error', payload.modsError));
+        return;
+    }
+
+    const mods = getFilteredServerInfoMods(payload);
+    if (!mods.length) {
+        list.appendChild(createServerInfoNode('p', 'server-info-empty', 'No matching mods.'));
+        return;
+    }
+
+    mods.forEach(mod => {
+        const card = createServerInfoNode('article', 'server-info-mod-card');
+        const name = createServerInfoNode('div', 'server-info-mod-name', mod.name || mod.id || mod.fileName || 'Unknown mod');
+        const meta = createServerInfoNode('div', 'server-info-mod-meta');
+        const pieces = [];
+        if (mod.version) {
+            pieces.push(mod.version);
+        }
+        if (mod.id && mod.id !== mod.name) {
+            pieces.push(mod.id);
+        }
+        pieces.push(mod.fileName || 'unknown file');
+        meta.textContent = pieces.join(' | ');
+        card.appendChild(name);
+        card.appendChild(meta);
+        list.appendChild(card);
+    });
+}
+
+function renderServerInfo(payload) {
+    const body = document.getElementById('server-info-body');
+    if (!body) {
+        return;
+    }
+    renderServerInfoOverview(payload);
+    renderServerInfoGallery();
+    renderServerInfoLore(payload);
+    renderServerInfoMods(payload);
+    body.classList.remove('hidden');
+    setServerInfoStatus('');
+}
+
+async function openServerInfoModal() {
+    closeUpdateAdvancedMenu();
+    closeServerManagementDropdown();
+    const modal = document.getElementById('server-info-modal');
+    const body = document.getElementById('server-info-body');
+    const filter = document.getElementById('server-info-mod-filter');
+    if (!modal) {
+        return;
+    }
+    if (filter) {
+        filter.value = '';
+    }
+    if (body) {
+        body.classList.add('hidden');
+    }
+    setServerInfoStatus('Loading server info...');
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    syncModalOpenState();
+
+    try {
+        const response = await fetch('/server-info', {
+            headers: getAuthHeaders(false)
+        });
+        if (response.status === 428) {
+            redirectToSetPassword();
+            return;
+        }
+        if (response.status === 401 || response.status === 403) {
+            redirectToLogin();
+            return;
+        }
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.message || `Failed to load server info (${response.status})`);
+        }
+        serverInfoState.payload = await response.json();
+        serverInfoState.groupIndex = 0;
+        serverInfoState.imageIndex = 0;
+        renderServerInfo(serverInfoState.payload);
+    } catch (err) {
+        console.error('Server info load failed:', err);
+        setServerInfoStatus(err.message || 'Failed to load server info.', true);
+    }
+}
+
+function setupServerInfoModalHandlers() {
+    const closeBtn = document.getElementById('server-info-close-btn');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeServerInfoModal);
+    }
+
+    document.querySelectorAll('[data-close-server-info="true"]').forEach(node => {
+        node.addEventListener('click', closeServerInfoModal);
+    });
+
+    const filter = document.getElementById('server-info-mod-filter');
+    if (filter) {
+        filter.addEventListener('input', () => {
+            renderServerInfoMods(serverInfoState.payload || {});
+        });
+    }
+
+    window.addEventListener('resize', syncServerInfoThumbnailRails);
+
+    const imageCloseBtn = document.getElementById('server-info-image-close-btn');
+    if (imageCloseBtn) {
+        imageCloseBtn.addEventListener('click', closeServerInfoImageViewer);
+    }
+
+    document.querySelectorAll('[data-close-server-info-image="true"]').forEach(node => {
+        node.addEventListener('click', closeServerInfoImageViewer);
+    });
+
+    const zoomInBtn = document.getElementById('server-info-zoom-in-btn');
+    if (zoomInBtn) {
+        zoomInBtn.addEventListener('click', () => setServerInfoZoom(serverInfoState.zoomScale + 0.35));
+    }
+
+    const zoomOutBtn = document.getElementById('server-info-zoom-out-btn');
+    if (zoomOutBtn) {
+        zoomOutBtn.addEventListener('click', () => setServerInfoZoom(serverInfoState.zoomScale - 0.35));
+    }
+
+    const zoomResetBtn = document.getElementById('server-info-zoom-reset-btn');
+    if (zoomResetBtn) {
+        zoomResetBtn.addEventListener('click', resetServerInfoZoom);
+    }
+
+    const panArea = document.getElementById('server-info-image-pan-area');
+    if (panArea) {
+        panArea.addEventListener('wheel', event => {
+            event.preventDefault();
+            const rect = panArea.getBoundingClientRect();
+            const anchorX = event.clientX - rect.left - (rect.width / 2);
+            const anchorY = event.clientY - rect.top - (rect.height / 2);
+            const delta = event.deltaY < 0 ? 0.25 : -0.25;
+            setServerInfoZoom(serverInfoState.zoomScale + delta, anchorX, anchorY);
+        }, { passive: false });
+
+        panArea.addEventListener('pointerdown', event => {
+            if (serverInfoState.zoomScale <= 1) {
+                return;
+            }
+            serverInfoState.zoomDragging = true;
+            serverInfoState.zoomPointerX = event.clientX;
+            serverInfoState.zoomPointerY = event.clientY;
+            panArea.classList.add('is-dragging');
+            panArea.setPointerCapture(event.pointerId);
+        });
+
+        panArea.addEventListener('pointermove', event => {
+            if (!serverInfoState.zoomDragging) {
+                return;
+            }
+            serverInfoState.zoomX += event.clientX - serverInfoState.zoomPointerX;
+            serverInfoState.zoomY += event.clientY - serverInfoState.zoomPointerY;
+            serverInfoState.zoomPointerX = event.clientX;
+            serverInfoState.zoomPointerY = event.clientY;
+            applyServerInfoZoomTransform();
+        });
+
+        const stopDrag = event => {
+            if (!serverInfoState.zoomDragging) {
+                return;
+            }
+            serverInfoState.zoomDragging = false;
+            panArea.classList.remove('is-dragging');
+            try {
+                panArea.releasePointerCapture(event.pointerId);
+            } catch (_) {
+                // Pointer may already have been released by the browser.
+            }
+        };
+
+        panArea.addEventListener('pointerup', stopDrag);
+        panArea.addEventListener('pointercancel', stopDrag);
+        panArea.addEventListener('pointerleave', stopDrag);
+    }
+
+    document.addEventListener('keydown', event => {
+        if (!document.getElementById('server-info-image-viewer')?.classList.contains('hidden')) {
+            if (event.key === 'Escape') {
+                closeServerInfoImageViewer();
+            } else if (event.key === '+' || event.key === '=') {
+                setServerInfoZoom(serverInfoState.zoomScale + 0.35);
+            } else if (event.key === '-') {
+                setServerInfoZoom(serverInfoState.zoomScale - 0.35);
+            } else if (event.key === '0') {
+                resetServerInfoZoom();
+            }
+            return;
+        }
+        if (!isModalVisible('server-info-modal')) {
+            return;
+        }
+        if (event.key === 'Escape') {
+            closeServerInfoModal();
+        } else if (event.key === 'ArrowLeft') {
+            moveServerInfoImage(-1);
+        } else if (event.key === 'ArrowRight') {
+            moveServerInfoImage(1);
+        }
+    });
 }
 
 function extractFileName(filePath) {
@@ -1341,6 +2000,7 @@ function setupServerManagementMenu() {
     const button = document.getElementById('server-management-button');
     const dropdown = document.getElementById('server-management-dropdown');
     const backupButton = document.getElementById('sftp-button');
+    const infoButton = document.getElementById('server-info-button');
     const versionButton = document.getElementById('server-version-button');
     const accountButton = document.getElementById('account-button');
 
@@ -1366,6 +2026,10 @@ function setupServerManagementMenu() {
         backupButton.addEventListener('click', () => {
             window.location.href = '/sftp.html';
         });
+    }
+
+    if (infoButton) {
+        infoButton.addEventListener('click', openServerInfoModal);
     }
 
     if (versionButton) {
@@ -2072,6 +2736,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupProgressBulge();
     setupPointerLighting();
     setupServerManagementMenu();
+    setupServerInfoModalHandlers();
     setupUpdateModalHandlers();
     setupWebSocket();
     setupUpdateStatusPolling();

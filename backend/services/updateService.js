@@ -2065,6 +2065,7 @@ module.exports = function createUpdateService({ state, getWss }) {
   return {
     initialize,
     startStatusRefreshTimer,
+    getCurrentVersion,
     getStatus,
     listAdvancedTargets,
     createPreflightCheck,
