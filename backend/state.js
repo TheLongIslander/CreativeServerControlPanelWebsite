@@ -4,6 +4,7 @@
 module.exports = {
   serverRunning: false,
   lastBackupHour: null,
+  backupInProgress: false,
   maintenanceMode: false,
   updateLocked: false,
   updateLockOwner: null

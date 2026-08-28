@@ -1,37 +1,57 @@
 /*
- * Purpose: Logging and time utilities backed by SQLite.
- * Functions: getEasternTime, getFormattedDate, getEasternDateHour, cleanupExpiredTokens,
- *            logServerAction, logSFTPServerAction.
+ * Purpose: Lazy SQLite-backed activity logging and time utilities.
  */
-// utils.js
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const sqlite3 = require('sqlite3').verbose();
+const tokenBlacklist = require('../db/tokenBlacklist');
 
-// Initialize the SQLite database
-const db = new sqlite3.Database('./token_blacklist.db', sqlite3.OPEN_READWRITE, (err) => {
-    if (err) {
-        return console.error('Error opening database:', err.message);
-    }
-    console.log('Connected to the SQLite database.');
-});
-const logDB = new sqlite3.Database('./server_logs.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
-    if (err) {
-        console.error('Error when creating the database', err);
-    } else {
-        console.log('Database created!');
-        // Create the table if it does not exist
-        logDB.run(`CREATE TABLE IF NOT EXISTS server_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            action TEXT NOT NULL,
-            timestamp TEXT NOT NULL
-        )`);
-    }
-});
-const activityDb = new sqlite3.Database('./sftp_activity_log.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
-    if (err) {
-      console.error(err.message);
-    }
-    activityDb.run(`
+let logDb = null;
+let activityDb = null;
+let logReady = null;
+let activityReady = null;
+
+function openDatabase(filePath, schema) {
+  return new Promise((resolve, reject) => {
+    const handle = new sqlite3.Database(filePath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, err => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      handle.run(schema, createErr => {
+        if (createErr) reject(createErr);
+        else resolve(handle);
+      });
+    });
+  });
+}
+
+async function getLogDb() {
+  if (logDb) return logDb;
+  if (!logReady) {
+    const filePath = path.resolve(process.env.SERVER_LOGS_DB_PATH || './server_logs.db');
+    logReady = openDatabase(filePath, `
+      CREATE TABLE IF NOT EXISTS server_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action TEXT NOT NULL,
+        timestamp TEXT NOT NULL
+      )
+    `).then(handle => {
+      logDb = handle;
+      return handle;
+    }).catch(err => {
+      logReady = null;
+      throw err;
+    });
+  }
+  return logReady;
+}
+
+async function getActivityDb() {
+  if (activityDb) return activityDb;
+  if (!activityReady) {
+    const filePath = path.resolve(process.env.SFTP_ACTIVITY_DB_PATH || './sftp_activity_log.db');
+    activityReady = openDatabase(filePath, `
       CREATE TABLE IF NOT EXISTS sftp_activity_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT,
@@ -40,80 +60,92 @@ const activityDb = new sqlite3.Database('./sftp_activity_log.db', sqlite3.OPEN_R
         timestamp TEXT,
         ip_address TEXT
       )
-    `, (err) => {
-      if (err) {
-        console.error(err.message);
-      }
+    `).then(handle => {
+      activityDb = handle;
+      return handle;
+    }).catch(err => {
+      activityReady = null;
+      throw err;
+    });
+  }
+  return activityReady;
+}
+
+function run(handle, sql, params) {
+  return new Promise((resolve, reject) => {
+    handle.run(sql, params, function onRun(err) {
+      if (err) reject(err);
+      else resolve(this);
     });
   });
-
-function getEasternTime() {
-    const date = new Date();
-    return date.toLocaleString('en-US', { timeZone: 'America/New_York' });
-}
-function getFormattedDate() {
-    const date = new Date();
-    const day = date.getDate();
-    const month = date.toLocaleString('en-US', { month: 'long', timeZone: 'America/New_York' });
-    const year = date.getFullYear();
-    let suffix = 'th';
-    if (day % 10 === 1 && day !== 11) suffix = 'st';
-    else if (day % 10 === 2 && day !== 12) suffix = 'nd';
-    else if (day % 10 === 3 && day !== 13) suffix = 'rd';
-  
-    return `${month} ${day}${suffix}, ${year}`;
-  }
-  function getEasternDateHour() {
-    const date = new Date();
-    return date.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: 'numeric', year: 'numeric', month: 'long', day: 'numeric' });
 }
 
-function cleanupExpiredTokens() {
-    console.log("Running cleanup...");
-    db.all('SELECT token FROM blacklisted_tokens', [], (err, rows) => {
-        if (err) {
-            return console.error(err.message);
-        }
-        rows.forEach(row => {
-            const decoded = jwt.decode(row.token, { complete: true });
-            if (decoded && decoded.payload.exp * 1000 < Date.now()) {
-                db.run('DELETE FROM blacklisted_tokens WHERE token = ?', [row.token], (err) => {
-                    if (err) {
-                        console.error('Failed to delete expired token:', err.message);
-                    }
-                });
-            }
-        });
-    });
+function getEasternTime(date = new Date()) {
+  return date.toLocaleString('en-US', { timeZone: 'America/New_York' });
 }
-function logServerAction(action) {
-    const timestamp = getEasternTime(); // This will fetch the time in Eastern Time
-    logDB.run('INSERT INTO server_logs (action, timestamp) VALUES (?, ?)', [action, timestamp], (err) => {
-        if (err) {
-            return console.error('Error logging to database:', err.message);
-        }
-        console.log(`Logged action "${action}" at ${timestamp}`);
-    });
+
+function getFormattedDate(value = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: 'long', day: 'numeric'
+  }).formatToParts(value);
+  const day = Number(parts.find(part => part.type === 'day').value);
+  const month = parts.find(part => part.type === 'month').value;
+  const year = parts.find(part => part.type === 'year').value;
+  let suffix = 'th';
+  if (day % 10 === 1 && day % 100 !== 11) suffix = 'st';
+  else if (day % 10 === 2 && day % 100 !== 12) suffix = 'nd';
+  else if (day % 10 === 3 && day % 100 !== 13) suffix = 'rd';
+  return `${month} ${day}${suffix}, ${year}`;
 }
-function logSFTPServerAction(username, action, filePath, ipAddress) {
-    const timestamp = getEasternTime(); // Fetch the time in Eastern Time
-    console.log(`Attempting to log action: ${action} by ${username} on ${filePath} at ${timestamp} from IP ${ipAddress}`); // Debug log
-    activityDb.run(`
-        INSERT INTO sftp_activity_log (username, action, file_path, timestamp, ip_address)
-        VALUES (?, ?, ?, ?, ?)
-    `, [username, action, filePath, timestamp, ipAddress], (err) => {
-        if (err) {
-            return console.error('Error logging to database:', err.message);
-        }
-        console.log(`Logged SFTP action "${action}" by ${username} on ${filePath} at ${timestamp} from IP ${ipAddress}`);
-    });
+
+function getEasternDateHour(date = new Date()) {
+  return date.toLocaleString('en-US', {
+    timeZone: 'America/New_York', hour12: false, hour: 'numeric', year: 'numeric', month: 'long', day: 'numeric'
+  });
+}
+
+async function cleanupExpiredTokens() {
+  const rows = await tokenBlacklist.list();
+  await Promise.all(rows.map(async row => {
+    const decoded = jwt.decode(row.token);
+    if (!decoded || !decoded.exp || decoded.exp * 1000 < Date.now()) {
+      await tokenBlacklist.remove(row.token);
+    }
+  }));
+}
+
+async function logServerAction(action) {
+  const timestamp = getEasternTime();
+  const handle = await getLogDb();
+  await run(handle, 'INSERT INTO server_logs (action, timestamp) VALUES (?, ?)', [action, timestamp]);
+}
+
+async function logSFTPServerAction(username, action, filePath, ipAddress) {
+  const timestamp = getEasternTime();
+  const handle = await getActivityDb();
+  await run(handle, `
+    INSERT INTO sftp_activity_log (username, action, file_path, timestamp, ip_address)
+    VALUES (?, ?, ?, ?, ?)
+  `, [username, action, filePath, timestamp, ipAddress]);
+}
+
+async function close() {
+  const handles = [logDb, activityDb].filter(Boolean);
+  logDb = null;
+  activityDb = null;
+  logReady = null;
+  activityReady = null;
+  await Promise.all(handles.map(handle => new Promise((resolve, reject) => {
+    handle.close(err => (err ? reject(err) : resolve()));
+  })));
 }
 
 module.exports = {
-    getEasternTime,
-    getFormattedDate,
-    getEasternDateHour,
-    cleanupExpiredTokens,
-    logServerAction,
-    logSFTPServerAction
+  cleanupExpiredTokens,
+  close,
+  getEasternDateHour,
+  getEasternTime,
+  getFormattedDate,
+  logServerAction,
+  logSFTPServerAction
 };

@@ -6,16 +6,19 @@ const sqlite3 = require('sqlite3').verbose();
 const { encryptText } = require('../utils/encryption');
 const { normalizeUsername } = require('../utils/username');
 
-const dbPath = path.join(__dirname, '..', '..', 'users.db');
-const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
-  if (err) {
-    console.error('Error opening users database:', err.message);
+let db = null;
+
+function getDb() {
+  if (!db) {
+    const dbPath = path.resolve(process.env.USERS_DB_PATH || path.join(__dirname, '..', '..', 'users.db'));
+    db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
   }
-});
+  return db;
+}
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
+    getDb().run(sql, params, function (err) {
       if (err) {
         reject(err);
         return;
@@ -27,7 +30,7 @@ function run(sql, params = []) {
 
 function get(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
+    getDb().get(sql, params, (err, row) => {
       if (err) {
         reject(err);
         return;
@@ -39,7 +42,7 @@ function get(sql, params = []) {
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
+    getDb().all(sql, params, (err, rows) => {
       if (err) {
         reject(err);
         return;
@@ -76,10 +79,21 @@ async function initUsersDb() {
       action TEXT NOT NULL,
       metadata TEXT,
       ip_address TEXT,
+      source_event_id TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(actor_user_id) REFERENCES users(id),
       FOREIGN KEY(target_user_id) REFERENCES users(id)
     )
+  `);
+
+  const auditColumns = await all('PRAGMA table_info(user_audit_log)');
+  if (!auditColumns.some(column => column.name === 'source_event_id')) {
+    await run('ALTER TABLE user_audit_log ADD COLUMN source_event_id TEXT');
+  }
+  await run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_audit_source_event
+    ON user_audit_log(source_event_id)
+    WHERE source_event_id IS NOT NULL
   `);
 
   await run(`
@@ -236,7 +250,7 @@ async function ensureAdminUser() {
         last_password_reset_at,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       adminUsername,
       normalized,
@@ -330,13 +344,29 @@ async function getUserLoginHistory(userId) {
   `, [userId]);
 }
 
-async function logAuditEvent({ actorUserId, targetUserId, action, metadata, ipAddress }) {
+async function logAuditEvent({ actorUserId, targetUserId, action, metadata, ipAddress, sourceEventId }) {
   const now = new Date().toISOString();
   const payload = metadata ? JSON.stringify(metadata) : null;
-  await run(`
-    INSERT INTO user_audit_log (actor_user_id, target_user_id, action, metadata, ip_address, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `, [actorUserId || null, targetUserId || null, action, payload, ipAddress || null, now]);
+  return run(`
+    INSERT OR IGNORE INTO user_audit_log (
+      actor_user_id, target_user_id, action, metadata, ip_address, source_event_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `, [
+    actorUserId || null,
+    targetUserId || null,
+    action,
+    payload,
+    ipAddress || null,
+    sourceEventId || null,
+    now
+  ]);
+}
+
+async function close() {
+  if (!db) return;
+  const handle = db;
+  db = null;
+  await new Promise((resolve, reject) => handle.close(err => (err ? reject(err) : resolve())));
 }
 
 async function listAuditEvents({ actor, target, action, ip, from, to, limit = 200 } = {}) {
@@ -627,5 +657,6 @@ module.exports = {
   deleteUser,
   recordLoginFailure,
   clearLoginFailures,
-  incrementTokenVersion
+  incrementTokenVersion,
+  close
 };

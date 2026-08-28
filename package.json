@@ -1,7 +1,8 @@
 {
   "scripts": {
     "dev": "node app.js",
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.1.2",

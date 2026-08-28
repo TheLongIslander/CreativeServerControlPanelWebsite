@@ -12,6 +12,7 @@ This service is a self-hosted web control plane for:
 - Read-only server information, installed-mod metadata, server lore, and screenshot gallery browsing.
 - Multi-user authentication with admin-managed accounts.
 - Optional passkey (WebAuthn) login and passkey lifecycle management.
+- Authenticated Minecraft chat and player-activity history, including safe panel-to-game messages.
 
 The system is implemented as a single Node.js process with Express HTTP routes, a WebSocket server, SQLite persistence, and worker threads for heavy I/O/CPU operations.
 
@@ -28,6 +29,7 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 - Server Info modal data API, dynamic screenshot discovery, and installed-mod inventory display.
 - Graceful maintenance broadcast + process shutdown.
 - User appearance preferences (theme + color mode).
+- Session-aware Minecraft chat ingestion, pagination, reconnect catch-up, health reporting, and an admin sending switch.
 
 ### Out of scope
 
@@ -36,6 +38,8 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 - TLS termination.
 - External identity providers.
 - Automated DB migrations beyond startup-time SQLite column evolution.
+- Raw Minecraft console access, arbitrary command passthrough, private messages, and multi-server chat UI.
+- Guaranteed player-visible delivery acknowledgement from Minecraft; the v1 Screen transport can confirm only that Screen accepted the command bytes.
 
 ## 3. Runtime Architecture
 
@@ -44,13 +48,15 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 One Node.js process (`app.js`) hosts:
 
 1. HTTP server (Express).
-2. WebSocket server (`ws`) attached to the HTTP server.
+2. Explicit public and authenticated WebSocket upgrade paths backed by `ws`.
 3. Worker threads for download zipping and HEIC conversion.
-4. In-memory runtime state in `backend/state.js`.
+4. An authoritative Screen/log runtime reconciler.
+5. A byte-oriented Minecraft log tailer and dedicated chat SQLite store.
+6. In-memory coordination state in `backend/state.js`.
 
 ### External dependencies
 
-- Minecraft server host controlled via shell commands.
+- Minecraft server host controlled through argv-only `screen`/launch-process calls.
 - SFTP server accessed via `ssh2`.
 - Local SQLite files for persistence.
 - System binaries for backup/preview/archive operations.
@@ -66,30 +72,43 @@ One Node.js process (`app.js`) hosts:
 - Utilities: `backend/utils/`
 - Frontend pages/scripts/styles: `public/`
 
+Chat-specific ownership:
+
+- `backend/services/minecraftProcessService.js`: Screen identity, runtime readiness, lifecycle serialization.
+- `backend/services/chatLogTailer.js`: byte cursors, rotation/truncation recovery, bounded archive backfill.
+- `backend/services/chatParser.js`: strict allowlist parser for chat/join/leave/death/advancement lines.
+- `backend/db/chatStore.js`: `chat.db` migrations, sessions, messages, cursor, settings, and audit outbox.
+- `backend/services/chatService.js`: state snapshots, history, sending, idempotency, health, and recovery.
+- `backend/services/realtimeHub.js`: authenticated/public WebSocket scoping and liveness.
+- `public/serverChat.js` and `public/chat.css`: desktop/mobile chat surface.
+
 ## 4. Startup and Shutdown Lifecycle
 
 ### Startup sequence
 
 1. Load environment via `dotenv`.
-2. Construct Express app and middleware stack.
+2. Construct dependency instances and the side-effect-free Express application.
 3. Initialize users DB schema (`initUsersDb`).
 4. Ensure bootstrap `admin` account (`ensureAdminUser`).
 5. Initialize update DB/schema and recover update lock/run state (`updateService.initialize`).
-6. Prime current/latest Minecraft version state for update status.
-7. Start periodic update status refresh timer (`updateService.startStatusRefreshTimer`).
-8. Start HTTP listener on `PORT` (default `8087`).
-9. Attach WebSocket server to HTTP server.
+6. Start the HTTP listener on `PORT` (default `8087`) and attach explicit WebSocket upgrade handling.
+7. Start authoritative Minecraft runtime reconciliation.
+8. Initialize chat storage/settings, reconcile the current session, and begin bounded backfill/tailing. Chat failure degrades only chat and does not abort core startup.
+9. Start periodic update status refresh.
 10. Trigger background video thumbnail pre-cache crawl from SFTP root (`/`).
 
 ### Graceful shutdown
 
-Trigger: typing `stop` in server STDIN (TTY only).
+Triggers: typing `stop` in server STDIN (TTY only), `SIGINT`, `SIGTERM`, or the programmatic server handle's `close()` method.
 
 Steps:
 1. Set `maintenanceMode = true` (in-memory).
-2. Broadcast WebSocket maintenance message to all clients.
-3. After delay, close WS clients/server, then close HTTP server.
-4. Exit process (`0` on graceful path, forced `1` after timeout fallback).
+2. Broadcast maintenance to public and authenticated WebSocket clients.
+3. Stop accepting new HTTP connections and begin draining active requests.
+4. Close WebSocket clients and the WebSocket server with a bounded grace period.
+5. Await the bounded HTTP drain, then stop update/runtime/tailer/retry timers and preview/download workers.
+6. Checkpoint and close `chat.db` and the existing SQLite handles.
+7. Exit on terminal/signal shutdown; programmatic close does not terminate the Node process.
 
 ## 5. Configuration Contract
 
@@ -110,8 +129,16 @@ cp .env.example .env
 | `WEBAUTHN_RP_NAME` | No | `Server Control` | WebAuthn RP display name. |
 | `WEBAUTHN_ORIGIN` | Conditionally | None | Primary allowed WebAuthn origin. Required for production passkey flows. |
 | `WEBAUTHN_ORIGINS` | No | None | Comma-separated additional allowed WebAuthn origins. |
+| `APP_ORIGINS` | Production | WebAuthn origins, otherwise fixed localhost origins in development | Comma-separated exact HTTP(S) origins allowed for authenticated WS upgrades and chat mutations. Credentials, paths, wildcards, opaque origins, query strings, and fragments are rejected. |
 | `START_COMMAND_PATH` | Yes | None | Script path executed for server start/restart. |
 | `MINECRAFT_SERVER_PATH` | Yes | None | Source directory for backups. |
+| `MINECRAFT_SCREEN_SESSION` | No | `MinecraftSession` | Exact detached Screen session name observed and controlled by the runtime service. |
+| `MINECRAFT_LOG_PATH` | No | `$MINECRAFT_SERVER_PATH/logs/latest.log` | Explicit current Minecraft log path override. |
+| `MINECRAFT_TIME_ZONE` | No | Host resolved time zone, then `UTC` | IANA time zone used to reconstruct dates from Minecraft's time-only log prefix. |
+| `CHAT_DB_PATH` | No | `./chat.db` | Dedicated chat SQLite database path. |
+| `CHAT_SCREEN_MAX_COMMAND_BYTES` | No | `512` | Maximum UTF-8 bytes accepted for the complete Screen payload, including the trailing carriage return. Smoke-test before production use. |
+| `CHAT_RETENTION_DAYS` | No | `0` | Ended-session retention; `0` retains history indefinitely and a positive value prunes old ended sessions while preserving current/latest. |
+| `TRUST_PROXY` | No | Disabled | Explicit Express proxy trust (for example `loopback`, an address/CIDR list, or a hop count). Never use unrestricted `true`; this controls trusted client IP and TLS-forwarding data. |
 | `BACKUP_PATH` | Yes | None | Target root for backup output hierarchy. |
 | `PORT` | No | `8087` | HTTP listen port. |
 | `SFTP_HOST` | Yes | None | SFTP host. |
@@ -131,7 +158,6 @@ cp .env.example .env
 - `find`
 - `ffmpeg`
 - `GraphicsMagick` or `ImageMagick` + `Ghostscript` (PDF preview path)
-- `stdbuf` (used by directory zipping in download worker)
 - `df` (disk-space preflight for update flow)
 - `java` (or explicit Java path used by launch script; required for Fabric installer and runtime checks)
 
@@ -139,9 +165,9 @@ cp .env.example .env
 
 Configured in `app.js`:
 
-- URL-encoded parser limit: `50gb`.
-- JSON parser limit: `50gb`.
-- File upload middleware: temp-file mode enabled.
+- General URL-encoded and JSON parser limits: `1mb`.
+- `/chat` and `/admin/chat` are mounted first with a strict 4 KiB body limit and stable JSON parse/size errors.
+- File upload middleware: mounted only on authenticated/onboarded `/upload` requests, with temp-file mode enabled.
 - File upload temp directory: `TMP_UPLOAD_SERVER_PATH`.
 - File upload max file size: `50GB`.
 - File-size overflow handler returns HTTP `413`.
@@ -161,11 +187,15 @@ Defined in `backend/state.js`:
 - `maintenanceMode` (`boolean`) default `false`
 - `updateLocked` (`boolean`) default `false`
 - `updateLockOwner` (`string|null`) default `null`
+- `serverState` (`offline|starting|ready|stopping`) mirrored from the process reconciler
+- `serverReady` (`boolean`) mirrored from the process reconciler
+- `backupInProgress` (`boolean`) lifecycle lock
 
 Notes:
 
 - State is process-local and resets on restart.
-- `serverRunning` reflects route-side intent/state transitions, not a direct OS process probe.
+- `serverRunning`, `serverState`, and `serverReady` are compatibility mirrors of the authoritative Screen/log observation. Route intent is only a transition hint.
+- Chat maintains a separate epoch plus monotonic revision for capability/session snapshots; it is not stored in this shared state object.
 
 ## 8. Authentication and Authorization Model
 
@@ -295,10 +325,10 @@ Protection rules enforced server-side:
 
 | Method | Path | Auth | Behavior |
 |---|---|---|---|
-| `GET` | `/status` | No | Returns `{ running, updateInProgress }` from in-memory state. |
-| `POST` | `/start` | JWT + onboarded | Executes `sh $START_COMMAND_PATH`, sets `serverRunning=true`, logs action. Returns `423` if update is in progress. |
-| `POST` | `/stop` | JWT + onboarded | Sends `stop` to `screen -S MinecraftSession`, sets `serverRunning=false`, logs action. Returns `423` if update is in progress. |
-| `POST` | `/restart` | JWT + onboarded | Stops via `screen`, waits 3s, starts via service helper, logs action. Returns `423` if update is in progress. |
+| `GET` | `/status` | No | Returns `{ running, ready, state, updateInProgress }` from the authoritative runtime snapshot. |
+| `POST` | `/start` | JWT + onboarded | Serializes an argv-only launch through the process service and reconciles Screen state. Returns `423` while lifecycle-locked. |
+| `POST` | `/stop` | JWT + onboarded | Serializes a Screen `stop\r`, waits for the session to disappear, and reconciles state. Returns `423` while lifecycle-locked. |
+| `POST` | `/restart` | JWT + onboarded | Reconciles, then serializes stop/start as one priority lifecycle operation. Returns `423` while lifecycle-locked. |
 
 ### 10.6 Backup route
 
@@ -349,13 +379,14 @@ Behavior:
 | Method | Path | Auth | Request | Behavior |
 |---|---|---|---|---|
 | `POST` | `/download` | JWT + onboarded | `{ path, requestId? }` | Starts/reuses worker job, returns `{ requestId, message }`, logs action. |
-| `GET` | `/downloads/:requestId` | No | None | Streams temp ZIP file and deletes it after response finishes. |
+| `GET` | `/downloads/:requestId` | JWT + onboarded, request owner | None | Streams that user's temp ZIP file and deletes it after response finishes. Other users receive `404`. |
 
 Worker behavior:
 
 - Directory targets: recursively download then zip with progress.
 - File targets: download and zip unless already `.zip` (then renamed).
-- Progress events sent via WebSocket.
+- Progress, completion, and failure events are sent only to authenticated sockets belonging to the requesting user.
+- Jobs use isolated random temp paths and in-process ZIP streams. The service caps concurrent/outstanding jobs globally and per user, terminates stalled workers, and expires unclaimed archives after 15 minutes.
 
 ### 10.10 Preview route
 
@@ -426,28 +457,98 @@ Apply pipeline (high-level):
 7. Persist final state + detailed summary and release lock.
 8. On failure: rollback from snapshot and restore prior running/offline state.
 
+### 10.13 Minecraft chat routes
+
+Every chat response uses `Cache-Control: no-store`. Authenticated chat readers must also be onboarded. Mutations require `Content-Type: application/json` plus an exact `Origin` from `APP_ORIGINS`.
+
+| Method | Path | Auth | Request | Behavior |
+|---|---|---|---|---|
+| `GET` | `/chat/messages` | JWT + onboarded | Query: `limit` (default 200, max 500), one of `beforeId` or `afterId` | Returns the current/latest session, committed visible messages in ascending ID order, pagination state, limits, health, runtime state, and the caller's send capability. |
+| `POST` | `/chat/messages` | JWT + onboarded + allowed Origin | `{ message, clientMessageId }` | Normalizes with NFC/trim, validates, reserves a pending row, writes one fixed `tellraw` command through Screen, commits `sent`, then broadcasts. New sends return `201`; a successful idempotent replay returns `200`. |
+| `GET` | `/admin/chat/settings` | Admin | None | Returns the persistent panel-sending setting and its epoch/revision. |
+| `PATCH` | `/admin/chat/settings` | Admin + allowed Origin | Exactly `{ sendingEnabled: boolean }` | Applies the priority sending barrier, commits setting plus audit intent, and updates every connected composer through the standard session-status event. |
+| `GET` | `/admin/chat/health` | Admin | None | Returns redacted aggregate health/tailer/store/queue/socket metrics. |
+
+`GET /chat/messages` does not accept a session selector in v1. “Current” means the active normal runtime session while ready, otherwise the most recently ended normal session. Stored history remains readable while Minecraft is offline or sending is disabled.
+
+Messages are DTOs, never pre-rendered HTML:
+
+```json
+{
+  "id": 126,
+  "sessionKey": "sess_...",
+  "origin": "panel",
+  "kind": "chat",
+  "actorName": "TheLongIslander",
+  "panelUserId": 7,
+  "panelUsername": "TheLongIslander",
+  "message": "Hello everyone",
+  "occurredAt": "2026-08-28T18:21:00.000Z",
+  "timestampConfidence": "exact"
+}
+```
+
+The history response includes `stateEpoch` and `stateRevision`, a sanitized session, `permissions`, and authoritative limits:
+
+```json
+{
+  "limits": {
+    "maxMessageCodePoints": 256,
+    "maxCommandBytes": 512,
+    "commandFormatVersion": "tellraw-v1"
+  },
+  "permissions": {
+    "canRead": true,
+    "canSend": true,
+    "sendBlockedReason": null
+  }
+}
+```
+
+Important stable chat errors:
+
+| HTTP | Code | Meaning |
+|---|---|---|
+| `400` | `CHAT_INVALID_MESSAGE`, `CHAT_INVALID_QUERY`, `CHAT_INVALID_SETTINGS` | Invalid body, cursor, normalized message, UUID, or settings shape. |
+| `400` | `CHAT_INVALID_JSON`, `CHAT_COMMAND_TOO_LARGE` | Malformed JSON or final Screen payload over the configured byte cap. |
+| `401/403/428` | `AUTH_REQUIRED`, `AUTH_INVALID`, `PASSWORD_RESET_REQUIRED` | Authentication/onboarding failed. |
+| `403` | `ORIGIN_NOT_ALLOWED` | Mutation Origin is absent, malformed, or not exactly allowed. |
+| `409` | `CHAT_SERVER_OFFLINE`, `CHAT_CATCHING_UP`, `CHAT_IDEMPOTENCY_CONFLICT`, `CHAT_DELIVERY_UNKNOWN` | Runtime/baseline/idempotency state prevents a safe new send. |
+| `413/415` | `CHAT_BODY_TOO_LARGE`, `CHAT_JSON_REQUIRED` | Body exceeds 4 KiB or is not JSON. |
+| `423` | `CHAT_LOCKED`, `CHAT_READ_ONLY` | Maintenance/update or the persistent admin switch blocks sending. |
+| `429` | `CHAT_RATE_LIMITED` | Per-user burst/rolling limit or the global send queue is full; inspect `Retry-After`. |
+| `503` | `CHAT_CONSOLE_UNAVAILABLE`, `CHAT_PREVIOUS_SEND_FAILED`, `CHAT_UNAVAILABLE`, `CHAT_SETTINGS_UNAVAILABLE` | Screen, retained send, chat storage, or persistent settings are unavailable. |
+
+A `503 CHAT_UNAVAILABLE` history response intentionally omits `messages`; clients retain cached rows. Public health reasons are stable redacted codes such as `database_unavailable`, `log_unreadable`, `history_incomplete`, and `send_transport_unavailable`.
+
 ## 11. WebSocket Protocol
 
-The server sends broadcast messages to all connected clients.
+The realtime hub uses `WebSocket.Server({ noServer: true, perMessageDeflate: false })` and handles only two explicit upgrade paths. Both require an exact configured Origin.
+
+- `/ws`: authenticated and onboarded operational/chat channel. Authentication comes from the HttpOnly `auth_token` cookie; JWTs are never placed in the URL.
+- `/ws/public`: unauthenticated maintenance-only channel used by the login surface.
+
+`/ws` applies signature/expiry, blacklist, enabled-user, token-version, and onboarding checks. It periodically revalidates clients, closes them at token expiry or account invalidation, uses ping/pong liveness, caps connections, and drops slow clients. Logout, force logout, and account disable can disconnect matching sockets immediately.
 
 ### Message types
 
-| Type | Payload |
-|---|---|
-| `maintenance` | `{ type: 'maintenance', reason }` |
-| `progress` (backup) | `{ type: 'progress', value }` |
-| `progress` (download) | `{ type: 'progress', requestId, progress }` |
-| `complete` (download) | `{ type: 'complete', requestId }` |
-| `update-progress` | `{ type: 'update-progress', stage, message, value, ...extra }` |
-| `update-complete` | `{ type: 'update-complete', success, runId, summary }` |
-| `update-restore-complete` | `{ type: 'update-restore-complete', success, runId, details|error }` |
+| Scope | Type | Payload |
+|---|---|---|
+| Both | `maintenance` | `{ type: 'maintenance', reason }` |
+| Authenticated | `progress` (backup) | `{ type: 'progress', value }` |
+| Authenticated | `progress` (download) | `{ type: 'progress', requestId, progress }` |
+| Authenticated | `complete` (download) | `{ type: 'complete', requestId }` |
+| Authenticated | `download-error` (download) | `{ type: 'download-error', requestId }` |
+| Authenticated | `update-progress` | `{ type: 'update-progress', stage, message, value, ...extra }` |
+| Authenticated | `update-complete` | `{ type: 'update-complete', success, runId, summary }` |
+| Authenticated | `update-restore-complete` | `{ type: 'update-restore-complete', success, runId, details|error }` |
+| Authenticated | `minecraft-chat-message` | Complete GET-equivalent committed message DTO. |
+| Authenticated | `minecraft-chat-session-reset` | New current session plus epoch/revision, runtime, setting, and health state. |
+| Authenticated | `minecraft-chat-session-status` | Current epoch/revision, capability, health, runtime, session, and baseline fields. |
 
-Notes:
+An authenticated connection receives the current `minecraft-chat-session-status` snapshot before ordinary events. Events racing that snapshot are held in a bounded initialization FIFO; stale status revisions are discarded and newer events drain in order. Overflow closes with code `1013`, after which the client uses paged `afterId` history catch-up. Chat messages are broadcast only after the corresponding `sent` database transition commits.
 
-- Backup and download share `type: 'progress'` with different payload shapes.
-- Update flow uses separate message types (`update-progress`, `update-complete`, `update-restore-complete`).
-- No authenticated channel separation exists at WS level.
-- Frontend pages selectively ignore irrelevant payload shapes.
+Backup and download retain their existing shared `progress` type with different payload shapes. Frontend consumers ignore authenticated event types that are irrelevant to their page.
 
 ## 12. Data Persistence Specification
 
@@ -458,6 +559,7 @@ Notes:
 - `server_logs.db`
 - `sftp_activity_log.db`
 - `updates.db`
+- `chat.db` (or `CHAT_DB_PATH`)
 
 ### 12.1 `users.db` tables
 
@@ -508,6 +610,7 @@ Indexes:
 | `metadata` |
 | `ip_address` |
 | `created_at` |
+| `source_event_id` (nullable, uniquely indexed when present) |
 
 #### `webauthn_credentials`
 
@@ -581,6 +684,24 @@ Recovery behavior:
 - On process start, stale `update_lock` is removed.
 - Any `update_runs` left in `running` state are marked failed with restart reason.
 
+### 12.6 `chat.db`
+
+The chat store is independent of the control-plane databases so a chat migration/runtime failure can be isolated. It opens lazily with foreign keys, WAL mode, `synchronous=FULL`, and a busy timeout. Store writes are serialized, and message ingestion commits parsed rows and the byte cursor in one transaction.
+
+Tables:
+
+- `chat_sessions`: one active session per `server_id`, runtime identity, start/end reasons, history completeness, and baseline readiness.
+- `chat_messages`: structured Minecraft/panel events, actor snapshots, timestamps/confidence, log provenance, client idempotency UUID, and `pending|sent|failed|unknown` delivery state.
+- `chat_ingest_cursor`: current session, log provenance/generation, committed byte offset, and timestamp-reconstruction state.
+- `chat_settings`: persistent global panel-sending switch.
+- `chat_audit_outbox`: atomic settings-change audit intents delivered idempotently into `users.db` using `source_event_id`.
+
+Only `sent` rows are returned to readers. A stale `pending` panel message becomes `unknown` after process restart and is never automatically resent. Minecraft rows are unique by log provenance/generation/offset rather than message body, so identical legitimate chat lines remain distinct.
+
+`CHAT_RETENTION_DAYS=0` retains ended sessions. Positive retention prunes only sufficiently old ended sessions and preserves active/current history. Delivered settings-audit outbox rows are pruned separately after their retention window.
+
+Do not back up a live `chat.db` as an ordinary single-file copy while WAL is active. Use SQLite's backup mechanism or checkpoint and copy the database consistently with its WAL/SHM files. Graceful shutdown performs a truncate checkpoint before closing.
+
 ## 13. Background Workers and Heavy Pipelines
 
 ### `backend/workers/downloadWorker.js`
@@ -624,6 +745,7 @@ Responsibilities:
 
 - `public/login.js`: password and passkey login flows.
 - `public/script.js`: control panel actions + backup progress UI + Server Info modal/gallery + update status polling/preflight/apply UX + WS handling.
+- `public/serverChat.js`: chat history/reconnect/send state, epoch/revision reconciliation, unread/filter preferences, rendering, modal focus, and admin diagnostics/settings.
 - `public/sftp.js`: browse/upload/download/preview UX + WS download tracking.
 - `public/account.js`: password change and passkey CRUD.
 - `public/admin.js`: admin user lifecycle UI + update history table + update summary modal.
@@ -658,10 +780,26 @@ Responsibilities:
 - The thumbnail rail scrolls vertically when image count exceeds the main screenshot stage height. Hidden thumbnails are hinted through scroll-linked blurred top/bottom edge flows so the rail does not become a long unbounded column.
 - Clicking the stage image opens a full image viewer with wheel zoom and drag-to-pan. `Full Resolution` links to the original asset.
 
+### Server Chat UX contract
+
+- Desktop uses a fixed corner chat panel; mobile (`max-width: 768px`) uses a full-viewport modal with safe-area padding and a focus trap.
+- The Update and Server Chat buttons share a bottom-left action stack. Update remains above Chat when visible.
+- History initially loads the newest 200 rows, loads older pages at the top, and uses lossless paged `afterId` catch-up after reconnect.
+- GET, POST, and WebSocket DTOs merge idempotently by session key and database ID. Epoch/revision guards prevent delayed HTTP responses from regressing newer socket state.
+- Chat and Activity filters are display-only. Activity covers join, leave, death, and advancement events.
+- Unread state is browser-local and keyed by panel user/server/session. First-visit backfill is a read baseline; later unseen rows are counted. The badge displays `500+` after the presentation cap while synchronization continues without a cap.
+- The composer starts disabled and remains fail-closed until authoritative capabilities load. It is disabled while offline, catching up, locked, read-only, unavailable, disconnected, or sending.
+- Input is NFC-normalized/trimmed for preview. The UI shows Unicode code points and, for `tellraw-v1`, exact UTF-8 Screen payload bytes including the trailing carriage return. Server validation remains authoritative.
+- Rendering creates DOM nodes and assigns `textContent`; Minecraft/player text is never inserted as HTML.
+- The header separates socket connection state from chat health and shows sanitized session start/end/completeness context.
+- Admins can persistently disable panel sending and request redacted diagnostics. Non-admins never receive admin diagnostic payloads.
+- Escape/toggle/X close the surface; desktop is non-modal, mobile uses `aria-modal`, background inertness, focus restoration, 44 px targets, and reduced-motion behavior.
+
 ### Theme system
 
 - Base glass theme: `public/style.css`
 - Flat theme override: `public/style.flat.css`
+- Shared late-loaded chat component layer: `public/chat.css`
 - Page-specific layers: `styleSFTP.css`, `styleAdmin.css`, `styleLogin.css`, `styleMaintenance.css`
 - User settings are persisted via `/appearance` and reflected as `data-ui-theme` on `<body>` (`glass` or `flat`) and `data-color-scheme` on `<body>` (`system`, `light`, `dark`).
 
@@ -677,6 +815,12 @@ Detailed UI contract is documented in `STYLE_GUIDE.md`.
 - Server Info screenshot assets are intentionally ignored by git via `assets/server-info/`; dropping new supported images into that folder tree is enough for the endpoint to discover them on the next request.
 - Logging timestamps are written using `America/New_York` locale formatting, not ISO-8601.
 - Backup hour-gating uses Eastern date-hour keying and in-memory state only.
+- Minecraft runtime reconciliation polls Screen/log state without overlapping probes. `starting` means Screen exists but the current runtime has not proved readiness; only `ready` permits panel sending.
+- Chat backfill reads bounded byte chunks and normal `YYYY-MM-DD-N.log.gz` archives. Missing segments or exhausted safety bounds are surfaced as incomplete history rather than silently treated as complete.
+- Backfill rows commit silently. Live chat WebSocket events begin only after the immutable baseline target commits, which prevents first-visit history from becoming unread noise.
+- Chat storage failure starts one jittered recovery loop (5 seconds, doubling to 5 minutes). Log/tailer failure keeps stored reads available and retries independently. Screen failure disables only sending and never automatically resends uncertain messages.
+- The admin sending switch is durable and fail-closed. A priority admission barrier prevents queued/new sends from passing an accepted disable request; one send already holding the mutex may finish before the disable commit.
+- Chat health payloads contain stable reason codes and aggregate counters only. Raw log lines, filesystem paths, exception text, usernames, message bodies, credentials, and IPs are not exposed.
 
 ## 16. Security Characteristics
 
@@ -690,26 +834,36 @@ Implemented safeguards:
 - Admin-only route gating.
 - Onboarding gate for users with temporary credentials.
 - Temp password encryption at rest (AES-256-GCM).
+- Exact configured Origin checks for authenticated WS upgrades and chat mutations; trust is never derived from the request Host header.
+- Authenticated/public WebSocket separation, token revalidation, connection/buffer caps, and heartbeat cleanup.
+- Fixed-component `tellraw` construction through `JSON.stringify`, a 256-code-point limit, final UTF-8 payload cap, control/bidi rejection, leading-command rejection, and argv-only Screen execution.
+- Chat idempotency UUIDs and explicit `pending`, `sent`, `failed`, and `unknown` delivery states prevent unsafe automatic replay.
+- Chat and admin-health responses are `no-store`; message rendering uses `textContent`.
 
 Important design properties to be aware of:
 
 - Some pages are statically accessible, but protected actions rely on API auth + frontend redirects.
-- WebSocket messages are broadcast globally and not scoped per-user.
-- `/downloads/:requestId` is unauthenticated and functions as a temporary capability URL.
+- Operational/chat WebSocket messages are authenticated and onboarded; the public path can receive maintenance only.
+- `/downloads/:requestId` requires an authenticated, onboarded account and is visible only to the user who created that request. Progress, completion, and error events are scoped to that same user.
 - `auth_token` cookie uses `secure: req.secure`; behind reverse proxies this requires proper proxy/TLS configuration.
-- No explicit CSRF defense is implemented for cookie-authenticated routes.
+- Chat mutations have explicit Origin-based CSRF protection. Older cookie-authenticated mutations should be reviewed separately because that protection is not automatically global.
 - `localStorage` stores bearer token for frontend API usage.
 
 ## 17. Known Implementation Caveats
 
-- `GET /status` is public and driven by in-memory flags, not direct process introspection.
+- `GET /status` remains public, but its values come from the authoritative Screen/log reconciler.
 - Process-global `currentPath` in SFTP route module is shared state, not per-session state.
 - Preview cache filenames are based on basename, so same-name files in different directories can collide.
 - Backup and download share WS `type: 'progress'` with different payload shapes.
-- Download worker requires `stdbuf`; missing utility will break directory zip progress pipeline.
+- Download archives are built inside isolated worker-thread temp directories and expire if they are not claimed within 15 minutes.
 - Recommended compatible-target lookup scans a bounded release window (currently first 15 candidates between current and latest).
 - Advanced compatible-target lookup scans a bounded release window and returns a limited set of compatible alternatives.
 - Update/downgrade apply requires a non-stale preflight check (`<= 30 minutes`).
+- Screen exit zero means Screen accepted the bytes; it does not prove Minecraft parsed the command or every player rendered it. RCON or a server-side bridge is required for stronger acknowledgement.
+- Minecraft's default log prefix contains time of day but no date. Archive names, file metadata, session state, and midnight rollover are used to infer historical dates; ambiguous rows are marked with lower timestamp confidence.
+- The log parser intentionally omits unknown/modded formats. Strict false negatives are preferred over exposing console or plugin output.
+- Unread/filter preferences are local to one browser profile. They are isolated by panel user and session but are not synchronized across devices.
+- v1 exposes only the current/latest chat session even though older ended sessions may remain in `chat.db`.
 
 ## 18. Local Development and Runbook
 
@@ -718,6 +872,12 @@ Important design properties to be aware of:
 ```bash
 npm install
 npm run start
+```
+
+Run the automated suite without touching the real Minecraft process or production databases:
+
+```bash
+npm test
 ```
 
 ### Default URLs
@@ -734,6 +894,28 @@ npm run start
 4. Create users in Admin Management.
 5. Users login with temporary password and are forced through `/set-password.html`.
 
+### Chat deployment checklist
+
+1. Set one or more exact production `APP_ORIGINS`; do not use wildcards or paths.
+2. Confirm `MINECRAFT_SERVER_PATH/logs/latest.log` or set `MINECRAFT_LOG_PATH` explicitly.
+3. Set the correct `MINECRAFT_SCREEN_SESSION` and optional `MINECRAFT_TIME_ZONE`.
+4. Keep `CHAT_DB_PATH` on durable local storage with restrictive filesystem permissions.
+5. Start with `CHAT_SCREEN_MAX_COMMAND_BYTES=512`. Before production, smoke-test that configured value with a test server/player using ASCII, escaped quotes/backslashes, and emoji near the limit; do not raise it without a new host-level test.
+6. Start the panel while Minecraft is both offline and already running; verify runtime/session recovery and that sending becomes available only after readiness/baseline status.
+7. Exercise a panel restart, Minecraft restart/crash, backup, update, log rotation, and socket reconnect before production sign-off.
+8. Verify the admin sending switch survives panel restart and keeps history readable while disabled.
+
+### Chat troubleshooting
+
+- `database_unavailable`: verify `CHAT_DB_PATH` parent permissions/disk availability. Core controls should remain usable while the bounded retry loop runs.
+- `log_unreadable`: verify the Minecraft log path and permissions. Stored history remains readable; new ingestion pauses and retries.
+- `send_transport_unavailable`: verify the named Screen session exists and the panel user can execute `screen -ls`/`screen -S ... -X stuff`.
+- `history_incomplete`: the configured archive/byte recovery bound could not prove a complete runtime chain; existing parsed data remains usable.
+- `CHAT_CATCHING_UP`: wait for the baseline-ready status. Sending is deliberately blocked until initial recovery reaches a stable boundary.
+- `CHAT_DELIVERY_UNKNOWN`: do not automatically reuse the UUID. The command may have reached Screen; deliberate retry creates a new UUID.
+
+For diagnostics, admins can expand Chat diagnostics in the UI or call `GET /admin/chat/health`. Responses are intentionally redacted; use server-side structured logs for deeper investigation.
+
 ## 19. Repository Layout
 
 - `app.js`: server entrypoint and route wiring.
@@ -741,12 +923,13 @@ npm run start
 - `backend/db/`: SQLite adapters and schema evolution.
 - `backend/middleware/`: auth/role/onboarding enforcement.
 - `backend/routes/`: all HTTP API/page routes.
-- `backend/services/`: maintenance/server-control/update/server-info services.
+- `backend/services/`: maintenance, authoritative Minecraft process/console, chat/tailer/realtime, update, and server-info services.
 - `backend/state.js`: in-memory runtime state.
 - `backend/utils/`: logging, crypto, validation, parsing helpers.
 - `backend/workers/`: worker thread implementations.
 - `public/`: HTML/CSS/JS frontend.
 - `assets/`: icons, static images, and ignored Server Info screenshots.
+- `test/`: Node test-runner suites and sanitized command/log fixtures.
 - `STYLE_GUIDE.md`: frontend appearance contract.
 
 ## 20. Direct NPM Runtime Dependencies

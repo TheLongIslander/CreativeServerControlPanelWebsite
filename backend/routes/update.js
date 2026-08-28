@@ -40,7 +40,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
             targetVersion: check.targetVersion,
             canApply: check.canApply
           },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log update check audit event:', logErr.message);
@@ -89,7 +89,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
             operation: check.operation,
             canApply: check.canApply
           },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log advanced update check audit event:', logErr.message);
@@ -155,7 +155,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
             movedMods: Array.isArray(result.movedMods) ? result.movedMods.length : 0,
             updatedMods: Array.isArray(result.updatedMods) ? result.updatedMods.length : 0
           },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log update apply audit event:', logErr.message);
@@ -176,7 +176,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
             mode,
             error: msg
           },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log failed update audit event:', logErr.message);
@@ -209,7 +209,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
           targetUserId: null,
           action: 'server.update.restore_latest',
           metadata: result,
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log update restore audit event:', logErr.message);

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>Creative Server Control Panel</title>
     <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
+    <link rel="stylesheet" href="chat.css?v=20260828-2">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
@@ -55,7 +56,6 @@
         <button id="restart-server">Restart Server</button>
         <button id="stop-server">Stop Server</button>
         <button id="backup-server">Backup Server</button>
-        <button id="update-server" class="hidden">Update Available</button>
         <div id="update-status-message" class="update-status-message hidden"></div>
         <div id="progress-area">
             <div id="progress-container">
@@ -63,6 +63,17 @@
             </div>
             <div id="progress-percentage">0%</div>
         </div>
+    </div>
+
+    <div id="corner-action-stack">
+        <button id="update-server" class="hidden">Update Available</button>
+        <button id="server-chat-toggle"
+                type="button"
+                aria-controls="server-chat-panel"
+                aria-expanded="false">
+            <span>Server Chat</span>
+            <span id="server-chat-unread-badge" class="hidden" aria-label="0 unread messages">0</span>
+        </button>
     </div>
 
     <div id="server-info-modal" class="modal hidden server-info-modal" aria-hidden="true">
@@ -188,7 +199,68 @@
             </div>
         </div>
     </div>
+
+    <div id="server-chat-shell" class="hidden" aria-hidden="true">
+        <div class="server-chat-backdrop" data-close-server-chat="true"></div>
+        <section id="server-chat-panel"
+                 role="dialog"
+                 aria-labelledby="server-chat-title"
+                 tabindex="-1">
+            <header class="server-chat-header">
+                <div class="server-chat-heading-copy">
+                    <h2 id="server-chat-title">Server Chat</h2>
+                    <div id="server-chat-connection-status" role="status">Connecting</div>
+                    <div id="server-chat-session-meta"></div>
+                </div>
+                <button id="server-chat-close"
+                        type="button"
+                        aria-label="Close server chat"
+                        data-no-pointer-lighting>×</button>
+            </header>
+
+            <div class="server-chat-toolbar">
+                <div id="server-chat-history-status" role="status"></div>
+                <div id="server-chat-filters" role="group" aria-label="Visible message types">
+                    <button type="button" data-chat-filter="chat" aria-pressed="true" data-no-pointer-lighting>Chat</button>
+                    <button type="button" data-chat-filter="activity" aria-pressed="true" data-no-pointer-lighting>Activity</button>
+                </div>
+                <div id="server-chat-admin-controls" class="hidden">
+                    <label class="server-chat-setting">
+                        <input id="server-chat-sending-enabled" type="checkbox" disabled>
+                        <span>Panel sending enabled</span>
+                    </label>
+                    <details id="server-chat-admin-diagnostics">
+                        <summary>Chat diagnostics</summary>
+                        <dl id="server-chat-diagnostics-values"></dl>
+                        <button id="server-chat-diagnostics-refresh" type="button" data-no-pointer-lighting>Refresh diagnostics</button>
+                    </details>
+                </div>
+            </div>
+
+            <div class="server-chat-log-wrap">
+                <div id="server-chat-messages"
+                     role="log"
+                     aria-live="polite"
+                     aria-relevant="additions text"
+                     tabindex="0"></div>
+                <button id="server-chat-new-messages" type="button" class="hidden" data-no-pointer-lighting></button>
+            </div>
+
+            <form id="server-chat-form">
+                <label class="visually-hidden" for="server-chat-input">Message</label>
+                <input id="server-chat-input"
+                       autocomplete="off"
+                       aria-describedby="server-chat-input-meter server-chat-send-status"
+                       disabled>
+                <button id="server-chat-send" type="submit" disabled data-no-pointer-lighting>Send</button>
+                <div id="server-chat-input-meter" aria-live="off"></div>
+                <div id="server-chat-send-status" role="status"></div>
+            </form>
+        </section>
+    </div>
+
     <script src="appearance.js?v=20260505-10"></script>
-    <script src="script.js?v=20260505-14"></script>
+    <script src="serverChat.js?v=20260828-1"></script>
+    <script src="script.js?v=20260828-1"></script>
 </body>
 </html>

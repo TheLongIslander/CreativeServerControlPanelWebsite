@@ -68,7 +68,7 @@ function buildFallbackNotes({
   return lines.join('\n');
 }
 
-module.exports = function createAdminUserRoutes() {
+module.exports = function createAdminUserRoutes({ realtimeHub = null } = {}) {
   const router = express.Router();
   router.use('/admin', authenticateJWT, requireOnboarded, requireAdmin);
 
@@ -267,7 +267,7 @@ module.exports = function createAdminUserRoutes() {
           targetUserId: result.id,
           action: 'admin.user.create',
           metadata: { username },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log user create:', logErr.message);
@@ -310,13 +310,14 @@ module.exports = function createAdminUserRoutes() {
 
       if (typeof req.body.disabled === 'boolean') {
         await usersDb.setUserDisabled({ userId, disabled: req.body.disabled });
+        if (req.body.disabled && realtimeHub) realtimeHub.disconnectUser(userId, 'Account disabled');
         try {
           await usersDb.logAuditEvent({
             actorUserId: req.user.id,
             targetUserId: userId,
             action: req.body.disabled ? 'admin.user.disable' : 'admin.user.enable',
             metadata: null,
-            ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+            ipAddress: req.ip || req.socket.remoteAddress || null
           });
         } catch (logErr) {
           console.warn('Failed to log user disable/enable:', logErr.message);
@@ -355,13 +356,14 @@ module.exports = function createAdminUserRoutes() {
         passwordHash: hash,
         tempPasswordPlain: tempPassword
       });
+      if (realtimeHub) realtimeHub.disconnectUser(userId, 'Password reset');
       try {
         await usersDb.logAuditEvent({
           actorUserId: req.user.id,
           targetUserId: userId,
           action: 'admin.user.reset_password',
           metadata: null,
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log password reset:', logErr.message);
@@ -393,13 +395,14 @@ module.exports = function createAdminUserRoutes() {
       }
 
       await usersDb.deleteUser(userId);
+      if (realtimeHub) realtimeHub.disconnectUser(userId, 'Account deleted');
       try {
         await usersDb.logAuditEvent({
           actorUserId: req.user.id,
           targetUserId: userId,
           action: 'admin.user.delete',
           metadata: { username: target.username },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log delete:', logErr.message);
@@ -430,13 +433,14 @@ module.exports = function createAdminUserRoutes() {
       }
 
       await usersDb.incrementTokenVersion(userId);
+      if (realtimeHub) realtimeHub.disconnectUser(userId, 'Logged out by administrator');
       try {
         await usersDb.logAuditEvent({
           actorUserId: req.user.id,
           targetUserId: userId,
           action: 'admin.user.force_logout',
           metadata: null,
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log force logout:', logErr.message);
@@ -474,7 +478,7 @@ module.exports = function createAdminUserRoutes() {
           targetUserId: userId,
           action: 'admin.user.unlock',
           metadata: null,
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log unlock:', logErr.message);

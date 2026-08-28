@@ -5,6 +5,15 @@
  */
 let isBackingUp = false;
 let ws;
+let wsReconnectTimer = null;
+let wsStabilityTimer = null;
+let wsReconnectAttempt = 0;
+let wsStopped = false;
+let wsPolicyCloseCount = 0;
+let wsPreOpenFailureCount = 0;
+let wsPreOpenCheckInFlight = false;
+let wsLifecycleGeneration = 0;
+const WS_MAX_PREOPEN_FAILURES = 3;
 let latestUpdateStatus = null;
 let activeUpdateCheck = null;
 let isApplyingUpdate = false;
@@ -2601,7 +2610,7 @@ function setProgressBulge(centerPx, strength) {
 
 function setupPointerLighting() {
     const targets = [
-        ...document.querySelectorAll('button'),
+        ...document.querySelectorAll('button:not([data-no-pointer-lighting])'),
         document.getElementById('progress-container')
     ].filter(Boolean);
 
@@ -2642,7 +2651,7 @@ function setupPointerLighting() {
 
     const updateTarget = (event) => {
         const el = document.elementFromPoint(event.clientX, event.clientY);
-        const target = el ? el.closest('button, #progress-container') : null;
+        const target = el ? el.closest('button:not([data-no-pointer-lighting]), #progress-container') : null;
 
         if (currentTarget && currentTarget !== target) {
             resetTarget(currentTarget);
@@ -2733,12 +2742,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (window.Appearance && typeof window.Appearance.init === 'function') {
         window.Appearance.init({ user });
     }
+    if (window.ServerChat && typeof window.ServerChat.init === 'function') {
+        window.ServerChat.init({ user });
+    }
     setupProgressBulge();
     setupPointerLighting();
     setupServerManagementMenu();
     setupServerInfoModalHandlers();
     setupUpdateModalHandlers();
     setupWebSocket();
+    if (window.ServerChat && typeof window.ServerChat.start === 'function') {
+        window.ServerChat.start();
+    }
     setupUpdateStatusPolling();
     checkServerStatus();
     await loadUpdateStatus();
@@ -2782,25 +2797,155 @@ function checkServerStatus() {
             console.error('Error checking server status: ', err);
         });
 }
-  function setupWebSocket() {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(wsProtocol + '://' + window.location.host);
+function getWebSocketReconnectDelay() {
+    const base = Math.min(1000 * (2 ** wsReconnectAttempt), 30000);
+    wsReconnectAttempt = Math.min(wsReconnectAttempt + 1, 5);
+    return Math.min(30000, Math.round(base * (0.75 + Math.random() * 0.5)));
+}
 
-    ws.onopen = function() {
+function scheduleWebSocketReconnect() {
+    if (wsStopped || wsReconnectTimer) {
+        return;
+    }
+    const delay = getWebSocketReconnectDelay();
+    wsReconnectTimer = setTimeout(() => {
+        wsReconnectTimer = null;
+        setupWebSocket();
+    }, delay);
+}
+
+async function handleWebSocketPolicyClose() {
+    const generation = wsLifecycleGeneration;
+    try {
+        const response = await fetch('/me', {
+            headers: getAuthHeaders(),
+            cache: 'no-store',
+            credentials: 'same-origin'
+        });
+        if (generation !== wsLifecycleGeneration) {
+            return;
+        }
+        if (response.status === 428) {
+            redirectToSetPassword();
+            return;
+        }
+        if (response.status === 401 || response.status === 403) {
+            redirectToLogin();
+            return;
+        }
+        wsPolicyCloseCount += 1;
+        if (response.ok && wsPolicyCloseCount <= 1) {
+            scheduleWebSocketReconnect();
+        } else {
+            wsStopped = true;
+            console.error('WebSocket policy validation failed repeatedly; automatic reconnect stopped.');
+        }
+    } catch (error) {
+        if (generation !== wsLifecycleGeneration) {
+            return;
+        }
+        wsPolicyCloseCount += 1;
+        if (wsPolicyCloseCount <= 1) {
+            scheduleWebSocketReconnect();
+        } else {
+            wsStopped = true;
+            console.error('WebSocket policy revalidation failed repeatedly; automatic reconnect stopped.');
+        }
+    }
+}
+
+async function handleWebSocketPreOpenFailure() {
+    if (wsPreOpenCheckInFlight || wsStopped) {
+        return;
+    }
+    wsPreOpenCheckInFlight = true;
+    const generation = wsLifecycleGeneration;
+    try {
+        const response = await fetch('/me', {
+            headers: getAuthHeaders(),
+            cache: 'no-store',
+            credentials: 'same-origin'
+        });
+        if (generation !== wsLifecycleGeneration) {
+            return;
+        }
+        if (response.status === 428) {
+            redirectToSetPassword();
+            return;
+        }
+        if (response.status === 401 || response.status === 403) {
+            redirectToLogin();
+            return;
+        }
+        wsStopped = true;
+        console.error('WebSocket upgrade failed repeatedly; automatic reconnect stopped until reload.');
+    } catch (error) {
+        if (generation !== wsLifecycleGeneration) {
+            return;
+        }
+        wsStopped = true;
+        console.error('WebSocket upgrade and authentication revalidation both failed; automatic reconnect stopped.');
+    } finally {
+        if (generation === wsLifecycleGeneration) {
+            wsPreOpenCheckInFlight = false;
+        }
+    }
+}
+
+function setupWebSocket() {
+    if (wsStopped || (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))) {
+        return;
+    }
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const socket = new WebSocket(wsProtocol + '://' + window.location.host + '/ws');
+    ws = socket;
+    let opened = false;
+
+    socket.onopen = function() {
+        if (ws !== socket) {
+            socket.close();
+            return;
+        }
+        opened = true;
+        if (wsStabilityTimer) {
+            clearTimeout(wsStabilityTimer);
+        }
+        wsStabilityTimer = setTimeout(() => {
+            wsReconnectAttempt = 0;
+            wsPolicyCloseCount = 0;
+            wsPreOpenFailureCount = 0;
+            wsStabilityTimer = null;
+        }, 10000);
         console.log('WebSocket connection established');
+        if (window.ServerChat && typeof window.ServerChat.handleSocketOpen === 'function') {
+            window.ServerChat.handleSocketOpen();
+        }
     };
 
-    ws.onmessage = function (event) {
+    socket.onmessage = function (event) {
+        if (ws !== socket) {
+            return;
+        }
         let message;
         try {
             message = JSON.parse(event.data);
         } catch (error) {
-            console.error('[ERROR] Failed to parse WebSocket message:', error.message, event.data);
+            console.error('[ERROR] Failed to parse WebSocket message:', error.message);
             return;
         }
 
         if (message.type === 'maintenance') {
             window.location.href = '/maintenance.html';
+            return;
+        }
+
+        if (window.ServerChat
+            && typeof window.ServerChat.handleRealtimeMessage === 'function'
+            && window.ServerChat.handleRealtimeMessage(message)) {
+            return;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(message, 'requestId')) {
             return;
         }
 
@@ -2840,18 +2985,66 @@ function checkServerStatus() {
           checkServerStatus();
         }
       };
-    ws.onclose = function(e) {
-        console.error('Socket is closed. Reconnect will be attempted in 1 second.', e.reason);
-        setTimeout(function() {
-            setupWebSocket();
-        }, 1000);
+    socket.onclose = function(e) {
+        if (ws !== socket) {
+            return;
+        }
+        ws = null;
+        if (wsStabilityTimer) {
+            clearTimeout(wsStabilityTimer);
+            wsStabilityTimer = null;
+        }
+        if (window.ServerChat && typeof window.ServerChat.handleSocketClose === 'function') {
+            window.ServerChat.handleSocketClose(e);
+        }
+        if (wsStopped) {
+            return;
+        }
+        if (e.code === 1008) {
+            handleWebSocketPolicyClose();
+            return;
+        }
+        if (!opened) {
+            wsPreOpenFailureCount += 1;
+            if (wsPreOpenFailureCount >= WS_MAX_PREOPEN_FAILURES) {
+                handleWebSocketPreOpenFailure();
+                return;
+            }
+        }
+        scheduleWebSocketReconnect();
     };
 
-    ws.onerror = function(err) {
-        console.error('Socket encountered error: ', err.message, 'Closing socket');
-        ws.close();
+    socket.onerror = function() {
+        console.error('Socket encountered an error; reconnect will use bounded backoff.');
+        socket.close();
     };
 }
+
+window.addEventListener('pagehide', () => {
+    wsLifecycleGeneration += 1;
+    wsPreOpenCheckInFlight = false;
+    wsStopped = true;
+    if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+    }
+    if (wsStabilityTimer) {
+        clearTimeout(wsStabilityTimer);
+        wsStabilityTimer = null;
+    }
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close(1000, 'page hidden');
+    }
+});
+window.addEventListener('pageshow', (event) => {
+    if (event.persisted) {
+        wsStopped = false;
+        wsReconnectAttempt = 0;
+        wsPolicyCloseCount = 0;
+        wsPreOpenFailureCount = 0;
+        setupWebSocket();
+    }
+});
 function updateBackupProgress(progress) {
     const progressBar = document.getElementById('progress-bar');
     const progressPercentage = document.getElementById('progress-percentage'); // Make sure this ID matches the element in HTML

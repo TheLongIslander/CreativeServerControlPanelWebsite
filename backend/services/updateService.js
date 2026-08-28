@@ -15,7 +15,7 @@ const { resolveModsForTarget } = require('./modResolver');
 
 const MOJANG_VERSION_MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
 const FABRIC_META_BASE = 'https://meta.fabricmc.net/v2';
-const SCREEN_SESSION_NAME = 'MinecraftSession';
+const DEFAULT_SCREEN_SESSION_NAME = 'MinecraftSession';
 const STATUS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const HTTP_TIMEOUT_MS = 20000;
 const STALE_CHECK_MAX_AGE_MS = 30 * 60 * 1000;
@@ -118,18 +118,18 @@ async function fetchJson(url, { retries = 1, headers = {} } = {}) {
           ...headers
         }
       });
-      clearTimeout(timeout);
       if (!response.ok) {
         const body = await response.text();
         throw new Error(`HTTP ${response.status}: ${body.slice(0, 250)}`);
       }
       return await response.json();
     } catch (err) {
-      clearTimeout(timeout);
       lastErr = err;
       if (attempt >= retries) {
         break;
       }
+    } finally {
+      clearTimeout(timeout);
     }
   }
   throw lastErr;
@@ -142,34 +142,39 @@ async function fetchMinecraftVersionManifest() {
 async function downloadFile({ url, destinationPath, expectedSha1 }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS * 3);
-  const response = await fetch(url, {
-    signal: controller.signal,
-    headers: {
-      'User-Agent': 'minecraft-server-control/1.0 (update-service)'
-    }
-  });
-  clearTimeout(timeout);
-  if (!response.ok || !response.body) {
-    throw new Error(`Failed download (${response.status}): ${url}`);
-  }
-
-  await fsp.mkdir(path.dirname(destinationPath), { recursive: true });
   const tempPath = `${destinationPath}.part`;
-  const writeStream = fs.createWriteStream(tempPath);
-  await pipeline(Readable.fromWeb(response.body), writeStream);
-
-  if (expectedSha1) {
-    const hash = crypto.createHash('sha1');
-    const fileBuffer = await fsp.readFile(tempPath);
-    hash.update(fileBuffer);
-    const actual = hash.digest('hex').toLowerCase();
-    if (actual !== String(expectedSha1).toLowerCase()) {
-      await fsp.unlink(tempPath).catch(() => {});
-      throw new Error(`Checksum mismatch for ${path.basename(destinationPath)}.`);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'minecraft-server-control/1.0 (update-service)'
+      }
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`Failed download (${response.status}): ${url}`);
     }
-  }
 
-  await fsp.rename(tempPath, destinationPath);
+    await fsp.mkdir(path.dirname(destinationPath), { recursive: true });
+    const writeStream = fs.createWriteStream(tempPath, { mode: 0o600 });
+    await pipeline(Readable.fromWeb(response.body), writeStream);
+
+    if (expectedSha1) {
+      const hash = crypto.createHash('sha1');
+      const fileBuffer = await fsp.readFile(tempPath);
+      hash.update(fileBuffer);
+      const actual = hash.digest('hex').toLowerCase();
+      if (actual !== String(expectedSha1).toLowerCase()) {
+        throw new Error(`Checksum mismatch for ${path.basename(destinationPath)}.`);
+      }
+    }
+
+    await fsp.rename(tempPath, destinationPath);
+  } catch (err) {
+    await fsp.unlink(tempPath).catch(() => {});
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function moveFileSafe(sourcePath, destinationPath) {
@@ -521,8 +526,25 @@ function stripTrailingPathSlash(value) {
   return String(value).replace(/[\\/]+$/, '');
 }
 
-module.exports = function createUpdateService({ state, getWss }) {
+module.exports = function createUpdateService({
+  state,
+  minecraftProcessService,
+  processService,
+  realtimeHub = null,
+  // Retained in the signature so an incremental deployment does not fail at
+  // construction. Operational events intentionally never use the legacy
+  // unauthenticated WebSocket client set.
+  getWss: _legacyGetWss
+} = {}) {
+  const minecraft = minecraftProcessService || processService || null;
+  if (!state) throw new Error('createUpdateService requires shared state');
   let refreshTimer = null;
+
+  function getScreenSessionName() {
+    return minecraft && minecraft.screenSessionName
+      ? minecraft.screenSessionName
+      : (process.env.MINECRAFT_SCREEN_SESSION || DEFAULT_SCREEN_SESSION_NAME);
+  }
 
   function getServerPath() {
     const serverPath = stripTrailingPathSlash(process.env.MINECRAFT_SERVER_PATH || '');
@@ -545,20 +567,9 @@ module.exports = function createUpdateService({ state, getWss }) {
   }
 
   function broadcast(payload) {
-    const wss = typeof getWss === 'function' ? getWss() : null;
-    if (!wss || !wss.clients) {
-      return;
+    if (realtimeHub && typeof realtimeHub.broadcastAuthenticated === 'function') {
+      realtimeHub.broadcastAuthenticated(payload);
     }
-    const data = JSON.stringify(payload);
-    wss.clients.forEach(client => {
-      try {
-        if (client.readyState === 1) {
-          client.send(data);
-        }
-      } catch (_) {
-        // Ignore broken sockets.
-      }
-    });
   }
 
   function emitProgress(stage, message, value, extra = {}) {
@@ -1361,21 +1372,26 @@ module.exports = function createUpdateService({ state, getWss }) {
     };
   }
 
-  async function isScreenSessionRunning() {
+  async function probeScreenDirect() {
+    const screenSessionName = getScreenSessionName();
     try {
       const { stdout, stderr } = await runExecFile('screen', ['-ls']);
       const output = `${stdout || ''}\n${stderr || ''}`;
-      return hasLiveScreenSession(output, SCREEN_SESSION_NAME);
+      return hasLiveScreenSession(output, screenSessionName);
     } catch (err) {
       const output = `${err.stdout || ''}\n${err.stderr || ''}`;
-      if (hasLiveScreenSession(output, SCREEN_SESSION_NAME)) {
+      if (hasLiveScreenSession(output, screenSessionName)) {
         return true;
-      }
-      if (output.includes('No Sockets found')) {
-        return false;
       }
       return false;
     }
+  }
+
+  async function isScreenSessionRunning({ direct = false } = {}) {
+    if (!direct && minecraft && typeof minecraft.probeScreen === 'function') {
+      return minecraft.probeScreen();
+    }
+    return probeScreenDirect();
   }
 
   async function waitForCondition(fn, timeoutMs, intervalMs = 1000) {
@@ -1392,24 +1408,51 @@ module.exports = function createUpdateService({ state, getWss }) {
     return false;
   }
 
-  async function stopMinecraftSessionIfRunning() {
-    const running = await isScreenSessionRunning();
+  async function stopMinecraftSessionIfRunning({
+    reason = 'update_stop',
+    direct = false
+  } = {}) {
+    if (!direct && minecraft && typeof minecraft.stop === 'function') {
+      const result = await minecraft.stop({ reason, wait: true });
+      return Boolean(result && result.stopped);
+    }
+
+    const running = await probeScreenDirect();
     if (!running) {
       state.serverRunning = false;
       return false;
     }
-    await runExecFile('screen', ['-S', SCREEN_SESSION_NAME, '-p', '0', '-X', 'stuff', `stop${String.fromCharCode(13)}`]);
-    await waitForCondition(async () => !(await isScreenSessionRunning()), SERVER_STOP_TIMEOUT_MS, 1500);
+    await runExecFile('screen', [
+      '-S', getScreenSessionName(), '-p', '0', '-X', 'stuff', `stop${String.fromCharCode(13)}`
+    ]);
+    await waitForCondition(async () => !(await probeScreenDirect()), SERVER_STOP_TIMEOUT_MS, 1500);
     state.serverRunning = false;
     return true;
   }
 
-  async function startMinecraftSession() {
+  async function startMinecraftSession({
+    reason = 'update_start',
+    direct = false
+  } = {}) {
+    if (!direct && minecraft && typeof minecraft.start === 'function') {
+      const result = await minecraft.start({ reason });
+      const snapshot = result && result.snapshot
+        ? result.snapshot
+        : (typeof minecraft.getSnapshot === 'function' ? minecraft.getSnapshot() : null);
+      return Boolean(snapshot && snapshot.running);
+    }
+
     const startPath = getStartCommandPath();
     await runExecFile('sh', [startPath]);
-    const started = await waitForCondition(async () => isScreenSessionRunning(), 20 * 1000, 1000);
+    const started = await waitForCondition(async () => probeScreenDirect(), 20 * 1000, 1000);
     state.serverRunning = started;
     return started;
+  }
+
+  async function reconcileMinecraft(reason) {
+    if (minecraft && typeof minecraft.reconcile === 'function') {
+      await minecraft.reconcile({ reason });
+    }
   }
 
   async function createSnapshot(targetVersion) {
@@ -1655,7 +1698,11 @@ module.exports = function createUpdateService({ state, getWss }) {
     const initialLength = initialLog ? initialLog.length : 0;
     const donePattern = /Done \([^)]+\)! For help, type "help"/i;
 
-    let started = await startMinecraftSession();
+    // The update smoke JVM is deliberately transient and suppressed from chat
+    // session creation by the update/maintenance locks. Keep this path on the
+    // existing argv-only primitives; normal lifecycle transitions below use
+    // minecraftProcessService.
+    let started = await startMinecraftSession({ reason: 'update_smoke_test', direct: true });
     if (!started) {
       const fallbackStart = Date.now();
       while (Date.now() - fallbackStart < 15 * 1000) {
@@ -1727,7 +1774,7 @@ module.exports = function createUpdateService({ state, getWss }) {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    const stillRunning = await isScreenSessionRunning();
+    const stillRunning = await isScreenSessionRunning({ direct: true });
     if (!stillRunning) {
       const content = await readTextIfExists(latestLogPath);
       const recent = getRecentLogDelta(content, initialLength);
@@ -1737,9 +1784,16 @@ module.exports = function createUpdateService({ state, getWss }) {
   }
 
   async function acquireUpdateLock(owner) {
+    if (state.backupInProgress) {
+      throw new Error('A backup is currently in progress.');
+    }
     const acquired = await updateStore.tryAcquireLock(owner);
     if (!acquired) {
       throw new Error('An update is already in progress.');
+    }
+    if (state.backupInProgress) {
+      await updateStore.releaseLock(owner);
+      throw new Error('A backup started while the update lock was being acquired.');
     }
     state.updateLocked = true;
     state.updateLockOwner = owner;
@@ -1792,48 +1846,61 @@ module.exports = function createUpdateService({ state, getWss }) {
     const owner = `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await acquireUpdateLock(owner);
 
-    const runId = await updateStore.createRun({
-      checkId,
-      actorUserId,
-      mode,
-      targetVersion: report.targetVersion,
-      status: 'running',
-      details: { startedBy: actorUserId || null }
-    });
-
     let snapshotPath = null;
-    const wasRunningBefore = await isScreenSessionRunning();
-    const completion = {
-      runId,
-      checkId,
-      sourceVersion: report.currentVersion || null,
-      targetVersion: report.targetVersion,
-      latestVersion: report.latestVersion || null,
-      operation,
-      mode,
-      succeeded: false,
-      rolledBack: false,
-      archiveDir: null,
-      movedMods: [],
-      updatedMods: [],
-      snapshotPath: null,
-      summaryText: null,
-      preModManifest: Array.isArray(report.mods && report.mods.mods)
-        ? report.mods.mods.map(mod => ({
-          fileName: mod.fileName,
-          modId: mod.modId || null,
-          status: mod.status
-        }))
-        : [],
-      postModManifest: []
-    };
+    let runId;
+    let restartRequired = false;
+    let completion;
+    try {
+      runId = await updateStore.createRun({
+        checkId,
+        actorUserId,
+        mode,
+        targetVersion: report.targetVersion,
+        status: 'running',
+        details: { startedBy: actorUserId || null }
+      });
+      completion = {
+        runId,
+        checkId,
+        sourceVersion: report.currentVersion || null,
+        targetVersion: report.targetVersion,
+        latestVersion: report.latestVersion || null,
+        operation,
+        mode,
+        succeeded: false,
+        rolledBack: false,
+        archiveDir: null,
+        movedMods: [],
+        updatedMods: [],
+        snapshotPath: null,
+        summaryText: null,
+        preModManifest: Array.isArray(report.mods && report.mods.mods)
+          ? report.mods.mods.map(mod => ({
+            fileName: mod.fileName,
+            modId: mod.modId || null,
+            status: mod.status
+          }))
+          : [],
+        postModManifest: []
+      };
+    } catch (err) {
+      try {
+        await releaseUpdateLock(owner);
+      } catch (releaseErr) {
+        console.warn('Failed to release update lock after setup failure:', releaseErr.message);
+      }
+      throw err;
+    }
 
     try {
       state.maintenanceMode = true;
       emitProgress('prepare', 'Acquiring update lock and validating preflight…', 5, { runId });
 
       emitProgress('stop', 'Stopping Minecraft server…', 12, { runId });
-      await stopMinecraftSessionIfRunning();
+      // The process service decides whether it performed the stop while it
+      // holds the lifecycle mutex. That result, rather than a stale pre-lock
+      // liveness probe, owns the right to restore the running state later.
+      restartRequired = await stopMinecraftSessionIfRunning({ reason: 'update' });
 
       emitProgress('backup', 'Creating full snapshot backup before update…', 22, { runId });
       snapshotPath = await createSnapshot(report.targetVersion);
@@ -1871,17 +1938,17 @@ module.exports = function createUpdateService({ state, getWss }) {
       emitProgress('finalize', 'Finalizing update state…', 92, { runId });
       await setCurrentVersion(report.targetVersion);
 
-      if (wasRunningBefore) {
+      if (restartRequired) {
         const stillRunning = await isScreenSessionRunning();
         if (!stillRunning) {
-          const started = await startMinecraftSession();
+          const started = await startMinecraftSession({ reason: 'updated' });
           if (!started) {
             throw new Error('Updated server failed to restart.');
           }
         }
       } else {
         // Smoke test temporarily starts the server; keep final state offline if it was offline before update.
-        await stopMinecraftSessionIfRunning();
+        await stopMinecraftSessionIfRunning({ reason: 'updated' });
       }
 
       completion.succeeded = true;
@@ -1912,7 +1979,7 @@ module.exports = function createUpdateService({ state, getWss }) {
       completion.error = err.message;
       emitProgress('rollback', 'Update failed. Rolling back from snapshot…', 96, { runId, error: err.message });
       try {
-        await stopMinecraftSessionIfRunning();
+        await stopMinecraftSessionIfRunning({ reason: 'update_rollback' });
         if (snapshotPath) {
           await restoreSnapshot(snapshotPath);
           completion.rolledBack = true;
@@ -1921,9 +1988,9 @@ module.exports = function createUpdateService({ state, getWss }) {
         completion.rollbackError = rollbackErr.message;
       }
 
-      if (wasRunningBefore) {
+      if (restartRequired) {
         try {
-          await startMinecraftSession();
+          await startMinecraftSession({ reason: 'update_rollback' });
         } catch (_) {
           // Best effort.
         }
@@ -1949,7 +2016,11 @@ module.exports = function createUpdateService({ state, getWss }) {
       throw err;
     } finally {
       state.maintenanceMode = false;
-      await releaseUpdateLock(owner);
+      try {
+        await releaseUpdateLock(owner);
+      } finally {
+        await reconcileMinecraft(completion.succeeded ? 'update_complete' : 'update_rollback_complete');
+      }
     }
   }
 
@@ -1980,32 +2051,51 @@ module.exports = function createUpdateService({ state, getWss }) {
     }
   }
 
+  function stopStatusRefreshTimer() {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+
   async function restoreLatestSnapshot({ actorUserId } = {}) {
     const owner = `restore-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await acquireUpdateLock(owner);
 
-    const runs = await updateStore.listRuns(100);
-    const candidateRun = runs.find(run => run && run.details && run.details.snapshotPath);
-    if (!candidateRun) {
-      await releaseUpdateLock(owner);
-      throw new Error('No snapshot-bearing update run found to restore.');
+    let candidateRun;
+    let snapshotPath;
+    let runId;
+    let restartRequired = false;
+    try {
+      const runs = await updateStore.listRuns(100);
+      candidateRun = runs.find(run => run && run.details && run.details.snapshotPath);
+      if (!candidateRun) {
+        throw new Error('No snapshot-bearing update run found to restore.');
+      }
+
+      snapshotPath = candidateRun.details.snapshotPath;
+      runId = await updateStore.createRun({
+        checkId: null,
+        actorUserId,
+        mode: 'restore_latest_snapshot',
+        targetVersion: null,
+        status: 'running',
+        details: { sourceRunId: candidateRun.id, snapshotPath }
+      });
+    } catch (err) {
+      try {
+        await releaseUpdateLock(owner);
+      } catch (releaseErr) {
+        console.warn('Failed to release update lock after restore setup failure:', releaseErr.message);
+      }
+      throw err;
     }
 
-    const snapshotPath = candidateRun.details.snapshotPath;
-    const runId = await updateStore.createRun({
-      checkId: null,
-      actorUserId,
-      mode: 'restore_latest_snapshot',
-      targetVersion: null,
-      status: 'running',
-      details: { sourceRunId: candidateRun.id, snapshotPath }
-    });
-
-    const wasRunningBefore = await isScreenSessionRunning();
+    let restoreSucceeded = false;
     try {
       state.maintenanceMode = true;
       emitProgress('restore_prepare', 'Preparing snapshot restore…', 10, { runId });
-      await stopMinecraftSessionIfRunning();
+      restartRequired = await stopMinecraftSessionIfRunning({ reason: 'update_restore' });
 
       emitProgress('restore_apply', 'Restoring latest update snapshot…', 45, { runId });
       await restoreSnapshot(snapshotPath);
@@ -2015,9 +2105,9 @@ module.exports = function createUpdateService({ state, getWss }) {
         await setCurrentVersion(restoredVersion);
       }
 
-      if (wasRunningBefore) {
+      if (restartRequired) {
         emitProgress('restore_restart', 'Restarting server after restore…', 75, { runId });
-        await startMinecraftSession();
+        await startMinecraftSession({ reason: 'updated' });
       }
 
       const details = {
@@ -2040,6 +2130,7 @@ module.exports = function createUpdateService({ state, getWss }) {
         details
       });
       emitProgress('restore_done', 'Snapshot restore completed.', 100, { runId });
+      restoreSucceeded = true;
       return details;
     } catch (err) {
       await updateStore.updateRun({
@@ -2058,13 +2149,20 @@ module.exports = function createUpdateService({ state, getWss }) {
       throw err;
     } finally {
       state.maintenanceMode = false;
-      await releaseUpdateLock(owner);
+      try {
+        await releaseUpdateLock(owner);
+      } finally {
+        await reconcileMinecraft(
+          restoreSucceeded ? 'update_restore_complete' : 'update_restore_rollback_complete'
+        );
+      }
     }
   }
 
   return {
     initialize,
     startStatusRefreshTimer,
+    stopStatusRefreshTimer,
     getCurrentVersion,
     getStatus,
     listAdvancedTargets,

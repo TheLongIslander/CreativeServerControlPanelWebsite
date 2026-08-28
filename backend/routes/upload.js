@@ -113,7 +113,7 @@ module.exports = function createUploadRoutes() {
               else console.log('Temp file deleted:', localFilePath);
             });
 
-            const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+            const ipAddress = req.ip || req.socket.remoteAddress || null;
             console.log('IP Address:', ipAddress);
             logSFTPServerAction(req.user.username, 'upload', remoteFilePath, ipAddress);
           }

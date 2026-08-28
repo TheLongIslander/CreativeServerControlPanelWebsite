@@ -9,5 +9,8 @@ token_blacklist.db
 bycrypt.js
 users.db
 updates.db
+chat.db
+chat.db-wal
+chat.db-shm
 plans.md
 assets/server-info/

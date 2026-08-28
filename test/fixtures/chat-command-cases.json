@@ -1,0 +1,60 @@
+{
+  "commandFormatVersion": "tellraw-v1",
+  "screenPayloadSuffix": "\r",
+  "cases": [
+    {
+      "name": "ascii",
+      "username": "TheLongIslander",
+      "input": "Hello everyone",
+      "normalizedMessage": "Hello everyone",
+      "codePointCount": 14,
+      "command": "tellraw @a [{\"text\":\"[Panel] \",\"color\":\"dark_green\",\"bold\":true},{\"text\":\"TheLongIslander\",\"color\":\"green\"},{\"text\":\": \",\"color\":\"gray\"},{\"text\":\"Hello everyone\",\"color\":\"white\"}]",
+      "screenPayloadBytes": 180
+    },
+    {
+      "name": "json-escaping",
+      "username": "Admin_User",
+      "input": "He said \"hi\" and used \\server\\path",
+      "normalizedMessage": "He said \"hi\" and used \\server\\path",
+      "codePointCount": 34,
+      "command": "tellraw @a [{\"text\":\"[Panel] \",\"color\":\"dark_green\",\"bold\":true},{\"text\":\"Admin_User\",\"color\":\"green\"},{\"text\":\": \",\"color\":\"gray\"},{\"text\":\"He said \\\"hi\\\" and used \\\\server\\\\path\",\"color\":\"white\"}]",
+      "screenPayloadBytes": 199
+    },
+    {
+      "name": "emoji",
+      "username": "Emoji_User",
+      "input": "Hello 👋🏽 world 🚀",
+      "normalizedMessage": "Hello 👋🏽 world 🚀",
+      "codePointCount": 16,
+      "command": "tellraw @a [{\"text\":\"[Panel] \",\"color\":\"dark_green\",\"bold\":true},{\"text\":\"Emoji_User\",\"color\":\"green\"},{\"text\":\": \",\"color\":\"gray\"},{\"text\":\"Hello 👋🏽 world 🚀\",\"color\":\"white\"}]",
+      "screenPayloadBytes": 186
+    },
+    {
+      "name": "trim-whitespace",
+      "username": "Trim_User",
+      "input": "   Server restart soon   ",
+      "normalizedMessage": "Server restart soon",
+      "codePointCount": 19,
+      "command": "tellraw @a [{\"text\":\"[Panel] \",\"color\":\"dark_green\",\"bold\":true},{\"text\":\"Trim_User\",\"color\":\"green\"},{\"text\":\": \",\"color\":\"gray\"},{\"text\":\"Server restart soon\",\"color\":\"white\"}]",
+      "screenPayloadBytes": 179
+    },
+    {
+      "name": "nfc-decomposed",
+      "username": "Unicode_User",
+      "input": "Café",
+      "normalizedMessage": "Café",
+      "codePointCount": 4,
+      "command": "tellraw @a [{\"text\":\"[Panel] \",\"color\":\"dark_green\",\"bold\":true},{\"text\":\"Unicode_User\",\"color\":\"green\"},{\"text\":\": \",\"color\":\"gray\"},{\"text\":\"Café\",\"color\":\"white\"}]",
+      "screenPayloadBytes": 168
+    },
+    {
+      "name": "nfc-precomposed",
+      "username": "Unicode_User",
+      "input": "Café",
+      "normalizedMessage": "Café",
+      "codePointCount": 4,
+      "command": "tellraw @a [{\"text\":\"[Panel] \",\"color\":\"dark_green\",\"bold\":true},{\"text\":\"Unicode_User\",\"color\":\"green\"},{\"text\":\": \",\"color\":\"gray\"},{\"text\":\"Café\",\"color\":\"white\"}]",
+      "screenPayloadBytes": 168
+    }
+  ]
+}

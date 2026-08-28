@@ -106,7 +106,7 @@ module.exports = function createWebAuthnRoutes() {
           targetUserId: req.user.id,
           action: 'user.passkey.delete',
           metadata: { credentialId },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log passkey delete:', logErr.message);
@@ -227,7 +227,7 @@ module.exports = function createWebAuthnRoutes() {
           targetUserId: req.user.id,
           action: 'user.passkey.add',
           metadata: { credentialId },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log passkey add:', logErr.message);
@@ -335,7 +335,7 @@ module.exports = function createWebAuthnRoutes() {
       });
 
       await usersDb.setUserLastLogin(user.id);
-      const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+      const ipAddress = req.ip || req.socket.remoteAddress || null;
       try {
         await usersDb.logUserLogin({ userId: user.id, ipAddress });
       } catch (logErr) {

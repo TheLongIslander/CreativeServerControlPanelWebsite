@@ -4,16 +4,19 @@
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
-const dbPath = path.join(__dirname, '..', '..', 'updates.db');
-const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
-  if (err) {
-    console.error('Error opening updates database:', err.message);
+let db = null;
+
+function getDb() {
+  if (!db) {
+    const dbPath = path.resolve(process.env.UPDATES_DB_PATH || path.join(__dirname, '..', '..', 'updates.db'));
+    db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
   }
-});
+  return db;
+}
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(err) {
+    getDb().run(sql, params, function onRun(err) {
       if (err) {
         reject(err);
         return;
@@ -25,7 +28,7 @@ function run(sql, params = []) {
 
 function get(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
+    getDb().get(sql, params, (err, row) => {
       if (err) {
         reject(err);
         return;
@@ -37,7 +40,7 @@ function get(sql, params = []) {
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
+    getDb().all(sql, params, (err, rows) => {
       if (err) {
         reject(err);
         return;
@@ -416,7 +419,15 @@ async function upsertModSourceCache({
   ]);
 }
 
+async function close() {
+  if (!db) return;
+  const handle = db;
+  db = null;
+  await new Promise((resolve, reject) => handle.close(err => (err ? reject(err) : resolve())));
+}
+
 module.exports = {
+  close,
   initUpdateStore,
   getState,
   setState,

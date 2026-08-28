@@ -19,73 +19,137 @@ const requireOnboarded = require('../middleware/requireOnboarded');
 const sftpConnectionDetails = require('../config/sftp');
 
 const cacheDir = path.join(os.tmpdir(), 'image_cache');
-const videoCacheDir = process.env.VIDEO_CACHE_DIR || path.join(os.tmpdir(), 'video_cache');
 const placeholderImagePath = path.join(__dirname, '..', '..', 'assets', 'android-chrome-512x512.png');
-
-if (!fs.existsSync(cacheDir)) {
-  fs.mkdirSync(cacheDir);
-}
-
-if (!fs.existsSync(videoCacheDir)) {
-  fs.mkdirSync(videoCacheDir, { recursive: true });
-}
-
 const MAX_WORKERS = Math.max(1, os.cpus().filter(cpu => cpu.speed > 2000).length);
-const workerPool = [];
+const idleWorkers = [];
+const allWorkers = new Set();
+const activeWorkerTasks = new Map();
 const taskQueue = [];
-let activeWorkers = 0;
+let cacheDirectoriesReady = false;
+let workerPoolInitialized = false;
+let workerPoolClosing = false;
+let workerPoolClosePromise = null;
 
-for (let i = 0; i < MAX_WORKERS; i++) {
-  const worker = new Worker(path.join(__dirname, '..', 'workers', 'heicWorker.js'));
-  workerPool.push(worker);
+function getVideoCacheDir() {
+  return process.env.VIDEO_CACHE_DIR || path.join(os.tmpdir(), 'video_cache');
 }
 
-function assignTaskToWorker(task) {
-  if (workerPool.length > 0) {
-    const worker = workerPool.pop();
-    activeWorkers++;
+function ensureCacheDirectories() {
+  if (cacheDirectoriesReady) return;
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.mkdirSync(getVideoCacheDir(), { recursive: true });
+  cacheDirectoriesReady = true;
+}
 
-    worker.postMessage(task.data);
+function removeIdleWorker(worker) {
+  const index = idleWorkers.indexOf(worker);
+  if (index >= 0) idleWorkers.splice(index, 1);
+}
 
-    worker.once('message', (message) => {
-      task.resolve(message);
-      workerPool.push(worker);
-      activeWorkers--;
-      processQueue();
-    });
+function createHeicWorker() {
+  const worker = new Worker(path.join(__dirname, '..', 'workers', 'heicWorker.js'));
+  allWorkers.add(worker);
 
-    worker.once('error', (error) => {
+  worker.on('message', message => {
+    const task = activeWorkerTasks.get(worker);
+    if (!task) return;
+    activeWorkerTasks.delete(worker);
+    task.resolve(message);
+    if (workerPoolInitialized && !workerPoolClosing && allWorkers.has(worker)) {
+      idleWorkers.push(worker);
+    }
+    processQueue();
+  });
+
+  worker.on('error', error => {
+    const task = activeWorkerTasks.get(worker);
+    if (task) {
+      activeWorkerTasks.delete(worker);
       task.reject(error);
-      workerPool.push(worker);
-      activeWorkers--;
-      processQueue();
-    });
+    }
+    allWorkers.delete(worker);
+    removeIdleWorker(worker);
+  });
 
-    worker.once('exit', (code) => {
-      if (code !== 0) {
-        console.error(`Worker exited with code ${code}`);
-        task.reject(new Error(`Worker exited with code ${code}`));
-      }
-      workerPool.push(worker);
-      activeWorkers--;
-      processQueue();
-    });
-  } else {
-    taskQueue.push(task);
-  }
+  worker.on('exit', code => {
+    const task = activeWorkerTasks.get(worker);
+    if (task) {
+      activeWorkerTasks.delete(worker);
+      task.reject(new Error(`HEIC worker exited with code ${code}`));
+    }
+    allWorkers.delete(worker);
+    removeIdleWorker(worker);
+    replenishWorkerPool();
+    processQueue();
+  });
+
+  idleWorkers.push(worker);
+}
+
+function replenishWorkerPool() {
+  if (!workerPoolInitialized || workerPoolClosing) return;
+  while (allWorkers.size < MAX_WORKERS) createHeicWorker();
+}
+
+async function initializeWorkerPool() {
+  if (workerPoolClosePromise) await workerPoolClosePromise;
+  if (workerPoolInitialized) return;
+  workerPoolInitialized = true;
+  replenishWorkerPool();
 }
 
 function processQueue() {
-  if (taskQueue.length > 0 && activeWorkers < MAX_WORKERS) {
+  while (taskQueue.length > 0 && idleWorkers.length > 0 && !workerPoolClosing) {
+    const worker = idleWorkers.pop();
+    if (!allWorkers.has(worker)) continue;
     const task = taskQueue.shift();
-    assignTaskToWorker(task);
+    activeWorkerTasks.set(worker, task);
+    try {
+      worker.postMessage(task.data);
+    } catch (err) {
+      activeWorkerTasks.delete(worker);
+      allWorkers.delete(worker);
+      task.reject(err);
+      Promise.resolve(worker.terminate()).catch(() => {});
+      replenishWorkerPool();
+    }
   }
 }
 
 function scheduleTask(data) {
-  return new Promise((resolve, reject) => {
-    assignTaskToWorker({ data, resolve, reject });
+  ensureCacheDirectories();
+  return initializeWorkerPool().then(() => new Promise((resolve, reject) => {
+    if (workerPoolClosing || !workerPoolInitialized) {
+      reject(new Error('HEIC worker pool is shutting down'));
+      return;
+    }
+    taskQueue.push({ data, resolve, reject });
+    processQueue();
+  }));
+}
+
+function closePreviewResources() {
+  if (workerPoolClosePromise) return workerPoolClosePromise;
+
+  workerPoolClosing = true;
+  workerPoolInitialized = false;
+  const closeError = new Error('HEIC worker pool was closed');
+  while (taskQueue.length > 0) taskQueue.shift().reject(closeError);
+  for (const task of activeWorkerTasks.values()) task.reject(closeError);
+  activeWorkerTasks.clear();
+
+  const workers = [...allWorkers];
+  idleWorkers.length = 0;
+  workerPoolClosePromise = Promise.allSettled(
+    workers.map(worker => Promise.resolve().then(() => worker.terminate()))
+  ).then(() => {
+    allWorkers.clear();
+  }).finally(() => {
+    workerPoolClosing = false;
+    workerPoolClosePromise = null;
   });
+
+  return workerPoolClosePromise;
 }
 
 function createPreviewRoutes() {
@@ -93,6 +157,7 @@ function createPreviewRoutes() {
 
   router.get('/download-preview', authenticateJWT, requireOnboarded, (req, res) => {
     const filePath = req.query.path;
+    ensureCacheDirectories();
 
     const conn = new Client();
     conn.on('ready', () => {
@@ -125,7 +190,7 @@ function createPreviewRoutes() {
 }
 
 function handleVideo(sftp, filePath, cacheFilePath, res) {
-  const videoCacheFilePath = path.join(videoCacheDir, path.basename(filePath) + '.jpg');
+  const videoCacheFilePath = path.join(getVideoCacheDir(), path.basename(filePath) + '.jpg');
 
   if (fs.existsSync(videoCacheFilePath)) {
     return res.sendFile(videoCacheFilePath);
@@ -319,6 +384,7 @@ function handlePDF(sftp, filePath, cacheFilePath, res) {
 }
 
 async function precacheVideoThumbnails() {
+  ensureCacheDirectories();
   const conn = new Client();
   conn.on('ready', () => {
     conn.sftp(async (err, sftp) => {
@@ -357,7 +423,8 @@ async function processDirectory(sftp, dirPath) {
 }
 
 async function generateThumbnailForVideo(sftp, filePath) {
-  const cacheFilePath = path.join(videoCacheDir, path.basename(filePath) + '.jpg');
+  ensureCacheDirectories();
+  const cacheFilePath = path.join(getVideoCacheDir(), path.basename(filePath) + '.jpg');
 
   if (fs.existsSync(cacheFilePath)) {
     return;
@@ -423,6 +490,7 @@ async function generateThumbnailForVideo(sftp, filePath) {
 }
 
 module.exports = {
+  closePreviewResources,
   createPreviewRoutes,
   precacheVideoThumbnails
 };

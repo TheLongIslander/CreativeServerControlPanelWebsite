@@ -3,10 +3,14 @@
  */
 module.exports = function requireOnboarded(req, res, next) {
   if (!req.user) {
-    return res.sendStatus(401);
+    return res.status(401).json({
+      error: { code: 'AUTH_REQUIRED', message: 'Authentication is required.' }
+    });
   }
   if (req.user.must_reset_password) {
-    return res.status(428).json({ message: 'PASSWORD_RESET_REQUIRED' });
+    return res.status(428).json({
+      error: { code: 'PASSWORD_RESET_REQUIRED', message: 'A password reset is required.' }
+    });
   }
   return next();
 };

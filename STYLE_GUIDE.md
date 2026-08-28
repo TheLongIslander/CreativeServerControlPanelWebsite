@@ -22,6 +22,8 @@ It is written for future people to implement new pages without guessing.
 - Global flat theme: `public/style.flat.css`
 - Shared appearance state + account menu wiring: `public/appearance.js`
 - Control panel behavior + glass backup progress engine: `public/script.js`
+- Server chat behavior and reconciliation: `public/serverChat.js`
+- Server chat flat/glass component layer: `public/chat.css` (loaded after the active global theme)
 - SFTP page style + glass/flat progress skinning: `public/styleSFTP.css`
 - SFTP page behavior + progress wrapper lifecycle: `public/sftp.js`
 - Admin/account page style system: `public/styleAdmin.css`
@@ -287,6 +289,69 @@ clicking the active stage image opens `#server-info-image-viewer`; mouse wheel z
 the `Current Mods` fact card jumps to `#server-info-mods-section` and focuses the mod filter.
 - Data contract:
 server facts, lore sections, display-safe mod metadata, and screenshot groups are returned by `backend/routes/serverInfo.js` through `backend/services/serverInfoService.js`.
+
+### Control panel server chat
+
+The chat panel is a themed terminal component, not a regular modal. Its source files are
+`public/serverChat.js` and `public/chat.css`; the latter must load after the active
+`style.css`/`style.flat.css` link so its scoped rules can neutralize global button and
+mobile-button rules without duplicating both themes.
+
+Required action-stack selectors:
+`#corner-action-stack`, `#update-server`, `#server-chat-toggle`, and
+`#server-chat-unread-badge`. The Update button remains the same DOM node and ID, but is
+positioned statically inside the fixed corner stack. A hidden Update button leaves no gap.
+
+Required shell selectors:
+`#server-chat-shell`, `.server-chat-backdrop`, `#server-chat-panel`,
+`.server-chat-header`, `#server-chat-close`, `#server-chat-connection-status`,
+`#server-chat-session-meta`, `.server-chat-toolbar`, `#server-chat-history-status`,
+`#server-chat-filters`, `#server-chat-admin-controls`, `#server-chat-messages`,
+`#server-chat-new-messages`, `#server-chat-form`, `#server-chat-input`,
+`#server-chat-send`, `#server-chat-input-meter`, and `#server-chat-send-status`.
+
+Behavior contract:
+
+- Desktop chat is a non-modal panel at z-index 40; the corner stack is 41, regular
+  modals remain 50+, and the screenshot viewer remains 80.
+- Mobile chat fills `100vh`/`100dvh`, accounts for every safe-area inset, traps focus,
+  marks background siblings inert, and leaves its toggle usable.
+- The shell uses `server-chat-open`/`server-chat-mobile-open`; it is intentionally not
+  included in the existing `modal-open` synchronization.
+- The composer and admin setting are disabled in markup and stay disabled until an
+  authoritative capability/settings snapshot is loaded. Disconnection disables only
+  sending; cached history stays readable.
+- Chat-driven strings are inserted with `textContent`. Never render message, actor,
+  health, session, or diagnostic fields with `innerHTML`.
+- Message filters use `aria-pressed`; at least one of Chat or Activity remains enabled.
+- The unread badge is hidden at zero and capped visually at `500+`; the full unread
+  count and lossless history synchronization are not capped.
+- `role="log"`, connection/history/send live regions, Escape, focus restoration, a
+  keyboard-accessible new-message button, and visible focus rings are required.
+- Controls marked `data-no-pointer-lighting` are excluded by `public/script.js` from
+  control-panel cursor physics. Their scoped pseudo-elements and transforms are also
+  disabled in `public/chat.css`.
+
+Terminal visual contract:
+
+- Use the bundled `Pixelify Sans` OFL web font for terminal headings and compact
+  controls, with a system monospace stack for long message text.
+- Core semantic colors are exposed as `--chat-*` custom properties: panel, toolbar,
+  row, border, text, muted, accent, warning, error, and shadow.
+- Connection states are `live`, `connecting`, `catching-up`, `read-only`, `degraded`,
+  `disconnected`, and `unavailable`. Do not rely on color alone; every state also has
+  visible status text.
+- Panel-origin rows receive a visual badge derived from `origin`; user text can never
+  create the badge. Join/advancement, leave, and death activities use distinct but
+  accessible text tones.
+- Meter warning and error styles apply before submission, while the server remains the
+  validation authority. Never add HTML `maxlength`, which counts UTF-16 code units.
+
+The chat validation matrix includes all six appearance combinations, every connection
+and health state, read-only/admin states, zero/normal/`500+` unread badges, both filter
+choices, long bidirectional text, loading/empty/error/history states, desktop/mobile
+breakpoints, safe areas, reduced motion, keyboard-only use, and live theme switching
+while the panel is open.
 - Asset contract:
 source screenshots live under `assets/server-info/<era>/`; additional subfolders are discovered after the curated eras, and root-level screenshots appear in an `Unsorted` group. Optimized WebP derivatives live under `assets/server-info/_generated/display/<era>/` and `assets/server-info/_generated/thumbs/<era>/`. The endpoint falls back to originals if derivatives are absent.
 

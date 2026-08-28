@@ -1,11 +1,23 @@
 /*
  * Purpose: SFTP connection configuration sourced from environment variables.
  */
-module.exports = {
-  host: process.env.SFTP_HOST,
-  port: process.env.SFTP_PORT,
-  username: process.env.SFTP_USERNAME,
-  password: process.env.SFTP_PASSWORD,
+const connectionDetails = {
   readyTimeout: 600000,
   keepaliveInterval: 10000
 };
+
+// Routes are imported before startServer() loads .env. Keep credential fields
+// lazy so importing the side-effect-free app cannot freeze undefined values.
+for (const [property, environmentName] of Object.entries({
+  host: 'SFTP_HOST',
+  port: 'SFTP_PORT',
+  username: 'SFTP_USERNAME',
+  password: 'SFTP_PASSWORD'
+})) {
+  Object.defineProperty(connectionDetails, property, {
+    enumerable: true,
+    get() { return process.env[environmentName]; }
+  });
+}
+
+module.exports = connectionDetails;

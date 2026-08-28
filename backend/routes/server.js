@@ -1,104 +1,114 @@
 /*
- * Purpose: Minecraft server lifecycle endpoints.
+ * Purpose: Minecraft server lifecycle endpoints backed by the authoritative
+ *          shared process service.
  * Routes: GET /status, POST /start, POST /stop, POST /restart.
  */
 const express = require('express');
-const { exec } = require('child_process');
 const authenticateJWT = require('../middleware/authenticate');
 const requireOnboarded = require('../middleware/requireOnboarded');
-const state = require('../state');
-const { getEasternTime, logServerAction } = require('../utils/logger');
-const { startServer } = require('../services/serverControl');
+const defaultState = require('../state');
+const { getEasternTime, logServerAction: defaultLogServerAction } = require('../utils/logger');
 
-module.exports = function createServerRoutes() {
+module.exports = function createServerRoutes({
+  minecraftProcessService,
+  processService,
+  state = defaultState,
+  logServerAction = defaultLogServerAction,
+  logger = console
+} = {}) {
+  const minecraft = minecraftProcessService || processService;
+  if (!minecraft || typeof minecraft.getSnapshot !== 'function') {
+    throw new Error('createServerRoutes requires minecraftProcessService');
+  }
+
   const router = express.Router();
 
-  function rejectIfUpdateInProgress(res) {
-    if (!state.updateLocked) {
-      return false;
+  function rejectIfLifecycleLocked(res) {
+    if (state.updateLocked) {
+      res.status(423).json({ message: 'An update operation is currently in progress.' });
+      return true;
     }
-    res.status(423).json({
-      message: 'An update operation is currently in progress.'
-    });
-    return true;
+    if (state.backupInProgress) {
+      res.status(423).json({ message: 'A backup operation is currently in progress.' });
+      return true;
+    }
+    if (state.maintenanceMode) {
+      res.status(423).json({ message: 'Server maintenance is currently in progress.' });
+      return true;
+    }
+    return false;
+  }
+
+  function snapshotPayload() {
+    const snapshot = minecraft.getSnapshot();
+    const runtimeState = snapshot && snapshot.state ? snapshot.state : 'offline';
+    return {
+      running: runtimeState !== 'offline',
+      ready: runtimeState === 'ready',
+      state: runtimeState,
+      updateInProgress: Boolean(state.updateLocked)
+    };
+  }
+
+  function recordAction(action) {
+    Promise.resolve()
+      .then(() => logServerAction(action))
+      .catch(err => logger.warn(`Failed to record ${action}:`, err.message));
   }
 
   router.get('/status', (req, res) => {
-    res.json({
-      running: state.serverRunning,
-      updateInProgress: Boolean(state.updateLocked)
-    });
+    res.json(snapshotPayload());
   });
 
-  router.post('/start', authenticateJWT, requireOnboarded, (req, res) => {
-    if (rejectIfUpdateInProgress(res)) {
-      return;
-    }
-
-    const subprocess = exec(`sh ${process.env.START_COMMAND_PATH}`);
-
-    subprocess.stdout.on('data', (data) => {
-      console.log(`stdout: ${data}`);
-    });
-
-    subprocess.stderr.on('data', (data) => {
-      console.error(`stderr: ${data}`);
-    });
-
-    subprocess.on('error', (error) => {
-      console.error(`exec error: ${error}`);
-      res.status(500).send('Failed to start the server');
-    });
-
-    state.serverRunning = true;
-    res.send('Server start command executed');
-    console.log(`Server start command executed at ${getEasternTime()}`);
-    logServerAction('Server Started');
-  });
-
-  router.post('/stop', authenticateJWT, requireOnboarded, (req, res) => {
-    if (rejectIfUpdateInProgress(res)) {
-      return;
-    }
-
-    exec('screen -S MinecraftSession -p 0 -X stuff "stop"$(printf "\\r")', (error) => {
-      if (error) {
-        console.error(`exec error: ${error}`);
-        return res.status(500).send('Failed to stop the server');
+  router.post('/start', authenticateJWT, requireOnboarded, async (req, res) => {
+    if (rejectIfLifecycleLocked(res)) return;
+    try {
+      const result = await minecraft.start({ reason: 'requested_start' });
+      if (result && result.started) {
+        logger.log(`Server start command executed at ${getEasternTime()}`);
+        recordAction('Server Started');
+        return res.send('Server start command executed');
       }
-      state.serverRunning = false;
-      res.send('Server stop command issued successfully');
-      console.log(`Server stop command executed at ${getEasternTime()}`);
-      logServerAction('Server Stopped');
-    });
+      return res.send('Server is already running');
+    } catch (err) {
+      logger.error('Failed to start Minecraft server:', err);
+      return res.status(500).send('Failed to start the server');
+    }
   });
 
-  router.post('/restart', authenticateJWT, requireOnboarded, (req, res) => {
-    if (rejectIfUpdateInProgress(res)) {
-      return;
-    }
-
-    if (!state.serverRunning) {
-      res.status(400).send('Server is not currently running.');
-      return;
-    }
-
-    exec('screen -S MinecraftSession -p 0 -X stuff "stop$(printf "\\r")"', (error) => {
-      if (error) {
-        console.error(`exec error: ${error}`);
-        res.status(500).send('Failed to stop the server');
-        return;
+  router.post('/stop', authenticateJWT, requireOnboarded, async (req, res) => {
+    if (rejectIfLifecycleLocked(res)) return;
+    try {
+      const result = await minecraft.stop({ reason: 'requested_stop', wait: true });
+      if (result && result.stopped) {
+        logger.log(`Server stop command executed at ${getEasternTime()}`);
+        recordAction('Server Stopped');
+        return res.send('Server stop command issued successfully');
       }
+      return res.send('Server is already stopped');
+    } catch (err) {
+      logger.error('Failed to stop Minecraft server:', err);
+      return res.status(500).send('Failed to stop the server');
+    }
+  });
 
-      console.log(`Server stop command executed at ${getEasternTime()}`);
-      state.serverRunning = false;
-
-      setTimeout(() => {
-        startServer();
-        res.send('Server is being restarted');
-        logServerAction('Server Restarted');
-      }, 3000);
-    });
+  router.post('/restart', authenticateJWT, requireOnboarded, async (req, res) => {
+    if (rejectIfLifecycleLocked(res)) return;
+    try {
+      if (typeof minecraft.reconcile === 'function') {
+        await minecraft.reconcile({ reason: 'restart_preflight' });
+      }
+      if (!minecraft.getSnapshot().running) {
+        return res.status(400).send('Server is not currently running.');
+      }
+      await minecraft.restart({ reason: 'requested_restart' });
+      logger.log(`Server restart command executed at ${getEasternTime()}`);
+      recordAction('Server Restarted');
+      return res.send('Server is being restarted');
+    } catch (err) {
+      logger.error('Failed to restart Minecraft server:', err);
+      return res.status(500).send('Failed to restart the server');
+    }
   });
 
   return router;

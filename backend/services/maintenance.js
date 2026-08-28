@@ -1,65 +1,105 @@
 /*
- * Purpose: Maintenance broadcast and graceful shutdown helper for WebSocket/HTTP servers.
- * Functions: broadcastMaintenance, shutdownGracefully.
+ * Purpose: Scoped maintenance broadcast and coordinated graceful shutdown.
  */
-const WebSocket = require('ws');
-
-module.exports = function createMaintenanceService({ getWss, getServer, state }) {
-  let shuttingDown = false;
+module.exports = function createMaintenanceService({
+  realtimeHub,
+  getServer,
+  state,
+  cleanup = async () => {},
+  exit = process.exit.bind(process),
+  logger = console,
+  httpDrainTimeoutMs = 5000,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout
+}) {
+  let shutdownPromise = null;
 
   function broadcastMaintenance(reason) {
-    const wss = getWss();
-    if (!wss || !wss.clients) {
-      return;
-    }
-    const message = JSON.stringify({ type: 'maintenance', reason: reason || 'Server shutting down for maintenance' });
-    wss.clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
+    if (!realtimeHub || typeof realtimeHub.broadcastMaintenance !== 'function') return;
+    realtimeHub.broadcastMaintenance({
+      type: 'maintenance',
+      reason: reason || 'Server shutting down for maintenance'
+    });
+  }
+
+  function closeHttpServer(server) {
+    if (!server || !server.listening) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let forceTimer = null;
+      const finish = err => {
+        if (settled) return;
+        settled = true;
+        if (forceTimer) clearTimeoutFn(forceTimer);
+        if (err) reject(err);
+        else resolve();
+      };
+      forceTimer = setTimeoutFn(() => {
+        try {
+          if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+        } catch (_) {
+          // The timeout error remains the stable shutdown failure.
+        }
+        finish(new Error('HTTP shutdown exceeded its grace period.'));
+      }, Math.max(1, Number(httpDrainTimeoutMs) || 5000));
+      try {
+        server.close(err => finish(err || null));
+        if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+      } catch (err) {
+        finish(err);
       }
     });
   }
 
-  function shutdownGracefully(trigger) {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
+  function shutdownGracefully(trigger, { exitProcess = true } = {}) {
+    if (shutdownPromise) return shutdownPromise;
     state.maintenanceMode = true;
-    console.log(`Shutdown initiated (${trigger}).`);
-
+    logger.log(`Shutdown initiated (${trigger}).`);
     broadcastMaintenance('Server shutting down for maintenance');
 
-    setTimeout(() => {
-      const wss = getWss();
-      if (wss) {
-        wss.clients.forEach(client => {
-          try {
-            client.close(1001, 'Server shutting down');
-          } catch (err) {
-            console.error('Error closing WebSocket client:', err);
-          }
-        });
-        wss.close(() => {});
+    shutdownPromise = (async () => {
+      let failure = null;
+      let httpClose = Promise.resolve();
+      try {
+        // Stop accepting new requests before any dependency can be closed.
+        httpClose = closeHttpServer(getServer && getServer());
+      } catch (err) {
+        failure = err;
+        logger.error('HTTP shutdown failed to start:', err.message);
       }
 
-      const server = getServer();
-      if (server) {
-        server.close(() => {
-          console.log('HTTP server closed. Exiting.');
-          process.exit(0);
-        });
+      try {
+        if (realtimeHub && typeof realtimeHub.close === 'function') await realtimeHub.close();
+      } catch (err) {
+        failure ||= err;
+        logger.error('Realtime shutdown failed:', err.message);
       }
 
-      setTimeout(() => {
-        console.warn('Forcing shutdown.');
-        process.exit(1);
-      }, 3000);
-    }, 1500);
+      try {
+        await httpClose;
+      } catch (err) {
+        failure ||= err;
+        logger.error('HTTP shutdown failed:', err.message);
+      }
+
+      try {
+        // No new HTTP/WS operation can reopen a database after this point.
+        await cleanup();
+      } catch (err) {
+        failure ||= err;
+        logger.error('Background cleanup failed during shutdown:', err.message);
+      }
+
+      if (exitProcess) exit(failure ? 1 : 0);
+      if (failure) throw failure;
+    })();
+
+    return shutdownPromise;
   }
 
   return {
     broadcastMaintenance,
+    isShuttingDown: () => Boolean(shutdownPromise),
     shutdownGracefully
   };
 };

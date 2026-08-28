@@ -5,19 +5,31 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const db = require('../db/tokenBlacklist');
+const tokenBlacklist = require('../db/tokenBlacklist');
 const usersDb = require('../db/users');
 const authenticateJWT = require('../middleware/authenticate');
 const { normalizeUsername } = require('../utils/username');
 const { validatePassword } = require('../utils/passwordPolicy');
 
-module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredTokens }) {
+module.exports = function createAuthRoutes({
+  logServerAction = () => {},
+  cleanupExpiredTokens = () => {},
+  realtimeHub = null
+} = {}) {
   const router = express.Router();
   const MAX_FAILED_LOGINS = 5;
   const LOCKOUT_MINUTES = 15;
   const IP_RATE_WINDOW_MS = 5 * 60 * 1000;
   const IP_RATE_LIMIT = 20;
+  const MAX_TRACKED_IPS = 10_000;
   const ipAttempts = new Map();
+  let rateChecks = 0;
+
+  function runBackground(operation, label) {
+    Promise.resolve().then(operation).catch(err => {
+      console.warn(`${label}:`, err.message);
+    });
+  }
 
   function isIpRateLimited(ip) {
     if (!ip) {
@@ -25,14 +37,21 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
     }
     const now = Date.now();
     const windowStart = now - IP_RATE_WINDOW_MS;
+    rateChecks += 1;
+    if (rateChecks % 128 === 0 || ipAttempts.size >= MAX_TRACKED_IPS) {
+      for (const [trackedIp, trackedAttempts] of ipAttempts) {
+        const live = trackedAttempts.filter(ts => ts >= windowStart);
+        if (live.length) ipAttempts.set(trackedIp, live);
+        else ipAttempts.delete(trackedIp);
+      }
+      while (ipAttempts.size >= MAX_TRACKED_IPS) {
+        ipAttempts.delete(ipAttempts.keys().next().value);
+      }
+    }
     const attempts = ipAttempts.get(ip) || [];
     const recent = attempts.filter(ts => ts >= windowStart);
     recent.push(now);
-    if (recent.length === 0) {
-      ipAttempts.delete(ip);
-    } else {
-      ipAttempts.set(ip, recent);
-    }
+    ipAttempts.set(ip, recent);
     return recent.length > IP_RATE_LIMIT;
   }
 
@@ -44,7 +63,7 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
       return res.status(400).send('Username and password are required');
     }
 
-    const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const ipAddress = req.ip || req.socket.remoteAddress || null;
     if (isIpRateLimited(ipAddress)) {
       return res.status(429).json({ message: 'Too many login attempts. Please try again later.' });
     }
@@ -76,7 +95,7 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
               targetUserId: user.id,
               action: 'user.locked',
               metadata: { until: lockedUntil },
-              ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+              ipAddress
             });
           } catch (logErr) {
             console.warn('Failed to log lockout:', logErr.message);
@@ -114,7 +133,7 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
         role: user.role,
         username: user.username
       });
-      logServerAction('Logged In');
+      runBackground(() => logServerAction('Logged In'), 'Failed to record login');
     } catch (err) {
       console.error('Login error:', err);
       res.status(500).send('Login failed');
@@ -155,7 +174,7 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
           targetUserId: req.user.id,
           action: 'user.appearance.updated',
           metadata: { uiTheme, colorScheme },
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log appearance update:', logErr.message);
@@ -177,13 +196,14 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
     try {
       const hash = await bcrypt.hash(password, 10);
       await usersDb.setUserPassword({ userId: req.user.id, passwordHash: hash });
+      if (realtimeHub) realtimeHub.disconnectUser(req.user.id, 'Password changed');
       try {
         await usersDb.logAuditEvent({
           actorUserId: req.user.id,
           targetUserId: req.user.id,
           action: 'user.password.set',
           metadata: null,
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log password set:', logErr.message);
@@ -227,13 +247,14 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
 
       const hash = await bcrypt.hash(newPassword, 10);
       await usersDb.setUserPassword({ userId: req.user.id, passwordHash: hash });
+      if (realtimeHub) realtimeHub.disconnectUser(req.user.id, 'Password changed');
       try {
         await usersDb.logAuditEvent({
           actorUserId: req.user.id,
           targetUserId: req.user.id,
           action: 'user.password.changed',
           metadata: null,
-          ipAddress: req.headers['x-forwarded-for'] || req.connection.remoteAddress
+          ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log password change:', logErr.message);
@@ -258,23 +279,24 @@ module.exports = function createAuthRoutes({ logServerAction, cleanupExpiredToke
     }
   });
 
-  router.post('/logout', authenticateJWT, (req, res) => {
+  router.post('/logout', authenticateJWT, async (req, res) => {
     const token = req.token;
-    db.run('INSERT INTO blacklisted_tokens(token) VALUES(?)', [token], function (err) {
-      if (err) {
-        res.status(500).send('Failed to blacklist token');
-        return console.error(err.message);
-      }
+    try {
+      await tokenBlacklist.add(token);
+      if (realtimeHub) realtimeHub.disconnectToken(token, 'Logged out');
       res.clearCookie('auth_token', {
         httpOnly: true,
         sameSite: 'Strict',
         secure: req.secure
       });
       console.log('Logged out');
-      logServerAction('Logged Out');
-      cleanupExpiredTokens();
-      res.send('Logged out');
-    });
+      runBackground(() => logServerAction('Logged Out'), 'Failed to record logout');
+      runBackground(cleanupExpiredTokens, 'Failed to clean expired tokens');
+      return res.send('Logged out');
+    } catch (err) {
+      console.error('Failed to blacklist token:', err.message);
+      return res.status(500).send('Failed to blacklist token');
+    }
   });
 
   return router;

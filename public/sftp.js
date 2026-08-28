@@ -12,6 +12,14 @@ let currentDisplayedPath = null;
 let lastMissingPathAlerted = null;
 let currentUser = null;
 let progressThemeObserver = null;
+let socketReconnectTimer = null;
+let socketStabilityTimer = null;
+let socketReconnectAttempt = 0;
+let socketStopped = false;
+let socketPreOpenFailureCount = 0;
+let socketPreOpenCheckInFlight = false;
+let socketLifecycleGeneration = 0;
+const SOCKET_MAX_PREOPEN_FAILURES = 3;
 
 const SFTP_PROGRESS_BULGE = {
     viewW: 1000,
@@ -619,20 +627,82 @@ function observeProgressThemeChanges() {
     }
 }
 
+async function handleSocketPreOpenFailure() {
+    if (socketPreOpenCheckInFlight || socketStopped) {
+        return;
+    }
+    socketPreOpenCheckInFlight = true;
+    const generation = socketLifecycleGeneration;
+    try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('/me', {
+            headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+            cache: 'no-store',
+            credentials: 'same-origin'
+        });
+        if (generation !== socketLifecycleGeneration) {
+            return;
+        }
+        if (response.status === 428) {
+            redirectToSetPassword();
+            return;
+        }
+        if (response.status === 401 || response.status === 403) {
+            redirectToLogin();
+            return;
+        }
+        socketStopped = true;
+        console.error('WebSocket upgrade failed repeatedly; automatic reconnect stopped until reload.');
+    } catch (error) {
+        if (generation !== socketLifecycleGeneration) {
+            return;
+        }
+        socketStopped = true;
+        console.error('WebSocket upgrade and authentication revalidation both failed; automatic reconnect stopped.');
+    } finally {
+        if (generation === socketLifecycleGeneration) {
+            socketPreOpenCheckInFlight = false;
+        }
+    }
+}
+
 function setupWebSocket() {
-    if (window.ws && window.ws.readyState !== WebSocket.CLOSED) {
+    if (socketStopped || (window.ws && (
+        window.ws.readyState === WebSocket.OPEN || window.ws.readyState === WebSocket.CONNECTING
+    ))) {
         return;
     }
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    window.ws = new WebSocket(`${wsProtocol}://${window.location.host}`);
+    const socket = new WebSocket(`${wsProtocol}://${window.location.host}/ws`);
+    window.ws = socket;
+    let opened = false;
 
-    window.ws.onmessage = function (event) {
+    socket.onopen = function () {
+        if (window.ws !== socket) {
+            socket.close();
+            return;
+        }
+        opened = true;
+        if (socketStabilityTimer) {
+            clearTimeout(socketStabilityTimer);
+        }
+        socketStabilityTimer = setTimeout(() => {
+            socketReconnectAttempt = 0;
+            socketPreOpenFailureCount = 0;
+            socketStabilityTimer = null;
+        }, 10000);
+    };
+
+    socket.onmessage = function (event) {
+        if (window.ws !== socket) {
+            return;
+        }
         let message;
         try {
             message = JSON.parse(event.data);
         } catch (error) {
-            console.error('[ERROR] Failed to parse WebSocket message:', error.message, event.data);
+            console.error('[ERROR] Failed to parse WebSocket message:', error.message);
             return;
         }
 
@@ -641,7 +711,7 @@ function setupWebSocket() {
             return;
         }
 
-        if (!message.requestId) {
+        if (typeof message.requestId !== 'string' || !message.requestId) {
             return;
         }
 
@@ -649,9 +719,14 @@ function setupWebSocket() {
         if (message.type === 'progress') {
             updateZipProgress(requestId, message.progress);
         } else if (message.type === 'complete') {
-            const form = document.querySelector(`form[data-request-id="${requestId}"]`);
+            const form = findDownloadForm(requestId);
+            const tracked = Object.prototype.hasOwnProperty.call(downloadWindows, requestId);
+            if (!form && !tracked) {
+                return;
+            }
             if (form) {
                 hideLoadingSpinner(form);
+                delete form.dataset.requestId;
             }
 
             const downloadUrl = `${window.location.origin}/downloads/${requestId}`;
@@ -664,21 +739,102 @@ function setupWebSocket() {
             }
 
             delete downloadWindows[requestId];
+        } else if (message.type === 'download-error') {
+            const form = findDownloadForm(requestId);
+            const tracked = Object.prototype.hasOwnProperty.call(downloadWindows, requestId);
+            if (!form && !tracked) {
+                return;
+            }
+            if (form) {
+                hideLoadingSpinner(form);
+                delete form.dataset.requestId;
+            }
+            const popup = downloadWindows[requestId];
+            if (popup && !popup.closed) {
+                popup.close();
+            }
+            delete downloadWindows[requestId];
+            delete progressStateMap[requestId];
+            alert('Download preparation failed. The file may have changed; refresh the directory and try again.');
         }
     };
 
-    window.ws.onerror = function () {
-        window.ws.close();
+    socket.onerror = function () {
+        socket.close();
     };
 
-    window.ws.onclose = function () {
-        setTimeout(() => {
-            if (!window.ws || window.ws.readyState === WebSocket.CLOSED) {
-                setupWebSocket();
+    socket.onclose = function (event) {
+        if (window.ws !== socket) {
+            return;
+        }
+        window.ws = null;
+        if (socketStabilityTimer) {
+            clearTimeout(socketStabilityTimer);
+            socketStabilityTimer = null;
+        }
+        if (socketStopped) return;
+        if (event.code === 1008) {
+            redirectToLogin();
+            return;
+        }
+        if (!opened) {
+            socketPreOpenFailureCount += 1;
+            if (socketPreOpenFailureCount >= SOCKET_MAX_PREOPEN_FAILURES) {
+                handleSocketPreOpenFailure();
+                return;
             }
-        }, 3000);
+        }
+        if (socketReconnectTimer) return;
+        const base = Math.min(1000 * (2 ** socketReconnectAttempt), 30000);
+        socketReconnectAttempt = Math.min(socketReconnectAttempt + 1, 5);
+        const delay = Math.min(30000, Math.round(base * (0.75 + Math.random() * 0.5)));
+        socketReconnectTimer = setTimeout(() => {
+            socketReconnectTimer = null;
+            setupWebSocket();
+        }, delay);
     };
 }
+
+window.addEventListener('pagehide', () => {
+    socketLifecycleGeneration += 1;
+    socketPreOpenCheckInFlight = false;
+    socketStopped = true;
+    if (socketReconnectTimer) {
+        clearTimeout(socketReconnectTimer);
+        socketReconnectTimer = null;
+    }
+    if (socketStabilityTimer) {
+        clearTimeout(socketStabilityTimer);
+        socketStabilityTimer = null;
+    }
+    if (window.ws && (window.ws.readyState === WebSocket.OPEN || window.ws.readyState === WebSocket.CONNECTING)) {
+        window.ws.close(1000, 'page hidden');
+    }
+});
+
+window.addEventListener('pageshow', async (event) => {
+    if (event.persisted) {
+        socketReconnectAttempt = 0;
+        socketPreOpenFailureCount = 0;
+        const restoredUser = await loadCurrentUser().catch(() => null);
+        if (!restoredUser) {
+            socketStopped = true;
+            return;
+        }
+        if (currentUser && (
+            currentUser.id !== restoredUser.id
+            || currentUser.role !== restoredUser.role
+            || currentUser.username !== restoredUser.username
+        )) {
+            window.location.reload();
+            return;
+        }
+        currentUser = restoredUser;
+        socketStopped = false;
+        setupWebSocket();
+        fetchFiles(currentDisplayedPath || getInitialPath(), false, true);
+    }
+});
 
 function getInitialPath() {
     const params = new URLSearchParams(window.location.search);
@@ -943,7 +1099,18 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
                             }
 
                             const responseData = await res.json();
-                            this.dataset.requestId = responseData.requestId || requestId;
+                            const acceptedRequestId = typeof responseData.requestId === 'string' && responseData.requestId
+                                ? responseData.requestId
+                                : requestId;
+                            if (acceptedRequestId !== requestId
+                                && Object.prototype.hasOwnProperty.call(downloadWindows, requestId)) {
+                                downloadWindows[acceptedRequestId] = downloadWindows[requestId];
+                                delete downloadWindows[requestId];
+                                delete progressStateMap[requestId];
+                            }
+                            if (Object.prototype.hasOwnProperty.call(downloadWindows, acceptedRequestId)) {
+                                this.dataset.requestId = acceptedRequestId;
+                            }
                         } catch (err) {
                             console.error('Failed to initiate download:', err);
                             hideLoadingSpinner(this);
@@ -1081,6 +1248,11 @@ function hideLoadingSpinner(form) {
     if (downloadButton) {
         downloadButton.style.display = 'inline-block';
     }
+}
+
+function findDownloadForm(requestId) {
+    return Array.from(document.querySelectorAll('form[data-request-id]'))
+        .find((form) => form.dataset.requestId === requestId) || null;
 }
 
 function logout() {
@@ -1379,8 +1551,10 @@ function createPDFPreview(file, path) {
 
 function updateZipProgress(requestId, progress) {
     const safeProgress = Math.max(0, Math.min(100, Number(progress) || 0));
-    const forms = document.querySelectorAll('form');
-    let formFound = false;
+    const form = findDownloadForm(requestId);
+    if (!form) {
+        return;
+    }
 
     if (!progressStateMap[requestId]) {
         progressStateMap[requestId] = { lastProgress: -1, phase: 'retrieving' };
@@ -1394,51 +1568,37 @@ function updateZipProgress(requestId, progress) {
 
     state.lastProgress = safeProgress;
 
-    forms.forEach(form => {
-        const formRequestId = form.dataset.requestId;
-        if (!formRequestId) {
-            return;
-        }
+    let progressBar = form.querySelector('.zip-progress-bar');
 
-        if (formRequestId === requestId) {
-            formFound = true;
-            let progressBar = form.querySelector('.zip-progress-bar');
+    if (!progressBar) {
+        progressBar = document.createElement('progress');
+        progressBar.classList.add('zip-progress-bar');
+        progressBar.value = 0;
+        progressBar.max = 100;
+        progressBar.style.width = '100%';
+        progressBar.style.height = '20px';
+        form.appendChild(progressBar);
+    }
 
-            if (!progressBar) {
-                progressBar = document.createElement('progress');
-                progressBar.classList.add('zip-progress-bar');
-                progressBar.value = 0;
-                progressBar.max = 100;
-                progressBar.style.width = '100%';
-                progressBar.style.height = '20px';
-                form.appendChild(progressBar);
-            }
+    let progressLabel = form.querySelector('.zip-progress-label');
+    if (!progressLabel) {
+        progressLabel = document.createElement('div');
+        progressLabel.classList.add('zip-progress-label');
+        form.appendChild(progressLabel);
+    }
 
-            let progressLabel = form.querySelector('.zip-progress-label');
-            if (!progressLabel) {
-                progressLabel = document.createElement('div');
-                progressLabel.classList.add('zip-progress-label');
-                form.appendChild(progressLabel);
-            }
+    progressLabel.textContent = `${capitalize(state.phase)} ${Math.round(safeProgress)}%`;
 
-            progressLabel.textContent = `${capitalize(state.phase)} ${Math.round(safeProgress)}%`;
+    progressBar.value = safeProgress;
+    if (isGlassThemeActive()) {
+        ensureGlassProgress(progressBar);
+        updateGlassProgressValue(progressBar, safeProgress);
+    } else {
+        teardownGlassProgress(progressBar);
+    }
 
-            progressBar.value = safeProgress;
-            if (isGlassThemeActive()) {
-                ensureGlassProgress(progressBar);
-                updateGlassProgressValue(progressBar, safeProgress);
-            } else {
-                teardownGlassProgress(progressBar);
-            }
-
-            if (safeProgress >= 100 && state.phase === 'compressing') {
-                hideLoadingSpinner(form);
-            }
-        }
-    });
-
-    if (!formFound) {
-        return;
+    if (safeProgress >= 100 && state.phase === 'compressing') {
+        hideLoadingSpinner(form);
     }
 }
 
