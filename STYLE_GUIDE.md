@@ -328,9 +328,22 @@ Behavior contract:
   count and lossless history synchronization are not capped.
 - `role="log"`, connection/history/send live regions, Escape, focus restoration, a
   keyboard-accessible new-message button, and visible focus rings are required.
-- Controls marked `data-no-pointer-lighting` are excluded by `public/script.js` from
-  control-panel cursor physics. Their scoped pseudo-elements and transforms are also
-  disabled in `public/chat.css`.
+- Internal chat buttons use `data-pointer-profile="compact"` to opt into the shared
+  `public/script.js` cursor math at half-scale movement. `public/chat.css` consumes the
+  standard physics variables only in glass mode with a fine hover pointer; flat mode,
+  coarse/touch pointers, disabled controls, and reduced-motion transforms remain static.
+- Rendered `.server-chat-message` rows use `data-pointer-profile="surface"` with a
+  deliberately restrained profile: 72% lighting response, 3.5px translation, 8px
+  shadow offset, 0.65deg skew, and 1.008 maximum scale. This provides shallow cursor
+  depth without applying button-strength motion or suggesting that rows are clickable.
+  The delegated engine skips surface motion for touch/coarse pointers, reduced motion,
+  and mouse-button drags, and clears the active row whenever the message log scrolls.
+- Controls marked `data-no-pointer-lighting` remain an explicit escape hatch from the
+  control-panel cursor engine. The log scroller, diagnostics content, checkbox, and
+  composer input remain stable so selection, scrolling, and form interaction do not
+  inherit surface movement.
+- `#server-chat-new-messages` composes its required `translateX(-50%)` centering with
+  the pointer transform in glass mode; never replace that centering transform outright.
 
 Terminal visual contract:
 

@@ -80,6 +80,7 @@ body.control-panel #server-chat-toggle:hover {
     --chat-toolbar: #18241a;
     --chat-row: rgba(255, 255, 255, 0.035);
     --chat-row-panel: rgba(34, 197, 94, 0.09);
+    --chat-row-light: rgba(134, 239, 172, 0.2);
     --chat-border: rgba(134, 239, 172, 0.24);
     --chat-border-strong: rgba(134, 239, 172, 0.48);
     --chat-text: #edf7ee;
@@ -252,6 +253,11 @@ body.control-panel #server-chat-panel button:disabled {
 
 #server-chat-panel button[data-no-pointer-lighting]::before,
 #server-chat-panel button[data-no-pointer-lighting]::after {
+    display: none;
+}
+
+#server-chat-panel button[data-pointer-profile="compact"]::before,
+#server-chat-panel button[data-pointer-profile="compact"]::after {
     display: none;
 }
 
@@ -440,6 +446,17 @@ body.control-panel #server-chat-filters button[aria-pressed="true"] {
 }
 
 .server-chat-message {
+    --mx: 50%;
+    --my: 50%;
+    --pop: 0;
+    --tx: 0px;
+    --ty: 0px;
+    --sx: 0px;
+    --sy: 0px;
+    --skx: 0deg;
+    --sky: 0deg;
+    --scale: 1;
+    position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
@@ -625,6 +642,139 @@ body[data-ui-theme="glass"] #server-chat-panel {
     backdrop-filter: blur(18px) saturate(130%);
 }
 
+/*
+ * Compact chat controls use the control panel's established pointer-physics
+ * variables. Their pixel geometry and base colors stay intact; only glass mode
+ * receives cursor lighting, depth, and motion. Content rows and form fields stay
+ * stable for reading, selection, and scrolling.
+ */
+@media (hover: hover) and (pointer: fine) {
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:not(:disabled) {
+        position: relative;
+        overflow: hidden;
+        transition:
+            background-color 0.2s ease,
+            border-color 0.2s ease,
+            color 0.2s ease,
+            box-shadow 0.14s ease,
+            filter 0.14s ease,
+            transform 0.1s ease;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:not(:disabled)::before {
+        content: "";
+        position: absolute;
+        display: block;
+        inset: 1px;
+        border-radius: inherit;
+        background:
+            radial-gradient(
+                96px 68px at var(--mx) var(--my),
+                rgba(255, 255, 255, 0.58),
+                rgba(255, 255, 255, 0) 62%
+            ),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.14), transparent 72%);
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:not(:disabled)::after {
+        content: "";
+        position: absolute;
+        display: block;
+        right: 1px;
+        bottom: 1px;
+        left: 1px;
+        height: 42%;
+        border-radius: inherit;
+        background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.24));
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"].is-lit:not(:disabled),
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:hover:not(:disabled) {
+        z-index: 2;
+        box-shadow:
+            var(--sx) calc(var(--sy) + 5px) calc(10px + 6px * var(--pop)) rgba(0, 0, 0, calc(0.2 + 0.1 * var(--pop))),
+            inset 0 1px 0 rgba(255, 255, 255, calc(0.16 + 0.16 * var(--pop))),
+            inset 0 calc(-1px - 1px * var(--pop)) calc(3px + 3px * var(--pop)) rgba(0, 0, 0, calc(0.2 + 0.08 * var(--pop)));
+        filter: brightness(calc(1 + 0.045 * var(--pop))) saturate(calc(1 + 0.08 * var(--pop)));
+        transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale));
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"].is-lit:not(:disabled)::before,
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:hover:not(:disabled)::before {
+        opacity: calc(0.12 + 0.54 * var(--pop));
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"].is-lit:not(:disabled)::after,
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:hover:not(:disabled)::after {
+        opacity: calc(0.12 + 0.2 * var(--pop));
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:active:not(:disabled) {
+        transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale)) translateY(1px);
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel #server-chat-new-messages.is-lit:not(:disabled),
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel #server-chat-new-messages:hover:not(:disabled) {
+        transform: translateX(-50%) translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale));
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel #server-chat-new-messages:active:not(:disabled) {
+        transform: translateX(-50%) translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale)) translateY(1px);
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"] {
+        isolation: isolate;
+        transition:
+            box-shadow 0.12s ease-out,
+            filter 0.12s ease-out,
+            transform 0.09s ease-out;
+        transform-origin: center;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"]::before {
+        content: "";
+        position: absolute;
+        z-index: 0;
+        inset: 0;
+        border-radius: inherit;
+        background: radial-gradient(
+            150px 80px at var(--mx) var(--my),
+            var(--chat-row-light),
+            transparent 70%
+        );
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"] > * {
+        position: relative;
+        z-index: 1;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"].is-lit {
+        z-index: 1;
+        box-shadow:
+            var(--sx) calc(var(--sy) + 3px) calc(7px + 4px * var(--pop)) rgba(0, 0, 0, calc(0.12 + 0.08 * var(--pop))),
+            inset 0 1px 0 rgba(255, 255, 255, calc(0.04 + 0.08 * var(--pop)));
+        filter: brightness(calc(1 + 0.035 * var(--pop))) saturate(calc(1 + 0.045 * var(--pop)));
+        transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale));
+        will-change: transform, filter;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"].is-lit::before {
+        opacity: calc(0.04 + 0.44 * var(--pop));
+    }
+}
+
+body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:disabled::before,
+body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"]:disabled::after {
+    opacity: 0;
+}
+
 body[data-ui-theme="glass"][data-color-scheme="light"] #server-chat-shell,
 body[data-ui-theme="flat"][data-color-scheme="light"] #server-chat-shell {
     --chat-panel: #f5faf5;
@@ -632,6 +782,7 @@ body[data-ui-theme="flat"][data-color-scheme="light"] #server-chat-shell {
     --chat-toolbar: #eef7ef;
     --chat-row: rgba(20, 83, 45, 0.045);
     --chat-row-panel: rgba(22, 163, 74, 0.09);
+    --chat-row-light: rgba(21, 128, 61, 0.14);
     --chat-border: rgba(20, 83, 45, 0.18);
     --chat-border-strong: rgba(20, 83, 45, 0.38);
     --chat-text: #102817;
@@ -667,6 +818,7 @@ body[data-color-scheme="light"] #server-chat-input {
         --chat-toolbar: #eef7ef;
         --chat-row: rgba(20, 83, 45, 0.045);
         --chat-row-panel: rgba(22, 163, 74, 0.09);
+        --chat-row-light: rgba(21, 128, 61, 0.14);
         --chat-border: rgba(20, 83, 45, 0.18);
         --chat-border-strong: rgba(20, 83, 45, 0.38);
         --chat-text: #102817;
@@ -812,5 +964,23 @@ body[data-color-scheme="light"] #server-chat-input {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel button[data-pointer-profile="compact"] {
+        transform: none !important;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"] {
+        transform: none !important;
+        filter: none !important;
+        will-change: auto !important;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-messages .server-chat-message[data-pointer-profile="surface"]::before {
+        opacity: 0 !important;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #server-chat-panel #server-chat-new-messages {
+        transform: translateX(-50%) !important;
     }
 }

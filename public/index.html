@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Creative Server Control Panel</title>
     <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
-    <link rel="stylesheet" href="chat.css?v=20260828-2">
+    <link rel="stylesheet" href="chat.css?v=20260828-4">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
@@ -215,14 +215,14 @@
                 <button id="server-chat-close"
                         type="button"
                         aria-label="Close server chat"
-                        data-no-pointer-lighting>×</button>
+                        data-pointer-profile="compact">×</button>
             </header>
 
             <div class="server-chat-toolbar">
                 <div id="server-chat-history-status" role="status"></div>
                 <div id="server-chat-filters" role="group" aria-label="Visible message types">
-                    <button type="button" data-chat-filter="chat" aria-pressed="true" data-no-pointer-lighting>Chat</button>
-                    <button type="button" data-chat-filter="activity" aria-pressed="true" data-no-pointer-lighting>Activity</button>
+                    <button type="button" data-chat-filter="chat" aria-pressed="true" data-pointer-profile="compact">Chat</button>
+                    <button type="button" data-chat-filter="activity" aria-pressed="true" data-pointer-profile="compact">Activity</button>
                 </div>
                 <div id="server-chat-admin-controls" class="hidden">
                     <label class="server-chat-setting">
@@ -232,7 +232,7 @@
                     <details id="server-chat-admin-diagnostics">
                         <summary>Chat diagnostics</summary>
                         <dl id="server-chat-diagnostics-values"></dl>
-                        <button id="server-chat-diagnostics-refresh" type="button" data-no-pointer-lighting>Refresh diagnostics</button>
+                        <button id="server-chat-diagnostics-refresh" type="button" data-pointer-profile="compact">Refresh diagnostics</button>
                     </details>
                 </div>
             </div>
@@ -243,7 +243,7 @@
                      aria-live="polite"
                      aria-relevant="additions text"
                      tabindex="0"></div>
-                <button id="server-chat-new-messages" type="button" class="hidden" data-no-pointer-lighting></button>
+                <button id="server-chat-new-messages" type="button" class="hidden" data-pointer-profile="compact"></button>
             </div>
 
             <form id="server-chat-form">
@@ -252,7 +252,7 @@
                        autocomplete="off"
                        aria-describedby="server-chat-input-meter server-chat-send-status"
                        disabled>
-                <button id="server-chat-send" type="submit" disabled data-no-pointer-lighting>Send</button>
+                <button id="server-chat-send" type="submit" disabled data-pointer-profile="compact">Send</button>
                 <div id="server-chat-input-meter" aria-live="off"></div>
                 <div id="server-chat-send-status" role="status"></div>
             </form>
@@ -260,7 +260,7 @@
     </div>
 
     <script src="appearance.js?v=20260505-10"></script>
-    <script src="serverChat.js?v=20260828-1"></script>
-    <script src="script.js?v=20260828-1"></script>
+    <script src="serverChat.js?v=20260828-3"></script>
+    <script src="script.js?v=20260828-3"></script>
 </body>
 </html>

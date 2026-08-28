@@ -2609,10 +2609,14 @@ function setProgressBulge(centerPx, strength) {
 }
 
 function setupPointerLighting() {
-    const targets = [
-        ...document.querySelectorAll('button:not([data-no-pointer-lighting])'),
-        document.getElementById('progress-container')
-    ].filter(Boolean);
+    const pointerTargetSelector = [
+        'button:not([data-no-pointer-lighting])',
+        '[data-pointer-profile="surface"]',
+        '#progress-container'
+    ].join(', ');
+    const targets = [...document.querySelectorAll(pointerTargetSelector)];
+    const finePointerQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     const progressContainer = document.getElementById('progress-container');
     if (progressContainer && !progressContainer._progressLeaveHandler) {
@@ -2651,10 +2655,23 @@ function setupPointerLighting() {
 
     const updateTarget = (event) => {
         const el = document.elementFromPoint(event.clientX, event.clientY);
-        const target = el ? el.closest('button:not([data-no-pointer-lighting]), #progress-container') : null;
+        const target = el ? el.closest(pointerTargetSelector) : null;
+        const surfaceTarget = target && target.dataset.pointerProfile === 'surface';
 
         if (currentTarget && currentTarget !== target) {
             resetTarget(currentTarget);
+        }
+
+        if (surfaceTarget && (
+            document.body.dataset.uiTheme !== 'glass'
+            || !finePointerQuery.matches
+            || reducedMotionQuery.matches
+            || event.pointerType === 'touch'
+            || event.buttons !== 0
+        )) {
+            resetTarget(target);
+            currentTarget = null;
+            return;
         }
 
         if (!target) {
@@ -2675,11 +2692,16 @@ function setupPointerLighting() {
         const isProgress = target.id === 'progress-container';
         const dist = Math.min(Math.sqrt(nx * nx + ny * ny), 1);
         const lightPop = Math.max(0, 1 - dist);
-        const pop = isProgress ? lightPop * 0.55 : lightPop;
-        const translateMax = isProgress ? 0 : 14;
-        const shadowMax = isProgress ? 0 : 20;
-        const skewMax = isProgress ? 0 : 3;
-        const scaleMax = isProgress ? 1 : 1.03;
+        const pointerProfile = target.dataset.pointerProfile;
+        const compactProfile = pointerProfile === 'compact';
+        const surfaceProfile = pointerProfile === 'surface';
+        const pop = isProgress
+            ? lightPop * 0.55
+            : (surfaceProfile ? lightPop * 0.72 : lightPop);
+        const translateMax = isProgress ? 0 : (surfaceProfile ? 3.5 : (compactProfile ? 7 : 14));
+        const shadowMax = isProgress ? 0 : (surfaceProfile ? 8 : (compactProfile ? 11 : 20));
+        const skewMax = isProgress ? 0 : (surfaceProfile ? 0.65 : (compactProfile ? 1.75 : 3));
+        const scaleMax = isProgress ? 1 : (surfaceProfile ? 1.008 : (compactProfile ? 1.018 : 1.03));
         const tx = nx * translateMax * pop;
         const ty = ny * translateMax * pop;
         const sx = -nx * shadowMax * pop;
@@ -2728,9 +2750,37 @@ function setupPointerLighting() {
         }
     };
 
+    const clearSurfaceTarget = () => {
+        if (currentTarget && currentTarget.dataset.pointerProfile === 'surface') {
+            clearTarget();
+        }
+    };
+
     document.addEventListener('pointermove', updateTarget);
     document.addEventListener('pointerdown', updateTarget);
     document.addEventListener('pointerleave', clearTarget);
+    document.addEventListener('pointercancel', clearTarget);
+    document.addEventListener('ui-pointer-lighting-reset', clearTarget);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            clearTarget();
+        }
+    });
+    window.addEventListener('blur', clearTarget);
+    const messageScroller = document.getElementById('server-chat-messages');
+    if (messageScroller) {
+        messageScroller.addEventListener('scroll', clearSurfaceTarget, { passive: true });
+    }
+    if (typeof finePointerQuery.addEventListener === 'function') {
+        finePointerQuery.addEventListener('change', clearSurfaceTarget);
+        reducedMotionQuery.addEventListener('change', clearSurfaceTarget);
+    }
+
+    const themeObserver = new MutationObserver(clearTarget);
+    themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['data-ui-theme']
+    });
 }
 
 document.addEventListener('DOMContentLoaded', async function() {

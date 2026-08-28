@@ -612,6 +612,7 @@
         const row = document.createElement('article');
         row.className = `server-chat-message server-chat-message-${message.kind} server-chat-origin-${message.origin}`;
         row.dataset.messageId = String(message.id);
+        row.dataset.pointerProfile = 'surface';
 
         const date = messageDate(message);
         const time = textNode('time', 'server-chat-message-time', new Intl.DateTimeFormat(undefined, {
@@ -1873,6 +1874,7 @@
         if (!state.open) {
             return;
         }
+        document.dispatchEvent(new Event('ui-pointer-lighting-reset'));
         state.open = false;
         focusComposerPending = false;
         dom.shell.classList.add('hidden');
