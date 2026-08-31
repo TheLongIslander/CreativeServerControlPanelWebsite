@@ -1040,6 +1040,8 @@
             }
             const visual = createElement('span', 'player-center-pointer-visual player-center-list-player-visual');
             const avatar = createPlayerAvatar(player);
+            const avatarSensor = createElement('span', 'player-center-avatar-sensor');
+            avatarSensor.setAttribute('aria-hidden', 'true');
             const copy = createElement('span', 'player-center-list-player-copy');
             const nameRow = createElement('span', 'player-center-list-player-name');
             nameRow.appendChild(createElement('span', null, player.name));
@@ -1063,7 +1065,7 @@
             presence.dataset.state = player.online ? 'online' : 'offline';
             presence.setAttribute('aria-label', player.online ? 'Online' : 'Offline');
             visual.append(avatar, copy, presence);
-            button.appendChild(visual);
+            button.append(visual, avatarSensor);
             button.addEventListener('click', () => selectPlayer(player));
             listItem.appendChild(button);
             fragment.appendChild(listItem);

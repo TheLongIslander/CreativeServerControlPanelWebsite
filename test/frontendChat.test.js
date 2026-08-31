@@ -119,7 +119,7 @@ test('chat controls reuse compact glass physics while flat and reduced-motion mo
   assert.match(chatCss, /#server-chat-new-messages[\s\S]*translateX\(-50%\) translate\(var\(--tx\), var\(--ty\)\)/);
   assert.match(chatCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*transform: none !important/);
   assert.match(indexHtml, /serverChat\.js\?v=20260831-1/);
-  assert.match(indexHtml, /script\.js\?v=20260831-7&amp;pc=20260831-15/);
+  assert.match(indexHtml, /script\.js\?v=20260831-8&amp;pc=20260831-16/);
 });
 
 test('chat message rows use restrained glass surface physics without becoming controls', () => {

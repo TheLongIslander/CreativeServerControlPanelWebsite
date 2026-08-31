@@ -493,8 +493,11 @@ Behavior and visual contract:
   `All players` control use the `anchored` profile: the outer native button remains stationary and
   owns layout, pointer targeting, keyboard focus, and activation; its single
   `.player-center-pointer-visual` child is pointer-inert and receives the Glass-only light and
-  restrained motion. Forms, charts, text-selection regions, and the search input itself remain
-  stationary.
+  restrained motion. Roster thumbnails may add a second, very small Glass-only response (up to
+  `1.035` scale with sub-pixel translation/tilt and local sheen), but activation must be measured
+  by a stationary, pointer-inert sensor owned by the outer button. Never use the transformed avatar
+  itself as a hover boundary. Forms, charts, text-selection regions, and the search input itself
+  remain stationary.
 - On desktop, Player Center can coexist with Chat in the shared split layout without either
   pane covering the other. On mobile it remains mutually exclusive with Chat so there is
   exactly one `aria-modal` focus trap and one inert-background owner.

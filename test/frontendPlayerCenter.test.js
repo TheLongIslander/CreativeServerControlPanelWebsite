@@ -64,8 +64,8 @@ test('Player Center glass mode remains translucent and Search names has one purp
   const html = source('public/index.html');
   const css = source('public/playerCenter.css');
 
-  assert.match(html, /playerCenter\.css\?v=20260831-12/);
-  assert.match(html, /playerCenter\.js\?v=20260831-15/);
+  assert.match(html, /playerCenter\.css\?v=20260831-13/);
+  assert.match(html, /playerCenter\.js\?v=20260831-16/);
   assert.match(html, /class="player-center-search-shell" data-pointer-profile="input-shell"/);
   assert.match(css, /#player-center-shell\s*\{[\s\S]*?--pc-panel:\s*#14101d;/);
   assert.match(css, /body\[data-ui-theme="glass"\] #player-center-panel\s*\{[\s\S]*?--pc-panel:\s*rgba\(15, 10, 23, 0\.52\);/);
@@ -92,7 +92,7 @@ test('roster and back controls keep stable hitboxes while inner Glass layers rec
   const searchLitRule = css.match(/\.player-center-search-shell\[data-pointer-profile="input-shell"\]\.is-lit\s*\{[^}]*\}/)?.[0] || '';
   const genericButtonStateRules = Array.from(css.matchAll(/body\.control-panel(?:\[[^\]]+\])? #player-center-panel button:(?:hover|active)[^{]*\{([^}]*)\}/g), (match) => match[1]);
 
-  assert.match(js, /createButton\('', 'player-center-list-player'\)[\s\S]*?button\.dataset\.pointerProfile = 'anchored'[\s\S]*?player-center-pointer-visual player-center-list-player-visual[\s\S]*?visual\.append\(avatar, copy, presence\);[\s\S]*?button\.appendChild\(visual\)/);
+  assert.match(js, /createButton\('', 'player-center-list-player'\)[\s\S]*?button\.dataset\.pointerProfile = 'anchored'[\s\S]*?player-center-pointer-visual player-center-list-player-visual[\s\S]*?player-center-avatar-sensor[\s\S]*?visual\.append\(avatar, copy, presence\);[\s\S]*?button\.append\(visual, avatarSensor\)/);
   assert.match(js, /createButton\('', 'player-center-back-button'\)[\s\S]*?back\.dataset\.pointerProfile = 'anchored'[\s\S]*?player-center-pointer-visual player-center-back-button-visual[\s\S]*?back\.appendChild\(backVisual\)/);
   assert.doesNotMatch(js, /(?:button|back)\.dataset\.noPointerLighting/);
   assert.match(mainSource, /button:not\(\[data-no-pointer-lighting\]\)/);
@@ -124,6 +124,21 @@ test('roster and back controls keep stable hitboxes while inner Glass layers rec
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.player-center-search-shell\[data-pointer-profile="input-shell"\]::before\s*\{[\s\S]*?opacity:\s*0 !important;/);
 });
 
+test('roster thumbnails use subtle local Glass physics without becoming hover hitboxes', () => {
+  const js = source('public/playerCenter.js');
+  const mainSource = source('public/script.js');
+  const css = source('public/playerCenter.css');
+
+  assert.match(js, /const avatarSensor = createElement\('span', 'player-center-avatar-sensor'\);[\s\S]*?avatarSensor\.setAttribute\('aria-hidden', 'true'\)/);
+  assert.match(css, /\.player-center-avatar-sensor\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?width:\s*36px;[\s\S]*?height:\s*36px;[\s\S]*?pointer-events:\s*none;/);
+  assert.match(mainSource, /const resetAvatarPhysics = \(target\) =>[\s\S]*?target\.classList\.remove\('is-avatar-lit'\)[\s\S]*?--avatar-scale', '1'/);
+  assert.match(mainSource, /const updateAvatarPhysics = \(target, event\) =>[\s\S]*?querySelector\('\.player-center-avatar-sensor'\)[\s\S]*?const pop = 0\.45 \+ \(\(1 - dist\) \* 0\.55\)[\s\S]*?const scale = 1 \+ \(0\.035 \* pop\)[\s\S]*?classList\.add\('is-avatar-lit'\)/);
+  assert.match(mainSource, /target\.style\.setProperty\('--scale', scale\);[\s\S]*?updateAvatarPhysics\(target, event\)/);
+  assert.match(css, /\.player-center-list-player\.is-avatar-lit > \.player-center-list-player-visual > \.player-center-avatar\s*\{[\s\S]*?translate\(var\(--avatar-tx\), var\(--avatar-ty\)\)[\s\S]*?skew\(var\(--avatar-skx\), var\(--avatar-sky\)\)[\s\S]*?scale\(var\(--avatar-scale\)\)/);
+  assert.match(css, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.player-center-list-player > \.player-center-list-player-visual > \.player-center-avatar[\s\S]*?transform:\s*none !important;/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.player-center-list-player > \.player-center-list-player-visual > \.player-center-avatar[\s\S]*?transform:\s*none !important;/);
+});
+
 test('Player Center cards reuse restrained glass-only surface physics', () => {
   const html = source('public/index.html');
   const js = source('public/playerCenter.js');
@@ -139,7 +154,7 @@ test('Player Center cards reuse restrained glass-only surface physics', () => {
   assert.match(css, /\[data-pointer-profile="surface"\]\.is-lit[\s\S]*?translate\(var\(--tx\), var\(--ty\)\)[\s\S]*?scale\(var\(--scale\)\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pointer-profile="surface"\][\s\S]*?transform:\s*none !important;[\s\S]*?filter:\s*none !important;/);
   assert.match(css, /\.player-center-section > \.player-center-state-card\s*\{[\s\S]*?border:\s*0;/);
-  assert.match(html, /script\.js\?v=20260831-7&amp;pc=20260831-15/);
+  assert.match(html, /script\.js\?v=20260831-8&amp;pc=20260831-16/);
 });
 
 test('player list normalization supports live DTOs and world-file profile fields', () => {

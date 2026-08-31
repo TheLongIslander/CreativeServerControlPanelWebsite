@@ -2641,8 +2641,79 @@ function setupPointerLighting() {
         progressContainer._progressLeaveHandler = handler;
     }
 
+    const resetAvatarPhysics = (target) => {
+        const hasAvatarSensor = typeof target.querySelector === 'function'
+            && target.querySelector('.player-center-avatar-sensor');
+        if (!hasAvatarSensor && !target.classList.contains('is-avatar-lit')) {
+            return;
+        }
+        target.classList.remove('is-avatar-lit');
+        target.style.setProperty('--avatar-mx', '50%');
+        target.style.setProperty('--avatar-my', '35%');
+        target.style.setProperty('--avatar-pop', '0');
+        target.style.setProperty('--avatar-tx', '0px');
+        target.style.setProperty('--avatar-ty', '0px');
+        target.style.setProperty('--avatar-sx', '0px');
+        target.style.setProperty('--avatar-sy', '0px');
+        target.style.setProperty('--avatar-skx', '0deg');
+        target.style.setProperty('--avatar-sky', '0deg');
+        target.style.setProperty('--avatar-scale', '1');
+    };
+
+    const updateAvatarPhysics = (target, event) => {
+        const sensor = typeof target.querySelector === 'function'
+            ? target.querySelector('.player-center-avatar-sensor')
+            : null;
+        if (!sensor) {
+            return;
+        }
+
+        // The sensor never moves or receives pointer events. The visible avatar may transform,
+        // but its hover boundary cannot chase the cursor and oscillate in Safari.
+        const rect = sensor.getBoundingClientRect();
+        const within = rect.width > 0
+            && rect.height > 0
+            && event.clientX >= rect.left
+            && event.clientX <= rect.right
+            && event.clientY >= rect.top
+            && event.clientY <= rect.bottom;
+        if (!within) {
+            if (target.classList.contains('is-avatar-lit')) {
+                resetAvatarPhysics(target);
+            }
+            return;
+        }
+
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const nx = (x - rect.width / 2) / (rect.width / 2);
+        const ny = (y - rect.height / 2) / (rect.height / 2);
+        const dist = Math.min(Math.sqrt(nx * nx + ny * ny), 1);
+        const pop = 0.45 + ((1 - dist) * 0.55);
+        const tx = nx * 0.65 * pop;
+        const ty = ny * 0.65 * pop;
+        const sx = -nx * 1.8 * pop;
+        const sy = -ny * 1.8 * pop;
+        const skx = ny * 0.45 * pop;
+        const sky = -nx * 0.45 * pop;
+        const scale = 1 + (0.035 * pop);
+
+        target.style.setProperty('--avatar-mx', `${x.toFixed(2)}px`);
+        target.style.setProperty('--avatar-my', `${y.toFixed(2)}px`);
+        target.style.setProperty('--avatar-pop', pop.toFixed(3));
+        target.style.setProperty('--avatar-tx', `${tx.toFixed(2)}px`);
+        target.style.setProperty('--avatar-ty', `${ty.toFixed(2)}px`);
+        target.style.setProperty('--avatar-sx', `${sx.toFixed(2)}px`);
+        target.style.setProperty('--avatar-sy', `${sy.toFixed(2)}px`);
+        target.style.setProperty('--avatar-skx', `${skx.toFixed(2)}deg`);
+        target.style.setProperty('--avatar-sky', `${sky.toFixed(2)}deg`);
+        target.style.setProperty('--avatar-scale', scale.toFixed(3));
+        target.classList.add('is-avatar-lit');
+    };
+
     const resetTarget = (target) => {
         target.classList.remove('is-lit');
+        resetAvatarPhysics(target);
         const isProgress = target.id === 'progress-container';
         target.style.setProperty('--mx', '50%');
         target.style.setProperty('--my', isProgress ? '50%' : '20%');
@@ -2751,6 +2822,7 @@ function setupPointerLighting() {
         target.style.setProperty('--skx', `${skx}deg`);
         target.style.setProperty('--sky', `${sky}deg`);
         target.style.setProperty('--scale', scale);
+        updateAvatarPhysics(target, event);
 
         if (isProgress) {
             const bar = document.getElementById('progress-bar');

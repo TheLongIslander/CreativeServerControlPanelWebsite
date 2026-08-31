@@ -582,6 +582,7 @@ body[data-ui-theme="glass"] #player-center-panel #player-center-search {
 }
 
 body.control-panel #player-center-panel .player-center-list-player {
+    position: relative;
     width: 100%;
     min-height: 54px;
     display: flex;
@@ -592,6 +593,16 @@ body.control-panel #player-center-panel .player-center-list-player {
     background: transparent;
     text-align: left;
     overflow: visible;
+}
+
+.player-center-avatar-sensor {
+    position: absolute;
+    top: 50%;
+    left: 8px;
+    width: 36px;
+    height: 36px;
+    transform: translateY(-50%);
+    pointer-events: none;
 }
 
 .player-center-list-player-visual {
@@ -1684,6 +1695,48 @@ body.control-panel #player-center-panel .player-center-trend-latest-button[hidde
         transform: translate(var(--tx), var(--ty)) skew(var(--skx), var(--sky)) scale(var(--scale)) translateY(1px);
     }
 
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player > .player-center-list-player-visual > .player-center-avatar {
+        transform: none;
+        transform-origin: center;
+        transition:
+            border-color 0.14s ease-out,
+            box-shadow 0.14s ease-out,
+            transform 0.11s cubic-bezier(0.2, 0.75, 0.25, 1);
+    }
+
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player > .player-center-list-player-visual > .player-center-avatar::after {
+        content: "";
+        position: absolute;
+        z-index: 2;
+        inset: 0;
+        border-radius: inherit;
+        background: radial-gradient(
+            28px 24px at var(--avatar-mx) var(--avatar-my),
+            rgba(255, 255, 255, 0.48),
+            transparent 72%
+        );
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.12s ease-out;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player.is-avatar-lit > .player-center-list-player-visual > .player-center-avatar {
+        border-color: rgba(196, 181, 253, calc(0.44 + 0.28 * var(--avatar-pop)));
+        box-shadow:
+            var(--avatar-sx) calc(var(--avatar-sy) + 1px) calc(4px + 3px * var(--avatar-pop)) rgba(0, 0, 0, calc(0.18 + 0.08 * var(--avatar-pop))),
+            0 0 calc(2px + 3px * var(--avatar-pop)) rgba(139, 92, 246, calc(0.08 + 0.1 * var(--avatar-pop))),
+            inset 0 1px 0 rgba(255, 255, 255, calc(0.14 + 0.12 * var(--avatar-pop)));
+        transform:
+            translate(var(--avatar-tx), var(--avatar-ty))
+            skew(var(--avatar-skx), var(--avatar-sky))
+            scale(var(--avatar-scale));
+        will-change: transform;
+    }
+
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player.is-avatar-lit > .player-center-list-player-visual > .player-center-avatar::after {
+        opacity: calc(0.05 + 0.24 * var(--avatar-pop));
+    }
+
     body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="compact"]:not(:disabled) {
         position: relative;
         overflow: hidden;
@@ -2201,13 +2254,15 @@ body[data-color-scheme="light"] .player-center-badge[data-state="linked"] {
     body.control-panel[data-ui-theme="glass"] #player-center-panel [data-pointer-profile="surface"],
     body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-search-shell[data-pointer-profile="input-shell"],
     body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-search-shell[data-pointer-profile="input-shell"] > span,
-    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual {
+    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual,
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player > .player-center-list-player-visual > .player-center-avatar {
         transform: none !important;
         filter: none !important;
     }
 
     body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual::before,
-    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual::after {
+    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual::after,
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player > .player-center-list-player-visual > .player-center-avatar::after {
         opacity: 0 !important;
     }
 }
@@ -2228,7 +2283,8 @@ body[data-color-scheme="light"] .player-center-badge[data-state="linked"] {
     body.control-panel[data-ui-theme="glass"] #player-center-panel [data-pointer-profile="surface"],
     body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-search-shell[data-pointer-profile="input-shell"],
     body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-search-shell[data-pointer-profile="input-shell"] > span,
-    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual {
+    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual,
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player > .player-center-list-player-visual > .player-center-avatar {
         transform: none !important;
         filter: none !important;
         box-shadow: none !important;
@@ -2244,7 +2300,8 @@ body[data-color-scheme="light"] .player-center-badge[data-state="linked"] {
     }
 
     body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual::before,
-    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual::after {
+    body.control-panel[data-ui-theme="glass"] #player-center-panel button[data-pointer-profile="anchored"] > .player-center-pointer-visual::after,
+    body.control-panel[data-ui-theme="glass"] #player-center-panel .player-center-list-player > .player-center-list-player-visual > .player-center-avatar::after {
         opacity: 0 !important;
     }
 }
