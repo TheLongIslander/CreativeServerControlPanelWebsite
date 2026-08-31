@@ -9,41 +9,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
-    <header>
-        <input type="text" id="path-input" placeholder="Enter path here..." value="/">
-        <button id="go-button" onclick="changeDirectory()">Go</button>
-        <button id="create-directory-button">Create Directory</button>
-        <button id="up-directory-button" onclick="upDirectory()">Up Directory</button>
-        <button id="control-panel" onclick="location.href='index.html'">Control Panel</button>
-        <div class="account-container">
-            <button id="account-button">Account</button>
-            <div id="account-dropdown" class="account-dropdown hidden">
-                <button id="manage-account-button">Manage Account</button>
-                <button id="admin-management-button" class="hidden">Admin Management</button>
-                <button id="appearance-button">Appearance</button>
-                <div id="appearance-panel" class="appearance-panel hidden">
-                    <div class="appearance-row">
-                        <span>Classic</span>
-                        <label class="switch">
-                            <input type="checkbox" id="appearance-classic-toggle">
-                            <span class="slider"></span>
+    <header class="sftp-toolbar">
+        <div class="path-navigation">
+            <div class="path-input-shell">
+                <input type="text" id="path-input" aria-label="Directory path" placeholder="Enter path here..." value="/" autocomplete="off" spellcheck="false">
+            </div>
+            <button id="go-button" onclick="changeDirectory()">Go</button>
+        </div>
+        <div class="toolbar-actions">
+            <button id="create-directory-button">Create Directory</button>
+            <button id="up-directory-button" onclick="upDirectory()">Up Directory</button>
+            <button id="control-panel" onclick="location.href='index.html'">Control Panel</button>
+            <div class="account-container">
+                <button id="account-button">Account</button>
+                <div id="account-dropdown" class="account-dropdown hidden">
+                    <button id="manage-account-button">Manage Account</button>
+                    <button id="admin-management-button" class="hidden">Admin Management</button>
+                    <button id="appearance-button">Appearance</button>
+                    <div id="appearance-panel" class="appearance-panel hidden">
+                        <div class="appearance-row">
+                            <span>Classic</span>
+                            <label class="switch">
+                                <input type="checkbox" id="appearance-classic-toggle">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="appearance-label">Color Mode</div>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-color" value="system">
+                            System
+                        </label>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-color" value="light">
+                            Light
+                        </label>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-color" value="dark">
+                            Dark
                         </label>
                     </div>
-                    <div class="appearance-label">Color Mode</div>
-                    <label class="appearance-option">
-                        <input type="radio" name="appearance-color" value="system">
-                        System
-                    </label>
-                    <label class="appearance-option">
-                        <input type="radio" name="appearance-color" value="light">
-                        Light
-                    </label>
-                    <label class="appearance-option">
-                        <input type="radio" name="appearance-color" value="dark">
-                        Dark
-                    </label>
+                    <button id="logout-button">Logout</button>
                 </div>
-                <button id="logout-button">Logout</button>
             </div>
         </div>
     </header>

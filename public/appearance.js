@@ -328,7 +328,7 @@
 
         const updateTarget = (event) => {
             const el = document.elementFromPoint(event.clientX, event.clientY);
-            const target = el ? el.closest('button') : null;
+            const target = el ? el.closest('button, .path-input-shell') : null;
 
             if (currentTarget && currentTarget !== target) {
                 resetTarget(currentTarget);
@@ -385,6 +385,12 @@
 
         document.addEventListener('pointermove', updateTarget);
         document.addEventListener('pointerdown', updateTarget);
+        document.addEventListener('pointerup', (event) => {
+            if (event.pointerType !== 'mouse') {
+                clearTarget();
+            }
+        });
+        document.addEventListener('pointercancel', clearTarget);
         document.addEventListener('pointerleave', clearTarget);
 
         lightingInitialized = true;
