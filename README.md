@@ -13,6 +13,8 @@ This service is a self-hosted web control plane for:
 - Multi-user authentication with admin-managed accounts.
 - Optional passkey (WebAuthn) login and passkey lifecycle management.
 - Authenticated Minecraft chat and player-activity history, including safe panel-to-game messages.
+- A Player Center with live presence, UUID profiles, backup-derived playtime trends,
+  selected statistics/advancements, verified panel-account linking, and owned whitelist grants.
 
 The system is implemented as a single Node.js process with Express HTTP routes, a WebSocket server, SQLite persistence, and worker threads for heavy I/O/CPU operations.
 
@@ -53,6 +55,8 @@ One Node.js process (`app.js`) hosts:
 4. An authoritative Screen/log runtime reconciler.
 5. A byte-oriented Minecraft log tailer and dedicated chat SQLite store.
 6. In-memory coordination state in `backend/state.js`.
+7. An independently degradable Player Center store, world/backup collectors, live roster,
+   and optional native Minecraft Management Protocol client.
 
 ### External dependencies
 
@@ -82,6 +86,21 @@ Chat-specific ownership:
 - `backend/services/realtimeHub.js`: authenticated/public WebSocket scoping and liveness.
 - `public/serverChat.js` and `public/chat.css`: desktop/mobile chat surface.
 
+Player Center ownership:
+
+- `backend/config/serverRegistry.js`: exact single-server context and path/secret boundary.
+- `backend/db/playerStore.js`: `players.db` identities, snapshots, events, links, and access grants.
+- `backend/services/playerPresenceService.js`: authoritative Management Protocol roster with a
+  privacy-bounded `latest.log` fallback.
+- `backend/services/playerFileCollector.js`: safe stats, advancements, scoreboard, identity ingestion,
+  and evidence-based activity timestamps. Modern live playerdata remains filename/`lstat`-only. For
+  legacy Bukkit worlds and retained backups, a bounded selective NBT reader extracts only
+  `firstPlayed`, `lastPlayed`, and `lastKnownName` while structurally skipping every other payload.
+- `backend/services/playerBackupTrendService.js`: daily-sampled backup backfill and cumulative deltas.
+- `backend/services/playerLinkService.js` and `playerAccessService.js`: reverse private challenges and
+  typed allowlist reconciliation.
+- `public/playerCenter.js` and `public/playerCenter.css`: lower-right purple Player Tracking surface.
+
 ## 4. Startup and Shutdown Lifecycle
 
 ### Startup sequence
@@ -91,24 +110,37 @@ Chat-specific ownership:
 3. Initialize users DB schema (`initUsersDb`).
 4. Ensure bootstrap `admin` account (`ensureAdminUser`).
 5. Initialize update DB/schema and recover update lock/run state (`updateService.initialize`).
-6. Start the HTTP listener on `PORT` (default `8087`) and attach explicit WebSocket upgrade handling.
-7. Start authoritative Minecraft runtime reconciliation.
-8. Initialize chat storage/settings, reconcile the current session, and begin bounded backfill/tailing. Chat failure degrades only chat and does not abort core startup.
-9. Start periodic update status refresh.
-10. Trigger background video thumbnail pre-cache crawl from SFTP root (`/`).
+6. Initialize the current Player Center store, observations, roster, and timers before accepting HTTP
+   requests. Historical backup/log ingestion is deferred to the background; Player Center failure is
+   contained to that subsystem.
+7. Start the HTTP listener on `PORT` (default `8087`) and attach explicit WebSocket upgrade handling.
+8. Start authoritative Minecraft runtime reconciliation.
+9. Initialize chat storage/settings, reconcile the current session, and begin bounded backfill/tailing. Chat failure degrades only chat and does not abort core startup.
+10. Start periodic update status refresh.
+11. Trigger background video thumbnail pre-cache crawl from SFTP root (`/`).
 
 ### Graceful shutdown
 
 Triggers: typing `stop` in server STDIN (TTY only), `SIGINT`, `SIGTERM`, or the programmatic server handle's `close()` method.
 
 Steps:
-1. Set `maintenanceMode = true` (in-memory).
+1. Set `maintenanceMode = true` and the sticky `shutdownInProgress = true` guard (in-memory).
 2. Broadcast maintenance to public and authenticated WebSocket clients.
 3. Stop accepting new HTTP connections and begin draining active requests.
 4. Close WebSocket clients and the WebSocket server with a bounded grace period.
-5. Await the bounded HTTP drain, then stop update/runtime/tailer/retry timers and preview/download workers.
-6. Checkpoint and close `chat.db` and the existing SQLite handles.
-7. Exit on terminal/signal shutdown; programmatic close does not terminate the Node process.
+5. Await the bounded HTTP drain, then ask the existing lifecycle service to stop Minecraft exactly
+   once and wait for Screen to disappear. This has a 65-second outer bound; failure is reported but
+   does not prevent the remaining panel cleanup.
+6. Stop update/runtime/tailer/retry timers and preview/download workers. In-flight backup and update
+   paths observe the sticky shutdown guard and cannot restart Minecraft.
+7. Checkpoint and close `chat.db` and the existing SQLite handles.
+8. Cancel Player Center history work, stop roster/access timers and Management Protocol reconnects,
+   checkpoint, and close `players.db` before closing `users.db`.
+9. Exit on terminal/signal shutdown; programmatic close does not terminate the Node process.
+
+Startup-failure cleanup intentionally does not stop an independently running Minecraft server.
+`SIGKILL` and host power loss cannot execute application cleanup; use `stop`, `SIGINT`, or `SIGTERM`
+when a Minecraft shutdown is required.
 
 ## 5. Configuration Contract
 
@@ -138,6 +170,15 @@ cp .env.example .env
 | `CHAT_DB_PATH` | No | `./chat.db` | Dedicated chat SQLite database path. |
 | `CHAT_SCREEN_MAX_COMMAND_BYTES` | No | `512` | Maximum UTF-8 bytes accepted for the complete Screen payload, including the trailing carriage return. Smoke-test before production use. |
 | `CHAT_RETENTION_DAYS` | No | `0` | Ended-session retention; `0` retains history indefinitely and a positive value prunes old ended sessions while preserving current/latest. |
+| `PLAYER_DB_PATH` | No | `./players.db` | Dedicated Player Center SQLite database. |
+| `PLAYER_FILE_COLLECTION_INTERVAL_MS` | No | `86400000` | Current cumulative world-file snapshot cadence; minimum 10 seconds, with daily strongly recommended because each snapshot is high-cardinality. |
+| `PLAYER_HISTORY_BACKFILL_ENABLED` | No | `true` | Enables background backup/log reconstruction. Backup snapshots are sampled to the latest per day by default. |
+| `PLAYER_ROSTER_POLL_MS` | No | `1500` | Best-effort log roster poll cadence; native Management Protocol notifications remain event-driven. |
+| `PLAYER_ACCESS_RECONCILE_INTERVAL_MS` | No | `60000` | Durable allowlist grant reconciliation cadence. |
+| `PLAYER_LINK_HMAC_SECRET` | No | Domain-separated key derived from `JWT_SECRET` | Optional stable key material for hashing one-time link codes. Codes themselves are never stored. |
+| `MINECRAFT_MANAGEMENT_URL` | No | Derived from `server.properties` | Optional exact `ws://` or `wss://` native Management Protocol endpoint. Credentials in URLs are rejected. |
+| `MINECRAFT_MANAGEMENT_ALLOW_REMOTE` | No | `false` | Allows a non-loopback Management Protocol endpoint. Leave false unless a private/firewalled transport has been reviewed. |
+| `MINECRAFT_MANAGEMENT_TIMEOUT_MS` | No | `5000` | Bounded native protocol discovery/request timeout. |
 | `TRUST_PROXY` | No | Disabled | Explicit Express proxy trust (for example `loopback`, an address/CIDR list, or a hop count). Never use unrestricted `true`; this controls trusted client IP and TLS-forwarding data. |
 | `BACKUP_PATH` | Yes | None | Target root for backup output hierarchy. |
 | `PORT` | No | `8087` | HTTP listen port. |
@@ -148,6 +189,14 @@ cp .env.example .env
 | `TMP_UPLOAD_SERVER_PATH` | Yes | None | Temporary upload location for `express-fileupload`. |
 | `VIDEO_CACHE_DIR` | No | OS temp-based path | Video thumbnail cache directory override. |
 | `NODE_ENV` | No | unset | Affects WebAuthn fallback origins in non-production mode. |
+
+On Minecraft versions that expose the native Management Protocol, live tracking is enabled in
+`server.properties`, not through a browser API:
+`management-server-enabled`, `management-server-host`, `management-server-port`,
+`management-server-secret`, and `management-server-tls-enabled`. The client exposes only typed
+player/allowlist methods, keeps the bearer secret server-side, and defaults to loopback. When it is
+disabled, profiles and history remain available and current presence is labeled best effort from logs;
+linking and access mutation return an explicit unsupported state.
 
 ### Required system binaries
 
@@ -190,6 +239,7 @@ Defined in `backend/state.js`:
 - `serverState` (`offline|starting|ready|stopping`) mirrored from the process reconciler
 - `serverReady` (`boolean`) mirrored from the process reconciler
 - `backupInProgress` (`boolean`) lifecycle lock
+- `shutdownInProgress` (`boolean`) sticky guard that prevents Minecraft restart during panel teardown
 
 Notes:
 
@@ -521,6 +571,52 @@ Important stable chat errors:
 
 A `503 CHAT_UNAVAILABLE` history response intentionally omits `messages`; clients retain cached rows. Public health reasons are stable redacted codes such as `database_unavailable`, `log_unreadable`, `history_incomplete`, and `send_transport_unavailable`.
 
+### 10.14 Player Center routes
+
+All routes are scoped to the one exact configured `serverId` (`default` today), return
+`Cache-Control: no-store`, and require an authenticated onboarded account. Unknown server IDs return
+`404`; they never fall through to the default server. Mutations additionally require exact-Origin JSON.
+
+| Method | Path | Capability | Behavior |
+|---|---|---|---|
+| `GET` | `/api/servers/:serverId/players` | `players.roster.read` | Returns the UUID directory overlaid with current presence, playtime, provenance, freshness, coverage, and a roster revision that is monotonic between panel restarts. `observedAt` safely identifies a newer restart epoch. |
+| `GET` | `/api/servers/:serverId/players/:uuid` | `players.activity.read` | Returns names, selected public stats, advancements, observed sessions/activity, and honest coverage. |
+| `GET` | `/api/servers/:serverId/players/:uuid/avatar` | `players.roster.read` | Returns a cached 64 px PNG face for the verified UUID, including the skin hat layer; missing/upstream-unavailable skins fall back to initials in the browser. |
+| `GET` | `/api/servers/:serverId/players/:uuid/trends?metric=play_time` | `players.activity.read` | Returns second-based chart points plus retained raw ticks, reset boundaries, sources, and known gaps. |
+| `POST` | `/api/servers/:serverId/players/legacy-identities/resolve` | `players.link.override` | Admin-only NameMC/manual research candidate. It remains time-stamped, unverified evidence and cannot verify/link/authorize. |
+| `GET` | `/api/servers/:serverId/player-links/me` | `players.link.self` | Returns the caller's verified link or `null`. |
+| `POST` | `/api/servers/:serverId/player-links/challenges` | `players.link.self` | Selects one authoritative online UUID and privately delivers a short-lived reverse challenge in game. |
+| `POST` | `/api/servers/:serverId/player-links/challenges/:id/verify` | `players.link.self` | Consumes that exact account/server/challenge ID and code atomically. |
+| `DELETE` | `/api/servers/:serverId/player-links/me` | `players.link.self` | Revokes the caller's link; it does not alter admin, operator, filesystem, or whitelist access. |
+| `GET` | `/api/servers/:serverId/access-grants` | `players.access.manage` | Lists panel grants with observed allowlist ownership/drift. |
+| `POST` | `/api/servers/:serverId/access-grants` | `players.access.manage` | Creates an audited permanent, future, or expiring grant for a UUID/current-name pair. `Idempotency-Key` makes retries safe. |
+| `PATCH` | `/api/servers/:serverId/access-grants/:id` | `players.access.manage` | Performs exactly one extension, revoke, or explicit drift reconciliation. |
+
+Linking does not require Fabric. It uses Minecraft's native Management Protocol for an
+authoritative online UUID/name roster and the existing typed Screen transport for a private
+`tellraw <exact-player-name>` code. The browser never supplies the identity proof: it selects a UUID
+already present in the authoritative roster, then returns the code received by that player. Only an
+HMAC digest is stored, with expiry, creation throttling, attempt limits, replay rejection, and exact
+challenge-ID scoping. A delivered challenge remains committed if only its delivery receipt cannot be
+persisted; the response/UI reports that degraded receipt and never sends a second code automatically.
+
+Allowlist changes use only `minecraft:allowlist`, `minecraft:allowlist/add`, and
+`minecraft:allowlist/remove`. Existing/manual entries are imported as external and are never removed.
+The panel removes an expired/revoked entry only when it can prove panel ownership; manual removal
+becomes visible drift and requires an explicit reapply.
+Durable grant writes return `committed: true` even when the immediate Minecraft reconciliation is
+degraded; the scheduler retries them. The browser reuses one idempotency key for an ambiguous retry,
+so a lost response cannot create a duplicate grant.
+
+Minecraft names are recyclable. A current NameMC owner, current live player, or name-keyed
+scoreboard row is never merged into a UUID profile merely because the spelling matches. NameMC
+lookups remain candidates; scoreboard history is attached to a UUID trend only when that same
+snapshot contains an exact, verified UUID/name observation for exactly one known owner. Two sightings
+around a gap are never stretched into continuous ownership.
+`usercache.json`, allowlists, access grants, and authentication handshakes can enrich identity or
+access records, but none independently proves that a person played. The ordinary roster requires
+gameplay files/events, positive playtime-score evidence, or current live presence.
+
 ## 11. WebSocket Protocol
 
 The realtime hub uses `WebSocket.Server({ noServer: true, perMessageDeflate: false })` and handles only two explicit upgrade paths. Both require an exact configured Origin.
@@ -545,6 +641,8 @@ The realtime hub uses `WebSocket.Server({ noServer: true, perMessageDeflate: fal
 | Authenticated | `minecraft-chat-message` | Complete GET-equivalent committed message DTO. |
 | Authenticated | `minecraft-chat-session-reset` | New current session plus epoch/revision, runtime, setting, and health state. |
 | Authenticated | `minecraft-chat-session-status` | Current epoch/revision, capability, health, runtime, session, and baseline fields. |
+| Authenticated | `player-roster-snapshot` | `{ serverId, observedAt, revision, roster: { source, quality, observedAt }, players }`. |
+| Authenticated | `player-center-invalidation` | A reason/revision notification telling clients to refetch durable player/profile/access state. |
 
 An authenticated connection receives the current `minecraft-chat-session-status` snapshot before ordinary events. Events racing that snapshot are held in a bounded initialization FIFO; stale status revisions are discarded and newer events drain in order. Overflow closes with code `1013`, after which the client uses paged `afterId` history catch-up. Chat messages are broadcast only after the corresponding `sent` database transition commits.
 
@@ -560,6 +658,7 @@ Backup and download retain their existing shared `progress` type with different 
 - `sftp_activity_log.db`
 - `updates.db`
 - `chat.db` (or `CHAT_DB_PATH`)
+- `players.db` (or `PLAYER_DB_PATH`)
 
 ### 12.1 `users.db` tables
 
@@ -702,6 +801,31 @@ Only `sent` rows are returned to readers. A stale `pending` panel message become
 
 Do not back up a live `chat.db` as an ordinary single-file copy while WAL is active. Use SQLite's backup mechanism or checkpoint and copy the database consistently with its WAL/SHM files. Graceful shutdown performs a truncate checkpoint before closing.
 
+### 12.7 `players.db`
+
+The Player Store is server-scoped, serialized, restart-safe, WAL-backed, `synchronous=FULL`, and
+created with owner-only file permissions. Its forward-only schema separates:
+
+- UUID profiles and bounded verified name history;
+- lower-confidence/name-only/external identity observations;
+- deduplicated live/backup snapshots with sparse changed statistics/advancements, retained playtime
+  observations, and scoreboard values;
+- privacy-bounded player events and current observed presence;
+- HMAC-only link challenges and unique active panel-player links;
+- durable permanent/temporary access grants and observed allowlist ownership; and
+- durable backup/log fingerprints plus collector cursors/status.
+
+Inventories, coordinates, health, IP addresses, private messages, authentication tokens, and raw
+logs are not ingested. Modern player `.dat` files contribute only safe UUID filename/`lstat`
+metadata. A legacy Bukkit/backups-only reader may open bounded `.dat`/`.dat_old` files, but it
+constructs and persists only `bukkit.firstPlayed`, `bukkit.lastPlayed`, and
+`bukkit.lastKnownName`; all other NBT payloads are structurally skipped and never materialized.
+Current cumulative snapshots default to daily. Historical world backups default to the
+latest snapshot per backup date folder; both legacy `date/world` and newer `date/hour/world` layouts
+are supported. Explicit maintenance tooling can request all snapshots, but the web API cannot control
+filesystem sampling. Unchanged backup/log inputs are skipped across restarts; changed versions are
+reprocessed.
+
 ## 13. Background Workers and Heavy Pipelines
 
 ### `backend/workers/downloadWorker.js`
@@ -746,6 +870,7 @@ Responsibilities:
 - `public/login.js`: password and passkey login flows.
 - `public/script.js`: control panel actions + backup progress UI + Server Info modal/gallery + update status polling/preflight/apply UX + WS handling.
 - `public/serverChat.js`: chat history/reconnect/send state, epoch/revision reconciliation, unread/filter preferences, rendering, modal focus, and admin diagnostics/settings.
+- `public/playerCenter.js`: live roster revisions, profile/trend rendering, link challenges, admin access grants, and unverified legacy candidate review.
 - `public/sftp.js`: browse/upload/download/preview UX + WS download tracking.
 - `public/account.js`: password change and passkey CRUD.
 - `public/admin.js`: admin user lifecycle UI + update history table + update summary modal.
@@ -795,11 +920,38 @@ Responsibilities:
 - Admins can persistently disable panel sending and request redacted diagnostics. Non-admins never receive admin diagnostic payloads.
 - Escape/toggle/X close the surface; desktop is non-modal, mobile uses `aria-modal`, background inertness, focus restoration, 44 px targets, and reduced-motion behavior.
 
+### Player Center UX contract
+
+- A purple `Player Tracking` launcher is fixed in the lower-right safe area, opposite the existing
+  lower-left chat/update stack, and uses the control panel's pointer lighting variables.
+- Desktop opens a large anchored panel; mobile uses the full viewport with safe-area padding, inert
+  background, focus trap, Escape close, and focus restoration.
+- Roster authority/freshness is stated in text as well as color. Cached profiles remain useful while
+  live presence is stale, offline, best effort, or unavailable.
+- Profiles show observed playtime, current session, first/last evidence, selected stats,
+  advancements, backup-derived deltas, and observed sessions. Missing or pre-coverage history is not
+  rendered as zero or “lifetime.”
+- “Last seen” comes only from gameplay activity. File modification times are visibly labeled as
+  estimates because transfers, copies, and restores can reset them; cache/import time is never shown
+  as player activity.
+- Legacy Bukkit `firstPlayed`/`lastPlayed` values are direct server-embedded evidence. They may repair
+  an advancement history reset, but never override a newer exact join/leave event. Embedded
+  `lastKnownName` creates bounded verified name history for that UUID; it does not make an old name
+  the current name when newer server-authenticated evidence exists.
+- Current-name projection prefers the server profile cache/authentication history over a stale
+  whitelist label. Both names remain searchable verified history when their UUID evidence agrees.
+- All remote values are inserted through `textContent` and safe element attributes. NameMC opens in a
+  new `noopener,noreferrer` tab and recorded results remain visibly unverified, time-stamped candidates;
+  the UI warns that names may have been reassigned.
+- Admin Access and ordinary self-linking are separate capability-gated views. Linking never grants
+  panel administration or Minecraft operator status.
+
 ### Theme system
 
 - Base glass theme: `public/style.css`
 - Flat theme override: `public/style.flat.css`
 - Shared late-loaded chat component layer: `public/chat.css`
+- Shared late-loaded Player Center layer: `public/playerCenter.css`
 - Page-specific layers: `styleSFTP.css`, `styleAdmin.css`, `styleLogin.css`, `styleMaintenance.css`
 - User settings are persisted via `/appearance` and reflected as `data-ui-theme` on `<body>` (`glass` or `flat`) and `data-color-scheme` on `<body>` (`system`, `light`, `dark`).
 
@@ -821,6 +973,16 @@ Detailed UI contract is documented in `STYLE_GUIDE.md`.
 - Chat storage failure starts one jittered recovery loop (5 seconds, doubling to 5 minutes). Log/tailer failure keeps stored reads available and retries independently. Screen failure disables only sending and never automatically resends uncertain messages.
 - The admin sending switch is durable and fail-closed. A priority admission barrier prevents queued/new sends from passing an accepted disable request; one send already holding the mutex may finish before the disable commit.
 - Chat health payloads contain stable reason codes and aggregate counters only. Raw log lines, filesystem paths, exception text, usernames, message bodies, credentials, and IPs are not exposed.
+- Player world files are collected daily with stable bounded reads. Unchanged current snapshots and
+  durable unchanged backup/log fingerprints are skipped; dated backups are sampled daily, processed
+  with event-loop yields, and imported in the background so live roster delivery is not blocked by
+  historical reconstruction.
+- Cache-only identities, allowlist-only entries, access subjects, and rejected authentication
+  handshakes remain outside the main player count. Same-spelling legacy scoreboard evidence may be
+  suppressed from the main list without transferring its data to a UUID; ambiguity stays visible in
+  identity-review metadata.
+- Native Management Protocol failure degrades live authority/link/access independently. The exact-log
+  roster remains best effort, while stored profiles and trends remain readable.
 
 ## 16. Security Characteristics
 
@@ -839,6 +1001,9 @@ Implemented safeguards:
 - Fixed-component `tellraw` construction through `JSON.stringify`, a 256-code-point limit, final UTF-8 payload cap, control/bidi rejection, leading-command rejection, and argv-only Screen execution.
 - Chat idempotency UUIDs and explicit `pending`, `sent`, `failed`, and `unknown` delivery states prevent unsafe automatic replay.
 - Chat and admin-health responses are `no-store`; message rendering uses `textContent`.
+- Player Center uses exact server scoping, role capabilities, 8 KiB mutation bodies, strict field
+  allowlists, UUID/name validation, same-origin mutation checks, typed native protocol methods, audit
+  metadata without codes/secrets, HMAC-only link challenges, and panel-owned allowlist removal.
 
 Important design properties to be aware of:
 
@@ -862,6 +1027,19 @@ Important design properties to be aware of:
 - Screen exit zero means Screen accepted the bytes; it does not prove Minecraft parsed the command or every player rendered it. RCON or a server-side bridge is required for stronger acknowledgement.
 - Minecraft's default log prefix contains time of day but no date. Archive names, file metadata, session state, and midnight rollover are used to infer historical dates; ambiguous rows are marked with lower timestamp confidence.
 - The log parser intentionally omits unknown/modded formats. Strict false negatives are preferred over exposing console or plugin output.
+- Without the native Minecraft Management Protocol, live presence is a labeled best-effort log
+  projection and private account linking/access mutation are intentionally unsupported. Enabling the
+  protocol requires an explicit server configuration change and restart.
+- Backup-derived trend lines represent observations and deltas between them. Missing intervals stay
+  visible as gaps; the panel does not claim to know when activity occurred inside a gap.
+- A name-keyed scoreboard row remains a legacy identity unless its own snapshot has an exact verified
+  UUID/name co-observation for one known owner. Reacquisition gaps, recycled names, truncated identity
+  history, and ambiguous owners all fail closed instead of being assigned automatically.
+- Filesystem modification time is estimated activity evidence, not proof of a login time. In
+  particular, a server transfer may give many older files the same timestamp; embedded advancement
+  and region timestamps can establish older world history without changing that limitation. Legacy
+  Bukkit `firstPlayed`/`lastPlayed` metadata is preferred for the exact historical boundary it
+  records, while later file mtimes remain visibly estimated.
 - Unread/filter preferences are local to one browser profile. They are isolated by panel user and session but are not synchronized across devices.
 - v1 exposes only the current/latest chat session even though older ended sessions may remain in `chat.db`.
 

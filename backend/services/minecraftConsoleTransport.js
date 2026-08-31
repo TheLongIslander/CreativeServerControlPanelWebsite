@@ -9,6 +9,7 @@ const FORMAT_VERSION = 'tellraw-v1';
 const DEFAULT_MAX_COMMAND_BYTES = 512;
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 const FORBIDDEN_CONTROLS = /[\u0000-\u001f\u007f-\u009f]/u;
+const MINECRAFT_PLAYER_NAME = /^[A-Za-z0-9_]{1,16}$/;
 
 class ConsoleTransportError extends Error {
   constructor(code, message, { acceptanceUncertain = false, cause = null } = {}) {
@@ -60,6 +61,38 @@ function buildTellrawCommand(panelUsername, message) {
     command,
     payload,
     payloadBytes: Buffer.byteLength(payload, 'utf8')
+  };
+}
+
+function buildPrivateTellrawCommand(playerName, message, {
+  heading = 'Panel Verification'
+} = {}) {
+  const target = String(playerName || '');
+  if (!MINECRAFT_PLAYER_NAME.test(target)) {
+    throw new TypeError('playerName must be an exact Minecraft player name');
+  }
+  const normalized = normalizeChatText(message);
+  const validation = validateNormalizedMessage(normalized);
+  if (!validation.valid) throw new TypeError(validation.reason);
+  const safeHeading = normalizeChatText(heading);
+  if (FORBIDDEN_CONTROLS.test(safeHeading) || BIDI_CONTROLS.test(safeHeading)
+    || countCodePoints(safeHeading) > 64) {
+    throw new TypeError('heading contains unsupported text');
+  }
+  const component = [
+    { text: `[${safeHeading}] `, color: 'light_purple', bold: true },
+    { text: normalized, color: 'white' }
+  ];
+  const command = `tellraw ${target} ${JSON.stringify(component)}`;
+  const payload = `${command}${String.fromCharCode(13)}`;
+  return {
+    formatVersion: FORMAT_VERSION,
+    normalized,
+    component,
+    command,
+    payload,
+    payloadBytes: Buffer.byteLength(payload, 'utf8'),
+    target
   };
 }
 
@@ -133,10 +166,12 @@ function createScreenConsoleTransport({
 
 module.exports = {
   BIDI_CONTROLS,
+  buildPrivateTellrawCommand,
   ConsoleTransportError,
   DEFAULT_MAX_COMMAND_BYTES,
   FORBIDDEN_CONTROLS,
   FORMAT_VERSION,
+  MINECRAFT_PLAYER_NAME,
   buildTellrawCommand,
   countCodePoints,
   createScreenConsoleTransport,

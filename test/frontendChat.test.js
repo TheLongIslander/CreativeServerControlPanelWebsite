@@ -118,8 +118,8 @@ test('chat controls reuse compact glass physics while flat and reduced-motion mo
   assert.match(chatCss, /body\.control-panel\[data-ui-theme="glass"\][\s\S]*button\[data-pointer-profile="compact"\]/);
   assert.match(chatCss, /#server-chat-new-messages[\s\S]*translateX\(-50%\) translate\(var\(--tx\), var\(--ty\)\)/);
   assert.match(chatCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*transform: none !important/);
-  assert.match(indexHtml, /serverChat\.js\?v=20260828-3/);
-  assert.match(indexHtml, /script\.js\?v=20260828-3/);
+  assert.match(indexHtml, /serverChat\.js\?v=20260831-1/);
+  assert.match(indexHtml, /script\.js\?v=20260831-7&amp;pc=20260831-15/);
 });
 
 test('chat message rows use restrained glass surface physics without becoming controls', () => {
@@ -134,7 +134,7 @@ test('chat message rows use restrained glass surface physics without becoming co
   assert.match(mainSource, /surfaceProfile \? 1\.008/);
   assert.match(mainSource, /event\.pointerType === 'touch'/);
   assert.match(mainSource, /event\.buttons !== 0/);
-  assert.match(mainSource, /messageScroller\.addEventListener\('scroll', clearSurfaceTarget/);
+  assert.match(mainSource, /document\.getElementById\('server-chat-messages'\)[\s\S]*?scroller\.addEventListener\('scroll', clearSurfaceTarget/);
   assert.match(chatSource, /row\.dataset\.pointerProfile = 'surface'/);
   assert.match(chatCss, /\[data-ui-theme="glass"\][\s\S]*\.server-chat-message\[data-pointer-profile="surface"\]/);
   assert.match(chatCss, /radial-gradient\([\s\S]*var\(--mx\) var\(--my\)[\s\S]*var\(--chat-row-light\)/);

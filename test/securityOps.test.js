@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const express = require('express');
@@ -436,4 +437,175 @@ test('explicit bootstrap starts and programmatically closes injected services', 
   assert.equal(order.includes('process-stop'), true);
   assert.equal(order.includes('chat-shutdown'), true);
   assert.ok(order.indexOf('users-close') > order.indexOf('chat-shutdown-complete'));
+});
+
+test('intentional panel close stops Minecraft once before dependent services', async () => {
+  const order = [];
+  let releaseMinecraftStop;
+  const minecraftStopGate = new Promise(resolve => { releaseMinecraftStop = resolve; });
+  let snapshot = { state: 'ready', running: true, ready: true };
+  let stopCalls = 0;
+  const runtime = {
+    config: { port: 8087 },
+    state: { maintenanceMode: false, shutdownInProgress: false },
+    realtimeHub: {
+      attach() {},
+      broadcastMaintenance() {},
+      async close() { order.push('realtime-close'); }
+    },
+    updateService: {
+      async initialize() {},
+      startStatusRefreshTimer() {},
+      stopStatusRefreshTimer() { order.push('update-timer-stop'); }
+    },
+    processService: {
+      getSnapshot() { return snapshot; },
+      async startReconciler() {},
+      stopReconciler() { order.push('reconciler-stop'); },
+      async stop(options) {
+        stopCalls += 1;
+        order.push('minecraft-stop-start');
+        assert.deepEqual(options, { reason: 'requested_panel_shutdown', wait: true });
+        await minecraftStopGate;
+        snapshot = { state: 'offline', running: false, ready: false };
+        order.push('minecraft-stop-complete');
+        return { stopped: true, snapshot };
+      }
+    },
+    chatService: {
+      async initialize() {},
+      async shutdown() { order.push('chat-shutdown'); }
+    },
+    usersDb: {
+      async close() { order.push('users-close'); }
+    }
+  };
+  const running = await startServer({
+    app: express(),
+    runtime,
+    port: 0,
+    host: '127.0.0.1',
+    initializeUsers: false,
+    monitorStdin: false,
+    startBackgroundTasks: false
+  });
+
+  const firstClose = running.close();
+  const secondClose = running.close();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(runtime.state.shutdownInProgress, true);
+  assert.equal(stopCalls, 1);
+  assert.equal(order.includes('chat-shutdown'), false);
+  assert.equal(order.includes('reconciler-stop'), false);
+
+  releaseMinecraftStop();
+  await Promise.all([firstClose, secondClose]);
+  assert.equal(stopCalls, 1);
+  assert.ok(order.indexOf('minecraft-stop-complete') < order.indexOf('reconciler-stop'));
+  assert.ok(order.indexOf('minecraft-stop-complete') < order.indexOf('chat-shutdown'));
+  assert.ok(order.indexOf('minecraft-stop-complete') < order.indexOf('users-close'));
+});
+
+test('Minecraft stop timeout still tears down panel dependencies', async () => {
+  const order = [];
+  const runtime = {
+    config: { port: 8087 },
+    state: { maintenanceMode: false, shutdownInProgress: false },
+    realtimeHub: {
+      attach() {},
+      broadcastMaintenance() {},
+      async close() { order.push('realtime-close'); }
+    },
+    updateService: {
+      async initialize() {},
+      startStatusRefreshTimer() {},
+      stopStatusRefreshTimer() { order.push('update-timer-stop'); }
+    },
+    processService: {
+      getSnapshot() { return { state: 'ready', running: true, ready: true }; },
+      async startReconciler() {},
+      stopReconciler() { order.push('reconciler-stop'); },
+      async stop() {
+        order.push('minecraft-stop-start');
+        return new Promise(() => {});
+      }
+    },
+    chatService: {
+      async initialize() {},
+      async shutdown() { order.push('chat-shutdown'); }
+    },
+    usersDb: {
+      async close() { order.push('users-close'); }
+    }
+  };
+  const running = await startServer({
+    app: express(),
+    runtime,
+    port: 0,
+    host: '127.0.0.1',
+    initializeUsers: false,
+    monitorStdin: false,
+    startBackgroundTasks: false,
+    minecraftStopTimeoutMs: 10
+  });
+
+  await assert.rejects(running.close(), error => (
+    error instanceof AggregateError
+    && error.errors.some(item => /Minecraft shutdown exceeded 10ms/.test(item.message))
+  ));
+  assert.equal(order.includes('minecraft-stop-start'), true);
+  assert.equal(order.includes('reconciler-stop'), true);
+  assert.equal(order.includes('chat-shutdown'), true);
+  assert.equal(order.includes('users-close'), true);
+});
+
+test('startup failure cleanup leaves an independently running Minecraft server alone', async () => {
+  const occupied = http.createServer();
+  await new Promise((resolve, reject) => {
+    occupied.once('error', reject);
+    occupied.listen(0, '127.0.0.1', resolve);
+  });
+  const address = occupied.address();
+  let stopCalls = 0;
+  const runtime = {
+    config: { port: address.port },
+    state: { maintenanceMode: false, shutdownInProgress: false },
+    realtimeHub: {
+      attach() {},
+      broadcastMaintenance() {},
+      async close() {}
+    },
+    updateService: {
+      async initialize() {},
+      startStatusRefreshTimer() {},
+      stopStatusRefreshTimer() {}
+    },
+    processService: {
+      getSnapshot() { return { state: 'ready', running: true, ready: true }; },
+      async startReconciler() {},
+      stopReconciler() {},
+      async stop() { stopCalls += 1; }
+    },
+    chatService: {
+      async initialize() {},
+      async shutdown() {}
+    },
+    usersDb: { async close() {} }
+  };
+
+  try {
+    await assert.rejects(startServer({
+      app: express(),
+      runtime,
+      port: address.port,
+      host: '127.0.0.1',
+      initializeUsers: false,
+      monitorStdin: false,
+      startBackgroundTasks: false
+    }), error => error && error.code === 'EADDRINUSE');
+  } finally {
+    await new Promise(resolve => occupied.close(resolve));
+  }
+  assert.equal(stopCalls, 0);
+  assert.equal(runtime.state.shutdownInProgress, false);
 });

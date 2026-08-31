@@ -51,8 +51,12 @@ module.exports = function createMaintenanceService({
     });
   }
 
-  function shutdownGracefully(trigger, { exitProcess = true } = {}) {
+  function shutdownGracefully(trigger, {
+    exitProcess = true,
+    cascadeMinecraft = false
+  } = {}) {
     if (shutdownPromise) return shutdownPromise;
+    if (cascadeMinecraft) state.shutdownInProgress = true;
     state.maintenanceMode = true;
     logger.log(`Shutdown initiated (${trigger}).`);
     broadcastMaintenance('Server shutting down for maintenance');
@@ -84,7 +88,7 @@ module.exports = function createMaintenanceService({
 
       try {
         // No new HTTP/WS operation can reopen a database after this point.
-        await cleanup();
+        await cleanup({ trigger, cascadeMinecraft });
       } catch (err) {
         failure ||= err;
         logger.error('Background cleanup failed during shutdown:', err.message);

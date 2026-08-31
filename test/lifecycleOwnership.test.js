@@ -101,6 +101,79 @@ test('backup does not restart when a previously queued stop wins the lifecycle m
   assert.equal(state.maintenanceMode, false);
 });
 
+test('shutdown cascade suppresses a backup restart already in flight', async t => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'backup-shutdown-cascade-'));
+  const sourcePath = path.join(tempRoot, 'server');
+  const backupPath = path.join(tempRoot, 'backups');
+  await fs.promises.mkdir(sourcePath, { recursive: true });
+  await fs.promises.writeFile(path.join(sourcePath, 'level.dat'), 'test');
+
+  const previousServerPath = process.env.MINECRAFT_SERVER_PATH;
+  const previousBackupPath = process.env.BACKUP_PATH;
+  process.env.MINECRAFT_SERVER_PATH = sourcePath;
+  process.env.BACKUP_PATH = backupPath;
+  t.after(async () => {
+    if (previousServerPath === undefined) delete process.env.MINECRAFT_SERVER_PATH;
+    else process.env.MINECRAFT_SERVER_PATH = previousServerPath;
+    if (previousBackupPath === undefined) delete process.env.BACKUP_PATH;
+    else process.env.BACKUP_PATH = previousBackupPath;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  let snapshot = { state: 'ready', running: true, ready: true };
+  let startCalls = 0;
+  const processService = {
+    getSnapshot: () => snapshot,
+    async reconcile() { return snapshot; },
+    async stop() {
+      snapshot = { state: 'offline', running: false, ready: false };
+      return { stopped: true, snapshot };
+    },
+    async start() {
+      startCalls += 1;
+      return { started: true, snapshot: { state: 'starting', running: true, ready: false } };
+    }
+  };
+  let releaseBackup = null;
+  const spawnProcess = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    releaseBackup = () => child.emit('close', 0);
+    return child;
+  };
+  const state = {
+    updateLocked: false,
+    maintenanceMode: false,
+    shutdownInProgress: false,
+    backupInProgress: false,
+    lastBackupHour: null
+  };
+  const router = createBackupRoutes({
+    processService,
+    state,
+    spawnProcess,
+    logServerAction() {},
+    logger: { log() {}, warn() {}, error() {} }
+  });
+  const response = responseRecorder();
+  const backup = routeHandler(router, 'post', '/backup')({}, response);
+  while (!releaseBackup) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setImmediate(resolve));
+  }
+
+  state.shutdownInProgress = true;
+  state.maintenanceMode = true;
+  releaseBackup();
+  await backup;
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(startCalls, 0);
+  assert.equal(state.backupInProgress, false);
+  assert.equal(state.maintenanceMode, true);
+});
+
 test('update rollback does not restart when its stop did not own the running state', async t => {
   const originalStoreMethods = {
     getCheckById: updateStore.getCheckById,

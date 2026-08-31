@@ -547,6 +547,15 @@ test('startup boundaries partition appended and same-inode regrown runtimes befo
     }
     throw new Error('Timed out waiting for runtime session transition.');
   };
+  const waitForSessionMessages = async (sessionKey, expectedCount) => {
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      const page = await store.getMessages({ sessionKey });
+      if (page.messages.length >= expectedCount) return page.messages;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    throw new Error('Timed out waiting for runtime session messages.');
+  };
   const sessionB = await waitForSessionChange(sessionA.sessionKey);
   const firstReset = realtimeHub.events.findIndex(event => event.type === 'minecraft-chat-session-reset');
   const oldTailEvent = realtimeHub.events.findIndex(event => (
@@ -558,7 +567,7 @@ test('startup boundaries partition appended and same-inode regrown runtimes befo
     ['runtime A', 'A tail']
   );
   assert.deepEqual(
-    (await store.getMessages({ sessionKey: sessionB.sessionKey })).messages.map(row => row.message),
+    (await waitForSessionMessages(sessionB.sessionKey, 1)).map(row => row.message),
     ['runtime B']
   );
 
@@ -582,7 +591,7 @@ test('startup boundaries partition appended and same-inode regrown runtimes befo
     ['runtime B', 'B live']
   );
   assert.deepEqual(
-    (await store.getMessages({ sessionKey: sessionC.sessionKey })).messages.map(row => row.actorName),
+    (await waitForSessionMessages(sessionC.sessionKey, 1)).map(row => row.actorName),
     ['Sam']
   );
 

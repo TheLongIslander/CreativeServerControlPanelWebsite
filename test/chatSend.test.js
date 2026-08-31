@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   ConsoleTransportError,
+  buildPrivateTellrawCommand,
   buildTellrawCommand,
   createScreenConsoleTransport,
   normalizeChatText,
@@ -42,6 +43,14 @@ test('tellraw-v1 command builder exactly matches every shared fixture', () => {
     assert.equal(built.payloadBytes, item.screenPayloadBytes, item.name);
     assert.equal(new TextEncoder().encode(built.payload).byteLength, item.screenPayloadBytes, item.name);
   }
+});
+
+test('private tellraw builder accepts only an exact player target', () => {
+  const built = buildPrivateTellrawCommand('Steve_123', 'ABCD-EFGH-JKLM');
+  assert.match(built.command, /^tellraw Steve_123 /);
+  assert.equal(built.target, 'Steve_123');
+  assert.throws(() => buildPrivateTellrawCommand('@a', 'code'));
+  assert.throws(() => buildPrivateTellrawCommand('Steve Steve', 'code'));
 });
 
 test('message normalization and validation reject command/control/spoofing inputs', () => {

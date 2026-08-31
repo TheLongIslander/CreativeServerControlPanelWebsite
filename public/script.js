@@ -573,10 +573,15 @@ function closeServerManagementDropdown() {
 }
 
 function closeAccountDropdown() {
+    const button = document.getElementById('account-button');
     const dropdown = document.getElementById('account-dropdown');
     const appearancePanel = document.getElementById('appearance-panel');
     if (dropdown) {
         dropdown.classList.add('hidden');
+        dropdown.setAttribute('aria-hidden', 'true');
+    }
+    if (button) {
+        button.setAttribute('aria-expanded', 'false');
     }
     if (appearancePanel) {
         appearancePanel.classList.add('hidden');
@@ -2612,11 +2617,18 @@ function setupPointerLighting() {
     const pointerTargetSelector = [
         'button:not([data-no-pointer-lighting])',
         '[data-pointer-profile="surface"]',
+        '[data-pointer-profile="input-shell"]',
+        '[data-pointer-profile="anchored"]',
         '#progress-container'
     ].join(', ');
     const targets = [...document.querySelectorAll(pointerTargetSelector)];
     const finePointerQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
     const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const pointerEffectsEnabled = () => (
+        document.body.dataset.uiTheme === 'glass'
+        && finePointerQuery.matches
+        && !reducedMotionQuery.matches
+    );
 
     const progressContainer = document.getElementById('progress-container');
     if (progressContainer && !progressContainer._progressLeaveHandler) {
@@ -2656,18 +2668,19 @@ function setupPointerLighting() {
     const updateTarget = (event) => {
         const el = document.elementFromPoint(event.clientX, event.clientY);
         const target = el ? el.closest(pointerTargetSelector) : null;
-        const surfaceTarget = target && target.dataset.pointerProfile === 'surface';
+        const candidatePointerProfile = target && target.dataset.pointerProfile;
+        const surfaceTarget = candidatePointerProfile === 'surface';
+        const inputShellTarget = candidatePointerProfile === 'input-shell';
 
         if (currentTarget && currentTarget !== target) {
             resetTarget(currentTarget);
         }
 
-        if (surfaceTarget && (
-            document.body.dataset.uiTheme !== 'glass'
-            || !finePointerQuery.matches
-            || reducedMotionQuery.matches
+        if (target && (
+            !pointerEffectsEnabled()
+            || (typeof target.matches === 'function' && target.matches(':disabled'))
             || event.pointerType === 'touch'
-            || event.buttons !== 0
+            || ((surfaceTarget || inputShellTarget) && event.buttons !== 0)
         )) {
             resetTarget(target);
             currentTarget = null;
@@ -2695,13 +2708,31 @@ function setupPointerLighting() {
         const pointerProfile = target.dataset.pointerProfile;
         const compactProfile = pointerProfile === 'compact';
         const surfaceProfile = pointerProfile === 'surface';
+        const inputShellProfile = pointerProfile === 'input-shell';
+        const anchoredProfile = pointerProfile === 'anchored';
         const pop = isProgress
             ? lightPop * 0.55
-            : (surfaceProfile ? lightPop * 0.72 : lightPop);
-        const translateMax = isProgress ? 0 : (surfaceProfile ? 3.5 : (compactProfile ? 7 : 14));
-        const shadowMax = isProgress ? 0 : (surfaceProfile ? 8 : (compactProfile ? 11 : 20));
-        const skewMax = isProgress ? 0 : (surfaceProfile ? 0.65 : (compactProfile ? 1.75 : 3));
-        const scaleMax = isProgress ? 1 : (surfaceProfile ? 1.008 : (compactProfile ? 1.018 : 1.03));
+            : (inputShellProfile
+                ? lightPop * 0.55
+                : (surfaceProfile ? lightPop * 0.72 : (anchoredProfile ? lightPop * 0.78 : lightPop)));
+        const translateMax = isProgress
+            ? 0
+            : (inputShellProfile
+                ? 2
+                : (surfaceProfile ? 3.5 : (anchoredProfile ? 3.5 : (compactProfile ? 7 : 14))));
+        const shadowMax = isProgress
+            ? 0
+            : (inputShellProfile
+                ? 5
+                : (surfaceProfile ? 8 : (anchoredProfile ? 8 : (compactProfile ? 11 : 20))));
+        const skewMax = isProgress || inputShellProfile
+            ? 0
+            : (surfaceProfile ? 0.65 : (anchoredProfile ? 0.65 : (compactProfile ? 1.75 : 3)));
+        const scaleMax = isProgress
+            ? 1
+            : (inputShellProfile
+                ? 1.012
+                : (surfaceProfile ? 1.008 : (anchoredProfile ? 1.008 : (compactProfile ? 1.018 : 1.03))));
         const tx = nx * translateMax * pop;
         const ty = ny * translateMax * pop;
         const sx = -nx * shadowMax * pop;
@@ -2751,7 +2782,11 @@ function setupPointerLighting() {
     };
 
     const clearSurfaceTarget = () => {
-        if (currentTarget && currentTarget.dataset.pointerProfile === 'surface') {
+        if (currentTarget && (
+            currentTarget.dataset.pointerProfile === 'surface'
+            || currentTarget.dataset.pointerProfile === 'input-shell'
+            || currentTarget.dataset.pointerProfile === 'anchored'
+        )) {
             clearTarget();
         }
     };
@@ -2767,13 +2802,16 @@ function setupPointerLighting() {
         }
     });
     window.addEventListener('blur', clearTarget);
-    const messageScroller = document.getElementById('server-chat-messages');
-    if (messageScroller) {
-        messageScroller.addEventListener('scroll', clearSurfaceTarget, { passive: true });
-    }
+    [
+        document.getElementById('server-chat-messages'),
+        document.getElementById('player-center-content'),
+        document.getElementById('player-center-player-list')
+    ].filter(Boolean).forEach((scroller) => {
+        scroller.addEventListener('scroll', clearSurfaceTarget, { passive: true });
+    });
     if (typeof finePointerQuery.addEventListener === 'function') {
-        finePointerQuery.addEventListener('change', clearSurfaceTarget);
-        reducedMotionQuery.addEventListener('change', clearSurfaceTarget);
+        finePointerQuery.addEventListener('change', clearTarget);
+        reducedMotionQuery.addEventListener('change', clearTarget);
     }
 
     const themeObserver = new MutationObserver(clearTarget);
@@ -2795,6 +2833,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (window.ServerChat && typeof window.ServerChat.init === 'function') {
         window.ServerChat.init({ user });
     }
+    if (window.PlayerCenter && typeof window.PlayerCenter.init === 'function') {
+        window.PlayerCenter.init({ user });
+    }
     setupProgressBulge();
     setupPointerLighting();
     setupServerManagementMenu();
@@ -2803,6 +2844,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupWebSocket();
     if (window.ServerChat && typeof window.ServerChat.start === 'function') {
         window.ServerChat.start();
+    }
+    if (window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
+        window.PlayerCenter.start();
     }
     setupUpdateStatusPolling();
     checkServerStatus();
@@ -2970,6 +3014,9 @@ function setupWebSocket() {
         if (window.ServerChat && typeof window.ServerChat.handleSocketOpen === 'function') {
             window.ServerChat.handleSocketOpen();
         }
+        if (window.PlayerCenter && typeof window.PlayerCenter.handleSocketOpen === 'function') {
+            window.PlayerCenter.handleSocketOpen();
+        }
     };
 
     socket.onmessage = function (event) {
@@ -2992,6 +3039,12 @@ function setupWebSocket() {
         if (window.ServerChat
             && typeof window.ServerChat.handleRealtimeMessage === 'function'
             && window.ServerChat.handleRealtimeMessage(message)) {
+            return;
+        }
+
+        if (window.PlayerCenter
+            && typeof window.PlayerCenter.handleRealtimeMessage === 'function'
+            && window.PlayerCenter.handleRealtimeMessage(message)) {
             return;
         }
 
@@ -3047,6 +3100,9 @@ function setupWebSocket() {
         if (window.ServerChat && typeof window.ServerChat.handleSocketClose === 'function') {
             window.ServerChat.handleSocketClose(e);
         }
+        if (window.PlayerCenter && typeof window.PlayerCenter.handleSocketClose === 'function') {
+            window.PlayerCenter.handleSocketClose(e);
+        }
         if (wsStopped) {
             return;
         }
@@ -3071,6 +3127,9 @@ function setupWebSocket() {
 }
 
 window.addEventListener('pagehide', () => {
+    if (window.PlayerCenter && typeof window.PlayerCenter.stop === 'function') {
+        window.PlayerCenter.stop();
+    }
     wsLifecycleGeneration += 1;
     wsPreOpenCheckInFlight = false;
     wsStopped = true;
@@ -3093,6 +3152,9 @@ window.addEventListener('pageshow', (event) => {
         wsPolicyCloseCount = 0;
         wsPreOpenFailureCount = 0;
         setupWebSocket();
+        if (window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
+            window.PlayerCenter.start();
+        }
     }
 });
 function updateBackupProgress(progress) {

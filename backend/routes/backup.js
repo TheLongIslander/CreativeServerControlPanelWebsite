@@ -180,7 +180,7 @@ module.exports = function createBackupRoutes({
       operationError = err;
       logger.error('Backup failed:', err);
     } finally {
-      if (restartRequired) {
+      if (restartRequired && !state.shutdownInProgress) {
         try {
           const started = await minecraft.start({ reason: 'backup_restart' });
           if (started && started.started) {
@@ -193,7 +193,7 @@ module.exports = function createBackupRoutes({
         }
       }
       state.backupInProgress = false;
-      state.maintenanceMode = false;
+      state.maintenanceMode = Boolean(state.shutdownInProgress);
       if (typeof minecraft.reconcile === 'function') {
         try {
           await minecraft.reconcile({

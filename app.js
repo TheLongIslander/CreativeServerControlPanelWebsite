@@ -18,6 +18,7 @@ const { createChatLogTailer } = require('./backend/services/chatLogTailer');
 const { createChatService } = require('./backend/services/chatService');
 const { createMinecraftProcessService } = require('./backend/services/minecraftProcessService');
 const { createScreenConsoleTransport } = require('./backend/services/minecraftConsoleTransport');
+const { createPlayerRuntime } = require('./backend/services/playerRuntime');
 const { createRealtimeHub } = require('./backend/services/realtimeHub');
 const createMaintenanceService = require('./backend/services/maintenance');
 const createUpdateService = require('./backend/services/updateService');
@@ -41,6 +42,8 @@ const createServerInfoRoutes = require('./backend/routes/serverInfo');
 const createChatRoutes = require('./backend/routes/chat');
 const { chatJsonErrorHandler } = require('./backend/routes/chat');
 const createAdminChatRoutes = require('./backend/routes/adminChat');
+const createPlayerRoutes = require('./backend/routes/players');
+const { playerJsonErrorHandler } = require('./backend/routes/players');
 const authenticateJWT = require('./backend/middleware/authenticate');
 const requireOnboarded = require('./backend/middleware/requireOnboarded');
 
@@ -96,6 +99,36 @@ function createRuntime(overrides = {}) {
     realtimeHub,
     getWss: () => realtimeHub.wss
   });
+  const looksPrecomposed = Boolean(
+    overrides.config
+    && overrides.processService
+    && overrides.realtimeHub
+    && overrides.chatService
+    && overrides.updateService
+  );
+  let playerRuntime;
+  if (Object.prototype.hasOwnProperty.call(overrides, 'playerRuntime')) {
+    playerRuntime = overrides.playerRuntime;
+  } else if (looksPrecomposed) {
+    // startServer accepts fully injected runtimes in lifecycle/failure tests.
+    // Missing optional services on that object are intentional, not a request
+    // to create persistent production dependencies behind the test's back.
+    playerRuntime = null;
+  } else {
+    try {
+      playerRuntime = createPlayerRuntime({
+        env,
+        processService,
+        realtimeHub,
+        consoleTransport,
+        usersDb: runtimeUsersDb,
+        logger: overrides.routeLogger || console
+      });
+    } catch (error) {
+      playerRuntime = null;
+      (overrides.routeLogger || console).warn('Player Center composition degraded:', error.message);
+    }
+  }
 
   return {
     ...overrides,
@@ -106,6 +139,12 @@ function createRuntime(overrides = {}) {
     chatTailer,
     consoleTransport,
     processService,
+    playerRuntime,
+    playerRegistry: overrides.playerRegistry || (playerRuntime && playerRuntime.registry) || null,
+    playerAvatarService: overrides.playerAvatarService || (playerRuntime && playerRuntime.playerAvatarService) || null,
+    playerService: overrides.playerService || (playerRuntime && playerRuntime.playerService) || null,
+    playerLinkService: overrides.playerLinkService || (playerRuntime && playerRuntime.playerLinkService) || null,
+    playerAccessController: overrides.playerAccessController || (playerRuntime && playerRuntime.accessController) || null,
     realtimeHub,
     state,
     usersDb: runtimeUsersDb,
@@ -134,6 +173,21 @@ function createApp(dependencies = {}) {
     onboarded: runtime.onboarded,
     admin: runtime.admin
   }));
+  if (runtime.playerRegistry) {
+    app.use('/api/servers', express.json({ limit: '8kb' }), playerJsonErrorHandler, createPlayerRoutes({
+      serverRegistry: runtime.playerRegistry,
+      playerAvatarService: runtime.playerAvatarService,
+      playerService: runtime.playerService,
+      playerLinkService: runtime.playerLinkService,
+      accessController: runtime.playerAccessController,
+      allowedOrigins: runtime.allowedOrigins,
+      usersDb: runtime.usersDb,
+      authenticate: runtime.authenticate,
+      onboarded: runtime.onboarded,
+      requireCapability: runtime.requireCapability,
+      logger: runtime.routeLogger || console
+    }));
+  }
 
   // Non-file endpoints carry small control payloads. Keeping their parsers
   // bounded prevents an unauthenticated request from forcing multi-gigabyte
@@ -220,12 +274,86 @@ async function startServer(options = {}) {
 
   const port = options.port ?? (runtime.config || loadRuntimeConfig(process.env)).port;
   const host = options.host;
+  const configuredMinecraftStopTimeoutMs = Number(options.minecraftStopTimeoutMs);
+  const minecraftStopTimeoutMs = Number.isSafeInteger(configuredMinecraftStopTimeoutMs)
+    && configuredMinecraftStopTimeoutMs > 0
+    ? configuredMinecraftStopTimeoutMs
+    : 65_000;
   let closed = false;
   let initializationPromise = Promise.resolve();
-  const cleanup = async () => {
+  let minecraftShutdownPromise = null;
+
+  function boundedMinecraftShutdown(operation) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Minecraft shutdown exceeded ${minecraftStopTimeoutMs}ms.`));
+      }, minecraftStopTimeoutMs);
+      Promise.resolve()
+        .then(operation)
+        .then(value => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        }, error => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
+  }
+
+  function stopMinecraftForPanelShutdown() {
+    if (minecraftShutdownPromise) return minecraftShutdownPromise;
+    minecraftShutdownPromise = boundedMinecraftShutdown(async () => {
+      const minecraft = runtime.processService;
+      if (!minecraft || typeof minecraft.stop !== 'function') return;
+
+      let snapshot = typeof minecraft.getSnapshot === 'function'
+        ? minecraft.getSnapshot()
+        : null;
+      if ((!snapshot || !snapshot.running) && typeof minecraft.reconcile === 'function') {
+        try {
+          snapshot = await minecraft.reconcile({ reason: 'panel_shutdown_preflight' }) || snapshot;
+        } catch (_) {
+          // stop() performs its own liveness probe. A failed preflight must not
+          // prevent the final idempotent stop request.
+          snapshot = null;
+        }
+      }
+      if (snapshot && !snapshot.running && snapshot.lastSuccessfulProbeAt) return;
+
+      const result = await minecraft.stop({ reason: 'requested_panel_shutdown', wait: true });
+      const finalSnapshot = result && result.snapshot
+        ? result.snapshot
+        : (typeof minecraft.getSnapshot === 'function' ? minecraft.getSnapshot() : null);
+      if (finalSnapshot && finalSnapshot.running) {
+        throw new Error('Minecraft remained running after the panel shutdown request.');
+      }
+    });
+    return minecraftShutdownPromise;
+  }
+
+  const cleanup = async ({ trigger, cascadeMinecraft } = {}) => {
     if (closed) return;
     closed = true;
     await initializationPromise.catch(() => {});
+    const failures = [];
+    // Startup failure isolation deliberately leaves an independently running
+    // Minecraft server alone. Signals, terminal `stop`, and returned close()
+    // are explicit panel shutdown requests and own the final server stop.
+    if (cascadeMinecraft) {
+      try {
+        await stopMinecraftForPanelShutdown();
+      } catch (error) {
+        failures.push(error);
+        console.error('Minecraft shutdown failed; continuing panel cleanup:', error.message);
+      }
+    }
     if (typeof runtime.updateService.stopStatusRefreshTimer === 'function') {
       runtime.updateService.stopStatusRefreshTimer();
     }
@@ -234,7 +362,12 @@ async function startServer(options = {}) {
     // it before closing that database so a callback cannot reopen the handle
     // during shutdown.
     const chatResults = await Promise.allSettled([
-      runtime.chatService.shutdown()
+      runtime.chatService.shutdown(),
+      runtime.playerRuntime && typeof runtime.playerRuntime.shutdown === 'function'
+        ? runtime.playerRuntime.shutdown()
+        : (runtime.playerService && typeof runtime.playerService.shutdown === 'function'
+          ? runtime.playerService.shutdown()
+          : Promise.resolve())
     ]);
     const results = chatResults.concat(await Promise.allSettled([
       closePreviewResources(),
@@ -247,7 +380,7 @@ async function startServer(options = {}) {
       updateStore.close(),
       logger.close()
     ]));
-    const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    failures.push(...results.filter(result => result.status === 'rejected').map(result => result.reason));
     if (failures.length) throw new AggregateError(failures, 'One or more services failed to close cleanly.');
   };
 
@@ -258,7 +391,7 @@ async function startServer(options = {}) {
     cleanup
   });
   const signalHandler = signal => {
-    maintenanceService.shutdownGracefully(signal).catch(err => {
+    maintenanceService.shutdownGracefully(signal, { cascadeMinecraft: true }).catch(err => {
       console.error('Graceful shutdown failed:', err.message);
       process.exit(1);
     });
@@ -283,6 +416,17 @@ async function startServer(options = {}) {
         if (options.ensureAdmin !== false) await runtimeUsersDb.ensureAdminUser();
       }
       if (options.initializeUpdates !== false) await runtime.updateService.initialize();
+      try {
+        if (runtime.playerRuntime && typeof runtime.playerRuntime.initialize === 'function') {
+          await runtime.playerRuntime.initialize();
+        } else if (runtime.playerService && typeof runtime.playerService.initialize === 'function') {
+          await runtime.playerService.initialize();
+        }
+      } catch (_) {
+        // Player Center is independently degradable, but its initialization is
+        // tracked so shutdown can never race an unopened/closing player store.
+        console.error('Player Center initialization degraded (player_center_initialization_failed).');
+      }
     })();
     await initializationPromise;
     if (maintenanceService.isShuttingDown()) throw new Error('Startup interrupted by shutdown.');
@@ -312,7 +456,10 @@ async function startServer(options = {}) {
     process.off('SIGTERM', signalHandler);
     if (stdinHandler) process.stdin.off('data', stdinHandler);
     try {
-      await maintenanceService.shutdownGracefully('startup failure', { exitProcess: false });
+      await maintenanceService.shutdownGracefully('startup failure', {
+        exitProcess: false,
+        cascadeMinecraft: false
+      });
     } catch (shutdownErr) {
       console.error('Startup cleanup failed:', shutdownErr.message);
     }
@@ -331,7 +478,10 @@ async function startServer(options = {}) {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
       if (stdinHandler) process.stdin.off('data', stdinHandler);
-      await maintenanceService.shutdownGracefully('application close', { exitProcess: false });
+      await maintenanceService.shutdownGracefully('application close', {
+        exitProcess: false,
+        cascadeMinecraft: true
+      });
     }
   };
 }

@@ -24,6 +24,10 @@ It is written for future people to implement new pages without guessing.
 - Control panel behavior + glass backup progress engine: `public/script.js`
 - Server chat behavior and reconciliation: `public/serverChat.js`
 - Server chat flat/glass component layer: `public/chat.css` (loaded after the active global theme)
+- Player Center behavior and safe rendering: `public/playerCenter.js`
+- Player Center flat/glass component layer: `public/playerCenter.css` (loaded after the active global theme and chat layer)
+- Shared control-panel pane/menu motion and desktop coexistence: `public/windowMotion.css`
+  (loaded after the Chat and Player Center component layers)
 - SFTP page style + glass/flat progress skinning: `public/styleSFTP.css`
 - SFTP page behavior + progress wrapper lifecycle: `public/sftp.js`
 - Admin/account page style system: `public/styleAdmin.css`
@@ -108,6 +112,24 @@ The control panel header uses a left-side management dropdown instead of a stand
   </div>
 </div>
 ```
+
+### 5) Control panel Player Center
+The lower-right launcher and panel keep this selector contract:
+```html
+<button id="player-center-toggle" aria-controls="player-center-panel" aria-expanded="false">
+  <span class="player-center-toggle-dot" aria-hidden="true"></span>
+  <span>Players</span>
+  <span id="player-center-toggle-count" class="hidden">0</span>
+</button>
+<div id="player-center-shell" class="hidden" aria-hidden="true">
+  <div class="player-center-backdrop" data-close-player-center="true"></div>
+  <section id="player-center-panel" role="dialog" aria-labelledby="player-center-title" tabindex="-1">
+    <!-- header, navigation, roster sidebar, and detail view -->
+  </section>
+</div>
+```
+Load `playerCenter.css` after the active global stylesheet and `playerCenter.js` before
+`script.js`, which supplies authenticated boot and shared WebSocket events.
 
 ## Required JS Boot Pattern
 
@@ -206,6 +228,48 @@ dropdown opens/closes via Server Management, closes on outside click and Escape,
 - Control panel has its own lighting system in `public/script.js` that also handles progress lighting.
 - Preserve these CSS vars for any custom button:
 `--mx`, `--my`, `--pop`, `--tx`, `--ty`, `--sx`, `--sy`, `--skx`, `--sky`, `--scale`.
+
+#### Glass-only lighting and motion boundary
+
+- Shared pane/menu entry and exit motion is owned by `public/windowMotion.css` and applies to
+  both Glass and Classic. Cursor-follow lighting, depth, shadow displacement, skew, scale,
+  filter changes, and progress deformation are a separate system and are Glass-only.
+- The pointer engine may activate any button, `compact`, `surface`, `input-shell`, or progress
+  profile only while `body[data-ui-theme="glass"]`, `(hover: hover) and (pointer: fine)`, and
+  `prefers-reduced-motion: no-preference` all match. Classic, coarse/touch, disabled, and
+  reduced-motion states must not receive `.is-lit` or non-default pointer variables.
+- Theme changes, pointer-capability changes, reduced-motion changes, pane close, scroll,
+  visibility loss, and window blur must use the same reset path: remove `.is-lit`, restore
+  every shared pointer variable to its neutral value, and clear progress lighting/bulge.
+- `surface` is the restrained non-control profile: use it for non-input cards and rows that
+  benefit from shallow depth. Direct inputs, text-selection regions, scrollers, charts, and form
+  containers remain stable. `input-shell` is the narrow composite-control exception: its shell
+  remains a stationary hitbox and sole border/focus owner while a cursor sheen, displaced shadow,
+  and tiny decorative-icon movement provide feedback. Pressing or drag-selecting resets that
+  motion. Nested buttons normally retain the `compact` profile. Wide sparse controls use the
+  `anchored` profile: an immovable native control remains the sole hitbox/focus owner while one
+  pointer-transparent inner visual layer receives directional sheen, shadow, tilt, scale, and
+  translation. Never transform or filter the anchored control itself. Hover and active selectors
+  must never restate or change control geometry such as width, minimum height, margin, padding,
+  border width, or font metrics; interaction feedback cannot change the hitbox beneath the pointer.
+- Reduced motion disables cursor-follow sheen, transform, filter, displaced shadow, and
+  deformation in both JavaScript and CSS. Static hover colors and visible keyboard focus
+  remain available.
+
+### Border ownership and composite controls
+
+- Every visible boundary has exactly one structural owner. A parent owns spacing; it must not
+  redraw a coincident child border. Nested empty states inside an already bordered card use
+  fill, spacing, or an inset highlight instead of another perimeter.
+- A window owns its outer perimeter, radius, clipping, and elevation. Glass pseudo-elements
+  may draw cursor sheen or an inset specular rim, but must not place a second border on the
+  same perimeter. Header/sidebar separators remain owned by their respective layout regions.
+- Composite controls have one border and one focus owner. The Player Center search shell owns
+  both; its nested input stays borderless, radius-free, outline-free, and shadow-free in every
+  theme and focus modality. Generic input selectors must explicitly exclude that nested input.
+- Structural strokes use the component border tokens (`--pc-border*`, `--chat-border*`, or
+  their page equivalent). Glass highlights are decorative inset light, not another structural
+  stroke.
 
 ### Math Behavior: Cursor Physics + Lighting
 This section captures the exact motion/lighting math so it is reproducible.
@@ -314,8 +378,13 @@ Behavior contract:
 
 - Desktop chat is a non-modal panel at z-index 40; the corner stack is 41, regular
   modals remain 50+, and the screenshot viewer remains 80.
+- Desktop Chat and Player Center may remain open together. Their combined body classes
+  (`server-chat-open player-center-open`) activate a non-overlapping split layout; each
+  pane keeps independent focus, expanded state, and Escape handling.
 - Mobile chat fills `100vh`/`100dvh`, accounts for every safe-area inset, traps focus,
-  marks background siblings inert, and leaves its toggle usable.
+  marks background siblings inert, and leaves its toggle usable. Because Chat and Player
+  Center are both full-screen modal dialogs at this breakpoint, opening one closes the
+  other and a desktop-to-mobile resize resolves any dual-open state before inerting.
 - The shell uses `server-chat-open`/`server-chat-mobile-open`; it is intentionally not
   included in the existing `modal-open` synchronization.
 - The composer and admin setting are disabled in markup and stay disabled until an
@@ -365,6 +434,128 @@ and health state, read-only/admin states, zero/normal/`500+` unread badges, both
 choices, long bidirectional text, loading/empty/error/history states, desktop/mobile
 breakpoints, safe areas, reduced motion, keyboard-only use, and live theme switching
 while the panel is open.
+
+### Control panel Player Center
+
+Player Center is a purple people-and-history surface, separate from the green chat
+action. `#player-center-toggle` stays fixed in the lower-right safe-area position shown
+in the control-panel composition. Desktop uses a non-modal panel above the launcher;
+mobile uses the full viewport with backdrop, inert background siblings, focus trapping,
+Escape close, and focus restoration.
+
+Required shell selectors are `#player-center-toggle`, `#player-center-toggle-count`,
+`#player-center-shell`, `#player-center-panel`, `#player-center-close`,
+`#player-center-refresh`, `#player-center-nav`, `#player-center-search`,
+`#player-center-player-list`, `#player-center-content`, and `#player-center-view`.
+
+Behavior and visual contract:
+
+- Live presence and server availability use concise visible text plus a state marker;
+  color alone never communicates availability. Stale-roster recovery stays internal and
+  must not create a prominent disclaimer card in the Players overview.
+- The main Players view leads with the current online count. Source quality and identity-review
+  diagnostics stay contextual rather than competing with live presence. The header status dot
+  represents server process state only: green while the server is running and grey while offline
+  or unknown; roster-source quality must not turn this dot yellow.
+- After live presence, the overview prioritizes gameplay insights: combined UUID-backed playtime,
+  the most-played UUID profile, and the latest usable activity evidence when available. These values
+  must distinguish a complete roster from a partial loaded page, exclude name-only legacy scores,
+  and render missing observations as unavailable rather than zero. Player-history and playtime-
+  coverage counts remain available only as a small muted metadata row beneath the insight cards.
+- World-file totals, backup-derived trends, and log-derived sessions retain source,
+  observation time, quality, and coverage metadata in the API. Player-facing views use compact,
+  source-aware labels instead of dumping backup-gap, snapshot-source, or recovery diagnostics.
+- Playtime trends remain chronological from left to right but open on the newest snapshot. Preserve
+  each player's latest-or-history scroll intent across roster-driven rerenders and pane resizing;
+  never reset an actively explored chart every polling cycle. The heading exposes the latest date
+  and shows a compact `Latest →` return control only after the user moves into older history. Keep
+  all points, use compact visible tick dates with a two-digit year on every tick and full dates in
+  accessible labels/tooltips, retain a keyboard-focusable native scroller, and use subtle edge
+  fades when more history exists offscreen.
+- Session state is explicit: only a roster-matched `active` session receives the green `Live`
+  treatment. A normal departure reads `Left`, a runtime boundary reads `Ended when server stopped`
+  or `Ended when server restarted`, and incomplete historical evidence reads `End time unavailable`
+  with neutral styling. Missing `endedAt` alone must never be rendered as online.
+- UUID-backed players use their current Minecraft face in every avatar size. Faces load lazily from
+  the authenticated same-origin avatar route and preserve the purple initials tile as the immediate
+  and failure fallback. Keep the nearest-neighbor pixel rendering, rounded clipping, and existing
+  flat/glass border and lighting behavior; never resolve an avatar by a recyclable player name.
+  Keep empty states plain; missing data is never silently converted to zero.
+- Cache/import time never appears as player activity. Exact gameplay events and validated legacy
+  Bukkit `lastPlayed` evidence use `Last seen`; file modification evidence uses `Estimated last
+  active` plus copy/transfer/restore caveat text. A recovered Bukkit `firstPlayed` date may repair an
+  incomplete advancement history, but the UI must still describe coverage honestly.
+- The launcher and compact internal buttons preserve the shared pointer variables. Flat,
+  reduced-motion, disabled, touch, and coarse-pointer modes remain transform-stable.
+- Summary cards, empty/status cards, and history rows use the shared restrained `surface`
+  profile for cursor-positioned light and shallow depth in Glass mode only. Player Center
+  scrollers clear active surface effects before content moves. Roster buttons and the profile's
+  `All players` control use the `anchored` profile: the outer native button remains stationary and
+  owns layout, pointer targeting, keyboard focus, and activation; its single
+  `.player-center-pointer-visual` child is pointer-inert and receives the Glass-only light and
+  restrained motion. Forms, charts, text-selection regions, and the search input itself remain
+  stationary.
+- On desktop, Player Center can coexist with Chat in the shared split layout without either
+  pane covering the other. On mobile it remains mutually exclusive with Chat so there is
+  exactly one `aria-modal` focus trap and one inert-background owner.
+- Opening or closing Chat must not change Player Center typography. Prepare the Player Center's
+  final split width and internal columns while it is still hidden, size responsive internals from
+  the pane container, and reveal it with opacity plus translation but no text-scaling transform.
+  Font family, computed font sizes, and line heights remain invariant between solo and split views.
+- Player Center uses the control panel's normal `Arial, sans-serif` typography throughout.
+  `Pixelify Sans` remains a Server Chat terminal accent and must not be applied to the
+  Player Center launcher, headings, controls, avatars, statistics, or status copy. Mobile
+  text inputs stay at `16px` or larger so focusing them cannot trigger Safari viewport zoom.
+- In glass mode the Player Center window, header, sidebar, and cards remain visibly translucent:
+  use layered specular gradients, an illuminated inner rim, Safari-compatible
+  `-webkit-backdrop-filter`, and blur/saturation without compounding child layers into an opaque
+  sheet. Flat mode remains opaque. Light and system-light glass use translucent white surfaces.
+- The composite player search control draws one restrained purple focus ring on its outer shell;
+  the nested input must not add a second outline. In Glass mode on a fine pointer, the dedicated
+  `input-shell` profile may add cursor-positioned sheen and shadow plus tiny search-icon motion,
+  but it must never transform the shell or input, replace the focus ring, or animate during text
+  selection. Trend counter resets render as compact baseline points with accessible reset text,
+  never as a badge wider than its chart column.
+- Player names, statistics, advancement text, API errors, and external identity candidates
+  are created with `textContent`/safe DOM APIs. No remote Player Center string uses
+  `innerHTML`.
+- NameMC results are displayed and stored only as time-stamped, unverified external candidates; they
+  do not receive linked, verified, or access-authorizing styling. Copy must warn that Minecraft names
+  can be reassigned and that a current holder may be a different person.
+- Name-only scoreboard evidence uses explicit `Legacy name only` styling. It must remain visually
+  separate from UUID profiles whenever ownership is recycled, ambiguous, or not proven for that time.
+- Historical aliases may be searchable only after local UUID-bearing verification. Trend attribution
+  requires an exact same-snapshot UUID/name observation; the UI must not imply continuous ownership
+  across gaps between two sightings.
+- Cache-only, allowlist-only, access-only, and authentication-handshake-only identities stay out of
+  the main player count. A suppressed same-name legacy row remains disclosed as separate identity
+  review evidence and never transfers scores to the UUID row.
+- `public/playerCenter.css` owns scoped `--pc-*` semantic tokens and must cover glass/flat,
+  explicit light/dark, system fallback, safe areas, reduced motion, and mobile layout.
+- The validation matrix adds UUID/name-only identities, zero/many online players,
+  current/recent/stale roster revisions, trend gaps/resets, linking unavailable/challenge/
+  linked states, access pending/applied/drifted/expired/failed states, and keyboard-only use.
+
+### Shared popup and utility-pane motion
+
+`public/windowMotion.css` owns entry/exit motion for the Account dropdown, Server
+Management dropdown, Server Chat, and Player Center. The motion contract is shared by
+glass and flat themes:
+
+- Entry uses opacity plus a short origin-aware translate/scale over `240ms` with
+  `cubic-bezier(0.16, 1, 0.3, 1)`; Chat originates bottom-left, Player Center bottom-right,
+  Server Management top-left, and Account top-right. The dual-pane Player Center entrance
+  uses translation without scale so its text is rasterized at its final size throughout.
+- Exit is restrained to `160ms`. Component-specific `.hidden` selectors keep each surface
+  rendered but non-interactive until its exit completes, using delayed `visibility` rather
+  than a JavaScript timer.
+- Animate only `opacity` and `transform`; never animate `backdrop-filter`, layout dimensions,
+  or the pointer-lighting custom properties.
+- Mobile full-screen panes use near-unity scale so the transition never exposes page edges.
+- `prefers-reduced-motion: reduce` disables all shared popup transitions immediately.
+- Any new popup added to this shared motion layer must preserve its existing ARIA state,
+  focus restoration, safe-area behavior, and `.hidden` semantics.
+
 - Asset contract:
 source screenshots live under `assets/server-info/<era>/`; additional subfolders are discovered after the curated eras, and root-level screenshots appear in an `Unsorted` group. Optimized WebP derivatives live under `assets/server-info/_generated/display/<era>/` and `assets/server-info/_generated/thumbs/<era>/`. The endpoint falls back to originals if derivatives are absent.
 

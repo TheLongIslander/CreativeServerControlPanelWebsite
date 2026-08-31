@@ -257,23 +257,27 @@
         }
 
         if (accountButton && dropdown) {
+            const setAccountMenuOpen = (open) => {
+                dropdown.classList.toggle('hidden', !open);
+                dropdown.setAttribute('aria-hidden', open ? 'false' : 'true');
+                accountButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+                if (!open && appearancePanel) {
+                    appearancePanel.classList.add('hidden');
+                }
+            };
+
+            setAccountMenuOpen(false);
             accountButton.addEventListener('click', (event) => {
                 event.stopPropagation();
-                dropdown.classList.toggle('hidden');
-                if (dropdown.classList.contains('hidden') && appearancePanel) {
-                    appearancePanel.classList.add('hidden');
+                setAccountMenuOpen(dropdown.classList.contains('hidden'));
+            });
+
+            document.addEventListener('click', () => {
+                if (!dropdown.classList.contains('hidden')) {
+                    setAccountMenuOpen(false);
                 }
             });
         }
-
-        document.addEventListener('click', () => {
-            if (dropdown && !dropdown.classList.contains('hidden')) {
-                dropdown.classList.add('hidden');
-                if (appearancePanel) {
-                    appearancePanel.classList.add('hidden');
-                }
-            }
-        });
 
         if (dropdown) {
             dropdown.addEventListener('click', (event) => {

@@ -1,0 +1,176 @@
+:root {
+    --ui-window-open-duration: 240ms;
+    --ui-window-close-duration: 160ms;
+    --ui-window-open-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --ui-window-close-ease: cubic-bezier(0.4, 0, 1, 1);
+}
+
+/* Keep pane shells rendered long enough for a real exit transition. */
+#server-chat-shell,
+#player-center-shell {
+    visibility: visible;
+    transition: visibility 0s linear 0s;
+}
+
+#server-chat-shell.hidden,
+#player-center-shell.hidden {
+    display: block;
+    visibility: hidden;
+    pointer-events: none;
+    transition: visibility 0s linear var(--ui-window-close-duration);
+}
+
+#server-chat-panel,
+#player-center-panel {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    transition:
+        opacity var(--ui-window-close-duration) var(--ui-window-close-ease),
+        transform var(--ui-window-close-duration) var(--ui-window-close-ease);
+}
+
+#server-chat-panel {
+    transform-origin: bottom left;
+}
+
+#player-center-panel {
+    transform-origin: bottom right;
+}
+
+#server-chat-shell:not(.hidden) #server-chat-panel,
+#player-center-shell:not(.hidden) #player-center-panel {
+    transition-duration: var(--ui-window-open-duration);
+    transition-timing-function: var(--ui-window-open-ease);
+}
+
+#server-chat-shell.hidden #server-chat-panel {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(-10px, 14px, 0) scale(0.975);
+}
+
+#player-center-shell.hidden #player-center-panel {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(10px, 14px, 0) scale(0.975);
+}
+
+.server-chat-backdrop,
+.player-center-backdrop {
+    opacity: 1;
+    transition: opacity var(--ui-window-open-duration) var(--ui-window-open-ease);
+}
+
+#server-chat-shell.hidden .server-chat-backdrop,
+#player-center-shell.hidden .player-center-backdrop {
+    opacity: 0;
+    transition-duration: var(--ui-window-close-duration);
+    transition-timing-function: var(--ui-window-close-ease);
+}
+
+/* Header menus use the same motion language, anchored to their launchers. */
+.account-dropdown,
+.server-management-dropdown {
+    visibility: visible;
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    transition:
+        visibility 0s linear 0s,
+        opacity var(--ui-window-open-duration) var(--ui-window-open-ease),
+        transform var(--ui-window-open-duration) var(--ui-window-open-ease);
+}
+
+.account-dropdown {
+    transform-origin: top right;
+}
+
+.server-management-dropdown {
+    transform-origin: top left;
+}
+
+.account-dropdown.hidden,
+.server-management-dropdown.hidden {
+    display: flex;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate3d(0, -8px, 0) scale(0.975);
+    transition:
+        visibility 0s linear var(--ui-window-close-duration),
+        opacity var(--ui-window-close-duration) var(--ui-window-close-ease),
+        transform var(--ui-window-close-duration) var(--ui-window-close-ease);
+}
+
+/* Both desktop utility panes remain fully visible instead of overlapping. */
+@media (min-width: 769px) {
+    body.server-chat-open {
+        --coexisting-chat-width: clamp(320px, 34vw, 440px);
+    }
+
+    body.server-chat-open.player-center-open #server-chat-panel {
+        width: var(--coexisting-chat-width);
+    }
+
+    /* Give the hidden pane its final geometry before its entrance transition starts. */
+    body.server-chat-open #player-center-panel {
+        width: min(1040px, calc(100vw - var(--coexisting-chat-width) - 36px));
+    }
+
+    body.server-chat-open .player-center-layout {
+        grid-template-columns: clamp(190px, 20vw, 260px) minmax(0, 1fr);
+        grid-template-columns: clamp(190px, 27.5cqw, 286px) minmax(0, 1fr);
+    }
+
+    /* Scaling text during reveal makes Safari briefly rasterize it at a smaller size. */
+    body.server-chat-open #player-center-shell.hidden #player-center-panel {
+        transform: translate3d(10px, 14px, 0);
+    }
+}
+
+@media (min-width: 769px) and (max-width: 900px) {
+    body.server-chat-open .player-center-summary-grid,
+    body.server-chat-open .player-center-online-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.server-chat-open .player-center-summary-card-live-count {
+        grid-column: auto;
+    }
+}
+
+@container player-center (max-width: 600px) {
+    body.server-chat-open .player-center-summary-grid,
+    body.server-chat-open .player-center-online-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.server-chat-open .player-center-summary-card-live-count {
+        grid-column: auto;
+    }
+}
+
+@media (max-width: 768px) {
+    #server-chat-panel,
+    #player-center-panel {
+        transform-origin: bottom center;
+    }
+
+    #server-chat-shell.hidden #server-chat-panel,
+    #player-center-shell.hidden #player-center-panel {
+        transform: translate3d(0, 18px, 0) scale(0.995);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #server-chat-shell,
+    #player-center-shell,
+    #server-chat-panel,
+    #player-center-panel,
+    .server-chat-backdrop,
+    .player-center-backdrop,
+    .account-dropdown,
+    .server-management-dropdown {
+        animation: none !important;
+        transition: none !important;
+    }
+}

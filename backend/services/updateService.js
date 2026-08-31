@@ -1434,6 +1434,7 @@ module.exports = function createUpdateService({
     reason = 'update_start',
     direct = false
   } = {}) {
+    if (state.shutdownInProgress) return false;
     if (!direct && minecraft && typeof minecraft.start === 'function') {
       const result = await minecraft.start({ reason });
       const snapshot = result && result.snapshot
@@ -2015,7 +2016,7 @@ module.exports = function createUpdateService({
       });
       throw err;
     } finally {
-      state.maintenanceMode = false;
+      state.maintenanceMode = Boolean(state.shutdownInProgress);
       try {
         await releaseUpdateLock(owner);
       } finally {
@@ -2148,7 +2149,7 @@ module.exports = function createUpdateService({
       });
       throw err;
     } finally {
-      state.maintenanceMode = false;
+      state.maintenanceMode = Boolean(state.shutdownInProgress);
       try {
         await releaseUpdateLock(owner);
       } finally {

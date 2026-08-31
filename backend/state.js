@@ -6,6 +6,7 @@ module.exports = {
   lastBackupHour: null,
   backupInProgress: false,
   maintenanceMode: false,
+  shutdownInProgress: false,
   updateLocked: false,
   updateLockOwner: null
 };

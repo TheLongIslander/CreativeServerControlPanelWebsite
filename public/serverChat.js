@@ -1791,6 +1791,12 @@
             return;
         }
         const mobile = isMobile();
+        if (mobile && state.open && document.body.classList.contains('player-center-open')) {
+            const playerToggle = document.getElementById('player-center-toggle');
+            if (playerToggle) {
+                playerToggle.click();
+            }
+        }
         if (mobile) {
             dom.panel.setAttribute('aria-modal', 'true');
         } else {
@@ -1798,6 +1804,18 @@
         }
         document.body.classList.toggle('server-chat-mobile-open', state.open && mobile);
         setBackgroundInert(state.open && mobile);
+        if (state.open && mobile && !dom.panel.contains(document.activeElement)) {
+            global.requestAnimationFrame(() => {
+                if (!state.open || !isMobile()) {
+                    return;
+                }
+                if (!dom.input.disabled) {
+                    dom.input.focus();
+                } else {
+                    dom.close.focus();
+                }
+            });
+        }
     }
 
     function focusableElements() {
@@ -1819,6 +1837,7 @@
         }
         if (event.key === 'Escape') {
             event.preventDefault();
+            event.stopPropagation();
             closePanel();
             return;
         }
