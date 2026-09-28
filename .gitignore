@@ -12,5 +12,8 @@ updates.db
 chat.db
 chat.db-wal
 chat.db-shm
+players.db
+players.db-wal
+players.db-shm
 plans.md
 assets/server-info/
