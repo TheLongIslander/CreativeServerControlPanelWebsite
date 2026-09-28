@@ -7,7 +7,15 @@
     const POLL_CLOSED_MS = 45000;
     const STALE_AFTER_MS = 60000;
     const AVATAR_RETRY_MS = 5 * 60 * 1000;
+    const MAX_TIMER_DELAY_MS = 0x7fffffff;
     const PLAYER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const TERMINAL_LINK_CHALLENGE_CODES = new Set([
+        'LINK_CHALLENGE_EXPIRED',
+        'LINK_ATTEMPTS_EXHAUSTED',
+        'LINK_CHALLENGE_REPLAYED',
+        'LINK_CHALLENGE_NOT_FOUND',
+        'LINK_IDENTITY_CONFLICT'
+    ]);
 
     const dom = {};
     const state = {
@@ -33,6 +41,7 @@
         linkError: null,
         link: null,
         challenge: null,
+        linkPreferredUuid: null,
         linkRosterSignature: null,
         linkPending: false,
         confirmUnlink: false,
@@ -53,6 +62,7 @@
 
     let pollTimer = null;
     let freshnessTimer = null;
+    let challengeExpiryTimer = null;
     let rosterController = null;
     let profileController = null;
     let mobileQuery = null;
@@ -1896,7 +1906,7 @@
             uuid,
             name: nonEmptyString(rawLink.name, rawLink.playerName, rawLink.currentName, knownPlayer && knownPlayer.name) || 'Linked player',
             verifiedAt: nonEmptyString(rawLink.verifiedAt, rawLink.createdAt),
-            source: nonEmptyString(rawLink.source) || 'private_challenge'
+            source: nonEmptyString(rawLink.source, rawLink.verificationMethod) || 'private_challenge'
         };
     }
 
@@ -1909,11 +1919,101 @@
             playerName: nonEmptyString(raw.playerName, raw.name, raw.player && raw.player.name, selectedPlayer && selectedPlayer.name) || 'the selected player',
             expiresAt: nonEmptyString(raw.expiresAt),
             deliveryState: nonEmptyString(raw.deliveryState, raw.delivery, raw.delivery && raw.delivery.state) || 'requested',
-            deliveryStatus: nonEmptyString(raw.deliveryStatus) || 'complete'
+            deliveryStatus: nonEmptyString(raw.deliveryStatus) || 'complete',
+            committed: raw.committed === true,
+            retryable: typeof raw.retryable === 'boolean' ? raw.retryable : null
         };
     }
 
+    function linkApiErrorCode(error) {
+        return nonEmptyString(
+            error && error.code,
+            error && error.payload && error.payload.error && error.payload.error.code
+        );
+    }
+
+    function isTerminalLinkChallengeError(error) {
+        return TERMINAL_LINK_CHALLENGE_CODES.has(linkApiErrorCode(error));
+    }
+
+    function challengeExpiryTime(challenge) {
+        const expiresAt = challenge && challenge.expiresAt;
+        const timestamp = expiresAt ? new Date(expiresAt).getTime() : NaN;
+        return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    function challengeHasExpired(challenge, nowMs = Date.now()) {
+        const expiresAt = challengeExpiryTime(challenge);
+        return expiresAt !== null && expiresAt <= nowMs;
+    }
+
+    function clearChallengeExpiryTimer() {
+        if (challengeExpiryTimer !== null && typeof global.clearTimeout === 'function') {
+            global.clearTimeout(challengeExpiryTimer);
+        }
+        challengeExpiryTimer = null;
+    }
+
+    function clearActiveChallenge({ rememberPlayer = false } = {}) {
+        if (rememberPlayer && state.challenge && state.challenge.playerUuid) {
+            state.linkPreferredUuid = state.challenge.playerUuid;
+        }
+        state.challenge = null;
+        clearChallengeExpiryTimer();
+    }
+
+    function challengeStatusText(challenge) {
+        const delivery = `delivery ${humanize(challenge && challenge.deliveryState)}`;
+        return challenge && challenge.expiresAt
+            ? `Expires ${formatRelativeTime(challenge.expiresAt)} · ${delivery}`
+            : humanize(delivery);
+    }
+
+    function expireActiveChallenge(nowMs = Date.now(), { render = true } = {}) {
+        if (!state.challenge || !challengeHasExpired(state.challenge, nowMs)) {
+            return false;
+        }
+        clearActiveChallenge({ rememberPlayer: true });
+        state.linkError = 'That private code expired. Request a new private code below.';
+        if (render && state.activeView === 'link') {
+            renderLinkView();
+            if (state.open) {
+                focusAfterRender('#player-center-link-player, .player-center-link-view button');
+            }
+        }
+        return true;
+    }
+
+    function scheduleChallengeExpiry() {
+        clearChallengeExpiryTimer();
+        const expiresAt = challengeExpiryTime(state.challenge);
+        if (expiresAt === null || typeof global.setTimeout !== 'function') {
+            return;
+        }
+        const delay = Math.min(Math.max(0, expiresAt - Date.now() + 25), MAX_TIMER_DELAY_MS);
+        challengeExpiryTimer = global.setTimeout(() => {
+            challengeExpiryTimer = null;
+            if (!expireActiveChallenge()) {
+                scheduleChallengeExpiry();
+            }
+        }, delay);
+    }
+
+    function refreshChallengeExpiry() {
+        if (!state.challenge) {
+            return;
+        }
+        if (expireActiveChallenge()) {
+            return;
+        }
+        const status = document.getElementById('player-center-link-challenge-status');
+        if (status) {
+            status.textContent = challengeStatusText(state.challenge);
+        }
+    }
+
     function renderLinkView() {
+        expireActiveChallenge(Date.now(), { render: false });
         const view = createElement('div', 'player-center-link-view');
         const heading = createElement('div', 'player-center-view-heading');
         const copy = createElement('div');
@@ -1943,7 +2043,7 @@
         }
         if (state.link) {
             const linked = createElement('section', 'player-center-linked-card');
-            const avatar = createPlayerAvatar({ uuid: state.link.playerUuid, name: state.link.name }, 'player-center-avatar-profile');
+            const avatar = createPlayerAvatar({ uuid: state.link.uuid, name: state.link.name }, 'player-center-avatar-profile');
             const linkedCopy = createElement('div');
             linkedCopy.append(createElement('span', 'player-center-kicker', 'Linked player'));
             linkedCopy.append(createElement('strong', null, state.link.name));
@@ -1955,10 +2055,14 @@
             safety.append(createElement('strong', null, 'What linking does'));
             safety.append(createElement('p', null, 'It enables “you” styling and player-specific features. It does not change whitelist, console, operator, filesystem, or admin permissions.'));
             view.appendChild(safety);
+            if (state.linkError) {
+                view.appendChild(createStateCard('error', 'Link update did not complete', state.linkError));
+            }
             const actions = createElement('div', 'player-center-inline-actions');
             if (state.confirmUnlink) {
                 actions.append(createElement('span', null, `Unlink ${state.link.name}?`));
                 const cancel = createButton('Keep link', 'player-center-secondary-button');
+                cancel.disabled = state.linkPending;
                 cancel.addEventListener('click', () => {
                     state.confirmUnlink = false;
                     renderLinkView();
@@ -1986,15 +2090,18 @@
             const challengeCopy = createElement('div');
             challengeCopy.append(createElement('h4', null, `Check Minecraft as ${state.challenge.playerName}`));
             challengeCopy.append(createElement('p', null, 'A short-lived code was requested through the trusted server connection. Enter exactly what appeared in your private in-game message.'));
-            if (state.challenge.deliveryStatus === 'degraded') {
+            if (state.challenge.deliveryState === 'unknown') {
+                challengeCopy.append(createElement('p', 'player-center-warning-copy', 'Minecraft may or may not have received this committed request. If a code appeared, use it here; do not request a second code.'));
+            } else if (state.challenge.deliveryStatus === 'degraded') {
                 challengeCopy.append(createElement('p', 'player-center-warning-copy', 'The request was committed, but its delivery receipt could not be saved. Use the code you received; do not request a second code.'));
             }
-            challengeCopy.append(createElement('small', null, state.challenge.expiresAt
-                ? `Expires ${formatRelativeTime(state.challenge.expiresAt)} · delivery ${humanize(state.challenge.deliveryState)}`
-                : `Delivery ${humanize(state.challenge.deliveryState)}`));
+            const challengeStatus = createElement('small', null, challengeStatusText(state.challenge));
+            challengeStatus.id = 'player-center-link-challenge-status';
+            challengeCopy.appendChild(challengeStatus);
             challenge.appendChild(challengeCopy);
             const form = createElement('form', 'player-center-code-form');
-            const label = createElement('label', null, 'Private verification code');
+            const field = createElement('div', 'player-center-link-field');
+            const label = createElement('label');
             label.htmlFor = 'player-center-link-code';
             const input = createElement('input');
             input.id = 'player-center-link-code';
@@ -2002,16 +2109,31 @@
             input.type = 'text';
             input.autocomplete = 'one-time-code';
             input.spellcheck = false;
+            input.maxLength = 64;
+            input.setAttribute('autocapitalize', 'characters');
             input.required = true;
             input.disabled = state.linkPending;
+            input.setAttribute('aria-invalid', state.linkError ? 'true' : 'false');
+            const hint = createElement('small', 'player-center-field-hint', 'Enter the letters and numbers shown in Minecraft. Spaces and hyphens are okay.');
+            hint.id = 'player-center-link-code-hint';
+            const describedBy = [hint.id];
+            if (state.linkError) {
+                describedBy.push('player-center-link-code-error');
+                input.setAttribute('aria-errormessage', 'player-center-link-code-error');
+            }
+            input.setAttribute('aria-describedby', describedBy.join(' '));
+            label.append(createElement('span', null, 'Private verification code'), input);
+            field.append(label, hint);
             const verify = createButton(state.linkPending ? 'Verifying…' : 'Verify player', 'player-center-primary-button');
             verify.type = 'submit';
             verify.disabled = state.linkPending;
-            form.append(label, input, verify);
+            form.append(field, verify);
             form.addEventListener('submit', verifyChallenge);
             view.append(challenge, form);
             if (state.linkError) {
-                view.appendChild(createStateCard('error', 'Verification did not complete', state.linkError));
+                const errorCard = createStateCard('error', 'Verification did not complete', state.linkError);
+                errorCard.id = 'player-center-link-code-error';
+                view.appendChild(errorCard);
             }
             dom.view.replaceChildren(view);
             return;
@@ -2030,7 +2152,8 @@
             view.appendChild(createStateCard('empty', 'No verified online players available', 'Join the Minecraft server, wait for the roster to show Live, then refresh.'));
         } else {
             const form = createElement('form', 'player-center-link-form');
-            const label = createElement('label', null, 'Your online player');
+            const field = createElement('div', 'player-center-link-field');
+            const label = createElement('label');
             label.htmlFor = 'player-center-link-player';
             const select = createElement('select');
             select.id = 'player-center-link-player';
@@ -2041,16 +2164,21 @@
                 option.value = player.uuid;
                 select.appendChild(option);
             });
+            if (state.linkPreferredUuid && Array.from(select.options).some(option => option.value === state.linkPreferredUuid)) {
+                select.value = state.linkPreferredUuid;
+            }
+            label.append(createElement('span', null, 'Your online player'), select);
+            field.appendChild(label);
             const submit = createButton(state.linkPending ? 'Sending privately…' : 'Send private code', 'player-center-primary-button');
             submit.id = 'player-center-link-submit';
             submit.type = 'submit';
             submit.disabled = state.linkPending;
-            form.append(label, select, submit);
+            form.append(field, submit);
             form.addEventListener('submit', requestChallenge);
             view.appendChild(form);
         }
         if (state.linkError) {
-            view.appendChild(createStateCard('error', 'Challenge could not start', state.linkError));
+            view.appendChild(createStateCard('error', 'Linking could not continue', state.linkError));
         }
         const note = createElement('div', 'player-center-safety-note');
         note.append(createElement('strong', null, 'Why not NameMC alone?'));
@@ -2491,6 +2619,11 @@
         try {
             const payload = await apiRequest('/player-links/me');
             state.link = normalizeLinkPayload(payload);
+            if (state.link) {
+                clearActiveChallenge();
+                state.linkPreferredUuid = state.link.uuid;
+                state.confirmUnlink = false;
+            }
             state.linkLoaded = true;
             state.linkUnavailable = false;
         } catch (error) {
@@ -2516,8 +2649,10 @@
         if (!selectedPlayer) {
             state.linkError = 'Choose a player from a fresh, authoritative live roster.';
             renderLinkView();
+            focusAfterRender('#player-center-link-player');
             return;
         }
+        state.linkPreferredUuid = playerUuid;
         state.linkPending = true;
         state.linkError = null;
         renderLinkView();
@@ -2526,10 +2661,12 @@
                 method: 'POST',
                 body: { playerUuid }
             });
-            state.challenge = normalizeChallengePayload(payload, selectedPlayer);
-            if (!state.challenge.id) {
+            const challenge = normalizeChallengePayload(payload, selectedPlayer);
+            if (!challenge.id) {
                 throw new ApiError('The server did not return a usable challenge.', 502, payload);
             }
+            state.challenge = challenge;
+            scheduleChallengeExpiry();
         } catch (error) {
             state.linkError = error instanceof ApiError ? error.message : 'The private challenge could not be delivered.';
         } finally {
@@ -2554,6 +2691,7 @@
         if (!code) {
             state.linkError = 'Enter the private code from Minecraft.';
             renderLinkView();
+            focusAfterRender('#player-center-link-code');
             return;
         }
         state.linkPending = true;
@@ -2565,17 +2703,27 @@
                 body: { code }
             });
             state.link = normalizeLinkPayload(payload);
-            state.challenge = null;
+            clearActiveChallenge();
+            state.linkPreferredUuid = state.link && state.link.uuid;
             state.linkLoaded = true;
             state.notice = { kind: 'success', message: 'Minecraft identity linked successfully.' };
             await loadRoster({ force: true });
         } catch (error) {
             state.linkError = error instanceof ApiError ? error.message : 'The code could not be verified.';
+            if (isTerminalLinkChallengeError(error)) {
+                const errorCode = linkApiErrorCode(error);
+                clearActiveChallenge({ rememberPlayer: true });
+                state.linkError += errorCode === 'LINK_IDENTITY_CONFLICT'
+                    ? ' Choose a different online player below.'
+                    : ' Request a new private code below.';
+            }
         } finally {
             state.linkPending = false;
             renderNotice();
             renderLinkView();
-            focusAfterRender(state.linkError ? '#player-center-link-code' : '.player-center-link-view button');
+            focusAfterRender(state.challenge
+                ? '#player-center-link-code'
+                : '#player-center-link-player, .player-center-link-view button');
         }
     }
 
@@ -2583,13 +2731,16 @@
         if (state.linkPending) {
             return;
         }
+        state.linkError = null;
         state.linkPending = true;
         renderLinkView();
         try {
             await apiRequest('/player-links/me', { method: 'DELETE' });
+            state.linkPreferredUuid = state.link && state.link.uuid;
             state.link = null;
-            state.challenge = null;
+            clearActiveChallenge();
             state.confirmUnlink = false;
+            state.linkError = null;
             state.notice = { kind: 'success', message: 'Minecraft identity unlinked.' };
             await loadRoster({ force: true });
         } catch (error) {
@@ -3158,6 +3309,7 @@
         freshnessTimer = global.setInterval(() => {
             renderHeader();
             refreshLinkRosterViewIfNeeded();
+            refreshChallengeExpiry();
         }, 5000);
     }
 
@@ -3172,6 +3324,7 @@
             global.clearInterval(freshnessTimer);
             freshnessTimer = null;
         }
+        clearChallengeExpiryTimer();
         if (rosterController) {
             rosterController.abort();
         }
@@ -3203,7 +3356,12 @@
             mergePlayer,
             overlayRealtimeRoster,
             authoritativeOnlinePlayers,
+            normalizeLinkPayload,
             normalizeChallengePayload,
+            linkApiErrorCode,
+            isTerminalLinkChallengeError,
+            challengeHasExpired,
+            challengeStatusText,
             isStaleRevision,
             isStaleRosterSnapshot,
             trendPoints,

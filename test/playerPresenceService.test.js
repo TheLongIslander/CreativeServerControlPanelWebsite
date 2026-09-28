@@ -118,6 +118,95 @@ test('management roster takes authoritative precedence', async () => {
   await service.shutdown();
 });
 
+test('expected management unavailability stays quiet while log fallback polling continues', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'player-presence-management-offline-'));
+  const logPath = path.join(root, 'latest.log');
+  fs.writeFileSync(logPath, [
+    `[12:00:00] [User Authenticator #1/INFO]: UUID of player Steve is ${uuid}`,
+    '[12:00:01] [Server thread/INFO]: Steve joined the game',
+    ''
+  ].join('\n'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const warnings = [];
+  const managementClient = {
+    async start() {},
+    async stop() {},
+    async listPlayers() {
+      throw Object.assign(new Error('Minecraft management protocol is unavailable.'), {
+        code: 'MANAGEMENT_UNAVAILABLE',
+        retryable: true
+      });
+    },
+    on() {},
+    off() {}
+  };
+  const service = createPlayerPresenceService({
+    context: { id: 'default', logPath, identityMode: 'online' },
+    processService: {
+      getSnapshot: () => ({ running: true, runtimeKey: 'management-startup-window' }),
+      on() {},
+      off() {}
+    },
+    managementClient,
+    pollIntervalMs: 60_000,
+    logger: { warn(...parts) { warnings.push(parts.join(' ')); } }
+  });
+
+  await service.initialize();
+  await service.refreshNow();
+  await service.refreshNow();
+
+  assert.equal(warnings.length, 0, 'normal management startup/offline retries must not flood the terminal');
+  assert.equal(service.getSnapshot().roster.quality, 'best_effort');
+  assert.deepEqual(service.getSnapshot().players.map(player => player.name), ['Steve']);
+  await service.shutdown();
+});
+
+test('unexpected management roster failures warn once per failure transition', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'player-presence-management-warning-'));
+  const logPath = path.join(root, 'latest.log');
+  fs.writeFileSync(logPath, '');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const warnings = [];
+  let failing = true;
+  const managementClient = {
+    async start() {},
+    async stop() {},
+    async listPlayers() {
+      if (failing) throw Object.assign(new Error('Invalid roster payload.'), { code: 'MANAGEMENT_INVALID_RESPONSE' });
+      return [{ id: uuid, name: 'Steve' }];
+    },
+    on() {},
+    off() {}
+  };
+  const service = createPlayerPresenceService({
+    context: { id: 'default', logPath, identityMode: 'online' },
+    processService: {
+      getSnapshot: () => ({ running: true, runtimeKey: 'management-warning-transition' }),
+      on() {},
+      off() {}
+    },
+    managementClient,
+    pollIntervalMs: 60_000,
+    logger: { warn(...parts) { warnings.push(parts.join(' ')); } }
+  });
+
+  await service.initialize();
+  await service.refreshNow();
+  await service.refreshNow();
+  assert.equal(warnings.length, 1, 'an unchanged unexpected failure is logged only once');
+  assert.match(warnings[0], /Invalid roster payload/u);
+
+  failing = false;
+  await service.refreshNow();
+  assert.equal(service.getSnapshot().roster.quality, 'authoritative');
+
+  failing = true;
+  await service.refreshNow();
+  assert.equal(warnings.length, 2, 'recovery resets warning suppression for a later failure transition');
+  await service.shutdown();
+});
+
 test('management snapshots apply once and degraded cached data is never authoritative', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'player-presence-snapshot-'));
   const logPath = path.join(root, 'latest.log');

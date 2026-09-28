@@ -16,6 +16,7 @@ const {
   createPlayerAccessService
 } = require('../backend/services/playerAccessService');
 const { createPlayerStore } = require('../backend/db/playerStore');
+const { PriorityMutex } = require('../backend/utils/priorityMutex');
 
 const UUID_A = '00000000-0000-4000-8000-000000000001';
 const UUID_B = '00000000-0000-4000-8000-000000000002';
@@ -240,6 +241,83 @@ test('management client has non-throwing disabled snapshots, bounded timeouts, r
   assert.equal(JSON.stringify(warnings).includes(SECRET), false);
 });
 
+test('management client quietly retries expected offline refusals but reports unexpected failures safely', async t => {
+  class FailingSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.readyState = 0;
+    }
+
+    close() { this.readyState = 3; }
+    terminate() { this.close(); }
+  }
+
+  const sockets = [];
+  const warnings = [];
+  const client = createMinecraftManagementClient({
+    serverId: 'default',
+    url: 'ws://127.0.0.1:25585/',
+    secret: SECRET,
+    enabled: true,
+    reconnectMinMs: 5,
+    reconnectMaxMs: 5,
+    reconnectJitter: 0,
+    webSocketFactory() {
+      const socket = new FailingSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    logger: { warn(...args) { warnings.push(args); } }
+  });
+  t.after(() => client.stop());
+
+  const started = client.start();
+  await waitFor(() => sockets.length === 1, 'initial management connection');
+  sockets[0].emit('error', Object.assign(new Error('Minecraft is offline'), {
+    code: 'ECONNREFUSED'
+  }));
+  await started;
+  await waitFor(() => sockets.length === 2, 'first offline retry');
+  sockets[1].emit('error', Object.assign(new Error('Minecraft is still offline'), {
+    code: 'ECONNREFUSED'
+  }));
+  await waitFor(() => sockets.length === 3, 'second offline retry');
+  assert.equal(warnings.length, 0);
+  assert.equal(client.getStatus().state, 'connecting');
+
+  sockets[2].emit('error', Object.assign(new Error(`unexpected ${SECRET}`), {
+    code: `EACCES-${SECRET}`
+  }));
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0][0], 'Minecraft management protocol event.');
+  assert.deepEqual(warnings[0][1], {
+    code: 'connection-error',
+    serverId: 'default',
+    cause: 'EACCES-[REDACTED]'
+  });
+  assert.equal(JSON.stringify(warnings).includes(SECRET), false);
+});
+
+test('remote management requires wss while loopback management may use ws', () => {
+  assert.doesNotThrow(() => createMinecraftManagementClient({
+    serverId: 'default',
+    url: 'ws://127.0.0.1:25585/',
+    enabled: false
+  }));
+  assert.throws(() => createMinecraftManagementClient({
+    serverId: 'default',
+    url: 'ws://management.example.test:25585/',
+    allowRemote: true,
+    enabled: false
+  }), /remote management protocol must use wss:\/\//u);
+  assert.doesNotThrow(() => createMinecraftManagementClient({
+    serverId: 'default',
+    url: 'wss://management.example.test:25585/',
+    allowRemote: true,
+    enabled: false
+  }));
+});
+
 function makeClock(iso = '2026-08-30T20:00:00.000Z') {
   let time = new Date(iso).getTime();
   return {
@@ -328,6 +406,143 @@ function createLinkStore(clock) {
   };
 }
 
+test('link issuance is serialized with lifecycle operations and gated by readiness', async () => {
+  const clock = makeClock();
+  const store = createLinkStore(clock);
+  const mutex = new PriorityMutex();
+  const sharedState = {
+    maintenanceMode: false,
+    shutdownInProgress: false,
+    updateLocked: false
+  };
+  let runtime = { state: 'ready', running: true, ready: true };
+  let refreshCalls = 0;
+  let deliveries = 0;
+  const roster = {
+    getSnapshot: () => ({
+      serverId: 'default', observedAt: clock.iso(),
+      roster: { quality: 'authoritative', observedAt: clock.iso(), serverRunning: runtime.running },
+      players: [{ uuid: UUID_A, name: 'Alice', quality: 'authoritative' }]
+    }),
+    refreshNow() {
+      refreshCalls += 1;
+      return this.getSnapshot();
+    },
+    resolveOnlinePlayer({ uuid, name }) {
+      return uuid === UUID_A || name === 'Alice'
+        ? { uuid: UUID_A, name: 'Alice', quality: 'authoritative' }
+        : null;
+    }
+  };
+  const service = createPlayerLinkService({
+    store,
+    roster,
+    tellrawTransport: {
+      async sendPrivate() {
+        deliveries += 1;
+        return { acceptance: 'accepted' };
+      }
+    },
+    processService: { getSnapshot: () => runtime, operationMutex: mutex },
+    sharedState,
+    hmacSecret: 'lifecycle-link-hmac-secret-at-least-32-bytes',
+    now: clock.now,
+    randomBytes: size => Buffer.alloc(size, 1)
+  });
+
+  let releaseLifecycle;
+  let markLifecycleStarted;
+  const lifecycleStarted = new Promise(resolve => { markLifecycleStarted = resolve; });
+  const lifecycleGate = new Promise(resolve => { releaseLifecycle = resolve; });
+  const lifecycleOperation = mutex.runExclusive(async () => {
+    markLifecycleStarted();
+    await lifecycleGate;
+  });
+  await lifecycleStarted;
+  const challenge = service.createChallenge({
+    serverId: 'default', userId: 'u1', playerUuid: UUID_A
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(refreshCalls, 0);
+  assert.equal(deliveries, 0);
+
+  releaseLifecycle();
+  await lifecycleOperation;
+  await challenge;
+  assert.equal(refreshCalls, 1);
+  assert.equal(deliveries, 1);
+
+  sharedState.maintenanceMode = true;
+  await assert.rejects(
+    service.createChallenge({ serverId: 'default', userId: 'u2', playerUuid: UUID_A }),
+    error => error.code === 'LINK_SERVER_LOCKED' && error.status === 423
+  );
+  sharedState.maintenanceMode = false;
+  runtime = { state: 'stopping', running: true, ready: false };
+  await assert.rejects(
+    service.createChallenge({ serverId: 'default', userId: 'u2', playerUuid: UUID_A }),
+    error => error.code === 'LINK_SERVER_NOT_READY' && error.status === 409
+  );
+  assert.equal(refreshCalls, 1);
+  assert.equal(deliveries, 1);
+});
+
+test('link issuance refreshes and revalidates the unique UUID-name mapping before tellraw', async () => {
+  const clock = makeClock();
+  const store = createLinkStore(clock);
+  let players = [{ uuid: UUID_A, name: 'Alice', quality: 'authoritative' }];
+  let refreshCalls = 0;
+  let deliveries = 0;
+  const roster = {
+    getSnapshot: () => ({
+      serverId: 'default', observedAt: clock.iso(),
+      roster: { quality: 'authoritative', observedAt: clock.iso(), serverRunning: true },
+      players: players.map(player => ({ ...player }))
+    }),
+    refreshNow() {
+      refreshCalls += 1;
+      return this.getSnapshot();
+    },
+    resolveOnlinePlayer({ uuid, name }) {
+      const matches = players.filter(player => (
+        (uuid && player.uuid === uuid) || (name && player.name.toLowerCase() === name.toLowerCase())
+      ));
+      return matches.length === 1 ? { ...matches[0] } : null;
+    }
+  };
+  const createStoredChallenge = store.createPlayerLinkChallenge.bind(store);
+  store.createPlayerLinkChallenge = async input => {
+    const result = await createStoredChallenge(input);
+    players = [
+      { uuid: UUID_A, name: 'Alice', quality: 'authoritative' },
+      { uuid: UUID_B, name: 'Alice', quality: 'authoritative' }
+    ];
+    return result;
+  };
+  const service = createPlayerLinkService({
+    store,
+    roster,
+    tellrawTransport: {
+      async sendPrivate() {
+        deliveries += 1;
+        return { acceptance: 'accepted' };
+      }
+    },
+    hmacSecret: 'revalidation-link-hmac-secret-at-least-32-bytes',
+    now: clock.now,
+    randomBytes: size => Buffer.alloc(size, 1)
+  });
+
+  await assert.rejects(
+    service.createChallenge({ serverId: 'default', userId: 'u1', playerUuid: UUID_A }),
+    error => error.code === 'LINK_ROSTER_NOT_AUTHORITATIVE' && error.status === 503
+  );
+  assert.equal(refreshCalls, 1);
+  assert.equal(deliveries, 0);
+  assert.equal(store.challenges.length, 1);
+  assert.ok(store.challenges[0].canceledAt);
+});
+
 test('reverse link challenges persist only HMACs, require authoritative online UUIDs, and resist replay', async () => {
   const clock = makeClock();
   const store = createLinkStore(clock);
@@ -336,11 +551,13 @@ test('reverse link challenges persist only HMACs, require authoritative online U
     getSnapshot() {
       return {
         serverId: 'default', observedAt: clock.iso(),
-        roster: { quality: 'authoritative', observedAt: clock.iso() }
+        roster: { quality: 'authoritative', observedAt: clock.iso() },
+        players: [{ uuid: UUID_A, name: 'Alice', quality: 'authoritative' }]
       };
     },
-    resolveOnlinePlayer({ uuid }) {
-      return uuid === UUID_A
+    refreshNow() { return this.getSnapshot(); },
+    resolveOnlinePlayer({ uuid, name }) {
+      return uuid === UUID_A || name === 'Alice'
         ? { uuid: UUID_A, name: 'Alice', quality: 'authoritative' }
         : null;
     }
@@ -400,8 +617,16 @@ test('link challenges enforce TTL, creation rate, attempt lockout, roster freshn
   const service = createPlayerLinkService({
     store,
     roster: {
-      getSnapshot: () => ({ serverId: 'default', observedAt, available, roster: { quality } }),
-      resolveOnlinePlayer: () => ({ uuid: UUID_A, name: 'Alice', quality: playerQuality })
+      getSnapshot() {
+        return {
+          serverId: 'default', observedAt, available, roster: { quality },
+          players: [{ uuid: UUID_A, name: 'Alice', quality: playerQuality }]
+        };
+      },
+      refreshNow() { return this.getSnapshot(); },
+      resolveOnlinePlayer: ({ uuid, name }) => (uuid === UUID_A || name === 'Alice'
+        ? { uuid: UUID_A, name: 'Alice', quality: playerQuality }
+        : null)
     },
     tellrawTransport: {
       async sendPrivate() {
@@ -467,9 +692,13 @@ test('link challenge delivery bookkeeping failures never trigger a second secret
   const roster = {
     getSnapshot: () => ({
       serverId: 'default', observedAt: clock.iso(), available: true,
-      roster: { quality: 'authoritative' }
+      roster: { quality: 'authoritative' },
+      players: [{ uuid: UUID_A, name: 'Alice', quality: 'authoritative' }]
     }),
-    resolveOnlinePlayer: () => ({ uuid: UUID_A, name: 'Alice', quality: 'authoritative' })
+    refreshNow() { return this.getSnapshot(); },
+    resolveOnlinePlayer: ({ uuid, name }) => (uuid === UUID_A || name === 'Alice'
+      ? { uuid: UUID_A, name: 'Alice', quality: 'authoritative' }
+      : null)
   };
   const deliveredStore = createLinkStore(clock);
   deliveredStore.markPlayerLinkChallengeDelivery = async () => { throw new Error('marker unavailable'); };
@@ -914,9 +1143,13 @@ test('link and access services interoperate with the durable player store contra
       getSnapshot: () => ({
         serverId: 'default',
         observedAt: clock.iso(),
-        roster: { quality: 'authoritative', observedAt: clock.iso() }
+        roster: { quality: 'authoritative', observedAt: clock.iso() },
+        players: [{ uuid: UUID_A, name: 'Alice', quality: 'authoritative' }]
       }),
-      resolveOnlinePlayer: () => ({ uuid: UUID_A, name: 'Alice', quality: 'authoritative' })
+      refreshNow() { return this.getSnapshot(); },
+      resolveOnlinePlayer: ({ uuid, name }) => (uuid === UUID_A || name === 'Alice'
+        ? { uuid: UUID_A, name: 'Alice', quality: 'authoritative' }
+        : null)
     },
     tellrawTransport: {
       async sendPrivate({ message }) {

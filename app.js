@@ -119,6 +119,7 @@ function createRuntime(overrides = {}) {
       playerRuntime = createPlayerRuntime({
         env,
         processService,
+        sharedState: state,
         realtimeHub,
         consoleTransport,
         usersDb: runtimeUsersDb,

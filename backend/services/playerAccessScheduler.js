@@ -1,6 +1,12 @@
 /* Purpose: Restart-safe periodic reconciliation of durable Player Center access grants. */
 
 const DEFAULT_INTERVAL_MS = 60 * 1000;
+const QUIET_ERROR_CODES = new Set([
+  // The management endpoint disappears whenever Minecraft is intentionally
+  // offline. Reconciliation must keep retrying, but that expected state should
+  // not produce a warning on every scheduler tick.
+  'ACCESS_ALLOWLIST_UNAVAILABLE'
+]);
 
 function createPlayerAccessScheduler({
   serverId,
@@ -61,13 +67,19 @@ function createPlayerAccessScheduler({
         }
         return result;
       } catch (error) {
+        const previousStatus = status;
+        const errorCode = error.code || 'access_reconciliation_failed';
         status = {
           ...status,
           state: 'degraded',
           observedAt: timestamp(),
-          errorCode: error.code || 'access_reconciliation_failed'
+          errorCode
         };
-        logger.warn('Player access reconciliation degraded:', error.message);
+        const transitioned = previousStatus.state !== 'degraded'
+          || previousStatus.errorCode !== errorCode;
+        if (transitioned && !QUIET_ERROR_CODES.has(errorCode)) {
+          logger.warn('Player access reconciliation degraded:', error.message);
+        }
         return null;
       } finally {
         running = null;

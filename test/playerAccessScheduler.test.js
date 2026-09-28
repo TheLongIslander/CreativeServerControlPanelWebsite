@@ -54,6 +54,64 @@ test('access scheduler degrades independently and retries', async () => {
   await scheduler.shutdown();
 });
 
+test('access scheduler quietly retries while the Minecraft allowlist is offline', async () => {
+  const warnings = [];
+  const scheduler = createPlayerAccessScheduler({
+    serverId: 'default',
+    accessService: {
+      async reconcileServer() {
+        throw Object.assign(new Error('The Minecraft allowlist is unavailable.'), {
+          code: 'ACCESS_ALLOWLIST_UNAVAILABLE'
+        });
+      }
+    },
+    setTimer() { return { unref() {} }; },
+    clearTimer() {},
+    logger: { warn(...args) { warnings.push(args); } }
+  });
+
+  await scheduler.initialize();
+  await scheduler.reconcileNow();
+  await scheduler.reconcileNow();
+
+  assert.equal(scheduler.getStatus().state, 'degraded');
+  assert.equal(scheduler.getStatus().errorCode, 'ACCESS_ALLOWLIST_UNAVAILABLE');
+  assert.deepEqual(warnings, []);
+  await scheduler.shutdown();
+});
+
+test('access scheduler warns once per unexpected failure transition and again after recovery', async () => {
+  const warnings = [];
+  let available = false;
+  const scheduler = createPlayerAccessScheduler({
+    serverId: 'default',
+    accessService: {
+      async reconcileServer() {
+        if (available) {
+          return { reconciledAt: '2026-08-30T20:00:00.000Z', results: [] };
+        }
+        throw Object.assign(new Error('unexpected failure'), { code: 'ACCESS_TEST_FAILURE' });
+      }
+    },
+    setTimer() { return { unref() {} }; },
+    clearTimer() {},
+    logger: { warn(...args) { warnings.push(args); } }
+  });
+
+  await scheduler.initialize();
+  await scheduler.reconcileNow();
+  assert.equal(warnings.length, 1);
+
+  available = true;
+  await scheduler.reconcileNow();
+  assert.equal(scheduler.getStatus().state, 'available');
+
+  available = false;
+  await scheduler.reconcileNow();
+  assert.equal(warnings.length, 2);
+  await scheduler.shutdown();
+});
+
 test('access scheduler surfaces partial per-subject reconciliation failures', async () => {
   const scheduler = createPlayerAccessScheduler({
     serverId: 'default',

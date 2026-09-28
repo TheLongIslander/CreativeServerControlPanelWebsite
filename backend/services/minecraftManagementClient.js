@@ -12,6 +12,7 @@ const SOURCE = 'minecraft-management-protocol';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const PLAYER_NAME_PATTERN = /^[A-Za-z0-9_]{1,16}$/u;
 const SECRET_PATTERN = /^[A-Za-z0-9]{40}$/u;
+const EXPECTED_OFFLINE_ERROR_CODES = new Set(['ECONNREFUSED']);
 const REQUIRED_ROSTER_METHOD = 'minecraft:players';
 const ALLOWLIST_METHODS = Object.freeze({
   read: 'minecraft:allowlist',
@@ -60,6 +61,13 @@ function redactSecret(value, secret) {
   return output.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/giu, 'Bearer [REDACTED]');
 }
 
+function isExpectedOfflineConnectionError(error) {
+  const code = error && typeof error.code === 'string'
+    ? error.code.toUpperCase()
+    : '';
+  return EXPECTED_OFFLINE_ERROR_CODES.has(code);
+}
+
 function isLoopbackHostname(hostname) {
   const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/gu, '');
   if (normalized === 'localhost' || normalized === '::1') return true;
@@ -80,8 +88,12 @@ function validateManagementUrl(value, { allowRemote }) {
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new TypeError('management protocol URL must not contain credentials, query parameters, or fragments');
   }
-  if (!allowRemote && !isLoopbackHostname(parsed.hostname)) {
+  const loopback = isLoopbackHostname(parsed.hostname);
+  if (!allowRemote && !loopback) {
     throw new TypeError('management protocol must use a loopback host unless allowRemote is explicitly enabled');
+  }
+  if (!loopback && parsed.protocol !== 'wss:') {
+    throw new TypeError('remote management protocol must use wss://');
   }
   return parsed.toString();
 }
@@ -364,7 +376,12 @@ class MinecraftManagementClient extends EventEmitter {
     socket.on('close', () => this.#handleDisconnect(socket, 'connection-closed'));
     socket.on('error', error => {
       if (this.socket !== socket) return;
-      this.#warn('connection-error', error);
+      // The panel commonly starts before the dedicated server. A refused
+      // loopback connection is therefore an expected offline state, and the
+      // reconnect loop must not turn it into recurring console warnings.
+      if (!isExpectedOfflineConnectionError(error)) {
+        this.#warn('connection-error', error);
+      }
       this.#handleDisconnect(socket, 'connection-error');
       try { socket.terminate(); } catch (_) { /* already closed */ }
     });
@@ -610,7 +627,7 @@ class MinecraftManagementClient extends EventEmitter {
   }
 
   #handleConnectFailure(error, reason) {
-    this.#warn(reason, error);
+    if (!isExpectedOfflineConnectionError(error)) this.#warn(reason, error);
     this.state = 'degraded';
     this.reason = reason;
     this.#settleStart();

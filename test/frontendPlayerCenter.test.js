@@ -64,8 +64,8 @@ test('Player Center glass mode remains translucent and Search names has one purp
   const html = source('public/index.html');
   const css = source('public/playerCenter.css');
 
-  assert.match(html, /playerCenter\.css\?v=20260831-13/);
-  assert.match(html, /playerCenter\.js\?v=20260831-16/);
+  assert.match(html, /playerCenter\.css\?v=20260831-14/);
+  assert.match(html, /playerCenter\.js\?v=20260831-17/);
   assert.match(html, /class="player-center-search-shell" data-pointer-profile="input-shell"/);
   assert.match(css, /#player-center-shell\s*\{[\s\S]*?--pc-panel:\s*#14101d;/);
   assert.match(css, /body\[data-ui-theme="glass"\] #player-center-panel\s*\{[\s\S]*?--pc-panel:\s*rgba\(15, 10, 23, 0\.52\);/);
@@ -154,7 +154,7 @@ test('Player Center cards reuse restrained glass-only surface physics', () => {
   assert.match(css, /\[data-pointer-profile="surface"\]\.is-lit[\s\S]*?translate\(var\(--tx\), var\(--ty\)\)[\s\S]*?scale\(var\(--scale\)\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pointer-profile="surface"\][\s\S]*?transform:\s*none !important;[\s\S]*?filter:\s*none !important;/);
   assert.match(css, /\.player-center-section > \.player-center-state-card\s*\{[\s\S]*?border:\s*0;/);
-  assert.match(html, /script\.js\?v=20260831-8&amp;pc=20260831-16/);
+  assert.match(html, /script\.js\?v=20260831-8&amp;pc=20260831-17/);
 });
 
 test('player list normalization supports live DTOs and world-file profile fields', () => {
@@ -603,6 +603,51 @@ test('link challenge normalization preserves committed degraded delivery receipt
   assert.equal(challenge.id, 'challenge-1');
   assert.equal(challenge.deliveryState, 'delivered');
   assert.equal(challenge.deliveryStatus, 'degraded');
+  assert.equal(challenge.committed, true);
+  assert.equal(challenge.retryable, false);
+});
+
+test('Link me consumes backend link DTO names and recognizes terminal challenge recovery states', () => {
+  const helpers = loadPlayerCenter().__testing;
+  const uuid = '12345678-1234-4234-9234-123456789abc';
+  const link = helpers.normalizeLinkPayload({
+    serverId: 'default',
+    link: {
+      playerUuid: uuid,
+      verifiedAt: '2026-08-31T17:00:00.000Z',
+      verificationMethod: 'private-tellraw-reverse-challenge-v1'
+    }
+  });
+
+  assert.equal(link.uuid, uuid);
+  assert.equal(link.source, 'private-tellraw-reverse-challenge-v1');
+  assert.equal(helpers.linkApiErrorCode({
+    payload: { error: { code: 'LINK_CHALLENGE_EXPIRED' } }
+  }), 'LINK_CHALLENGE_EXPIRED');
+  assert.equal(helpers.isTerminalLinkChallengeError({
+    payload: { error: { code: 'LINK_CHALLENGE_EXPIRED' } }
+  }), true);
+  assert.equal(helpers.isTerminalLinkChallengeError({
+    payload: { error: { code: 'LINK_CODE_INVALID' } }
+  }), false);
+  assert.equal(helpers.challengeHasExpired({ expiresAt: '2026-08-31T16:59:59.000Z' }, Date.parse('2026-08-31T17:00:00.000Z')), true);
+  assert.equal(helpers.challengeHasExpired({ expiresAt: '2026-08-31T17:00:01.000Z' }, Date.parse('2026-08-31T17:00:00.000Z')), false);
+});
+
+test('Link me renders nested labeled controls with bounded, described verification input and recovery timer', () => {
+  const js = source('public/playerCenter.js');
+  const css = source('public/playerCenter.css');
+
+  assert.match(js, /label\.append\(createElement\('span', null, 'Private verification code'\), input\);/);
+  assert.match(js, /field\.append\(label, hint\);[\s\S]*?form\.append\(field, verify\);/);
+  assert.match(js, /input\.maxLength = 64;/);
+  assert.match(js, /input\.setAttribute\('aria-describedby', describedBy\.join\(' '\)\);/);
+  assert.match(js, /input\.setAttribute\('aria-errormessage', 'player-center-link-code-error'\);/);
+  assert.match(js, /scheduleChallengeExpiry\(\);/);
+  assert.match(js, /clearActiveChallenge\(\{ rememberPlayer: true \}\);/);
+  assert.match(js, /createStateCard\('error', 'Link update did not complete', state\.linkError\)/);
+  assert.match(css, /\.player-center-link-field\s*\{[\s\S]*?grid-column:\s*1;/);
+  assert.match(css, /\.player-center-field-hint\s*\{[\s\S]*?font-size:\s*10px;/);
 });
 
 test('revision ordering rejects replayed and older realtime roster snapshots', () => {

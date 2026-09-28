@@ -48,6 +48,7 @@ function linkHmacSecret(env) {
 function createPlayerRuntime({
   env = process.env,
   processService,
+  sharedState = null,
   realtimeHub,
   consoleTransport,
   usersDb,
@@ -137,11 +138,13 @@ function createPlayerRuntime({
   const hmacSecret = linkHmacSecret(env);
   const playerLinkService = managementClient && hmacSecret
     ? createPlayerLinkService({
-        store: playerStore,
-        roster: presence,
-        tellrawTransport: consoleTransport,
-        hmacSecret
-      })
+      store: playerStore,
+      roster: presence,
+      tellrawTransport: consoleTransport,
+      hmacSecret,
+      processService,
+      sharedState
+    })
     : null;
   const playerAccessService = managementClient
     ? createPlayerAccessService({ store: playerStore, allowlist: managementClient })

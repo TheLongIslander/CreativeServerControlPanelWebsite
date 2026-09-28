@@ -1094,6 +1094,33 @@ npm test
 
 For diagnostics, admins can expand Chat diagnostics in the UI or call `GET /admin/chat/health`. Responses are intentionally redacted; use server-side structured logs for deeper investigation.
 
+### Player linking deployment and smoke test
+
+Player linking uses Minecraft's native Management Protocol for an authoritative UUID roster and
+the existing Screen console transport for a private `tellraw` challenge. It does not require a
+Fabric bridge.
+
+1. Use a Minecraft server version that exposes the Management Protocol. In `server.properties`,
+   enable it, bind `management-server-host` to `localhost` or another loopback address, choose a
+   fixed nonzero `management-server-port`, and keep the 40-character `management-server-secret`
+   private. Port `0` is not supported because the panel cannot discover an ephemeral port.
+2. For a same-host loopback connection, `management-server-tls-enabled=false` avoids managing a
+   local PKCS12 keystore. This sends the bearer credential without TLS on the loopback interface,
+   so never combine it with a non-loopback bind. A remote deployment must use reviewed `wss://`
+   certificate trust and explicitly enable `MINECRAFT_MANAGEMENT_ALLOW_REMOTE`.
+3. Restart Minecraft to apply `server.properties`, and restart the panel so it rereads the
+   properties and composes the linking service. Changing either process alone is insufficient.
+4. Start Minecraft through the configured `MINECRAFT_SCREEN_SESSION`, or verify that the exact
+   named Screen session exists. A manually launched server outside that session can provide a live
+   roster but cannot receive the private verification command.
+5. Join the server with the player being linked. The Link me view accepts only a fresh,
+   authoritative Management Protocol roster; latest-log fallback presence is intentionally
+   insufficient.
+6. Smoke-test with a non-production account: confirm the player is marked Live, request a code,
+   verify that only that player receives it in game, submit it once, reload Player Center, and
+   confirm the same account remains linked. Reusing the code must fail, and unlinking must remove
+   the association without changing operator, allowlist, or panel-admin permissions.
+
 ## 19. Repository Layout
 
 - `app.js`: server entrypoint and route wiring.

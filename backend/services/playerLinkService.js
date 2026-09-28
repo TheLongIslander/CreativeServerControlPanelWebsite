@@ -124,6 +124,8 @@ function createPlayerLinkService({
   roster,
   tellrawTransport,
   hmacSecret,
+  processService = null,
+  sharedState = null,
   now = () => new Date(),
   randomBytes = crypto.randomBytes,
   codeLength = DEFAULT_CODE_LENGTH,
@@ -143,8 +145,9 @@ function createPlayerLinkService({
   if (!store || requiredStoreMethods.some(method => typeof store[method] !== 'function')) {
     throw new TypeError(`playerLinkService store requires: ${requiredStoreMethods.join(', ')}`);
   }
-  if (!roster || typeof roster.resolveOnlinePlayer !== 'function' || typeof roster.getSnapshot !== 'function') {
-    throw new TypeError('playerLinkService requires an authoritative roster adapter');
+  if (!roster || typeof roster.resolveOnlinePlayer !== 'function'
+    || typeof roster.getSnapshot !== 'function' || typeof roster.refreshNow !== 'function') {
+    throw new TypeError('playerLinkService requires a refreshable authoritative roster adapter');
   }
   if (!tellrawTransport || (
     typeof tellrawTransport.sendPrivate !== 'function'
@@ -154,6 +157,13 @@ function createPlayerLinkService({
   }
   const hmacKey = Buffer.isBuffer(hmacSecret) ? Buffer.from(hmacSecret) : Buffer.from(String(hmacSecret || ''), 'utf8');
   if (hmacKey.length < 32) throw new TypeError('hmacSecret must contain at least 32 bytes');
+  if (processService && (
+    typeof processService.getSnapshot !== 'function'
+    || !processService.operationMutex
+    || typeof processService.operationMutex.runExclusive !== 'function'
+  )) {
+    throw new TypeError('playerLinkService processService requires getSnapshot and operationMutex');
+  }
   for (const [name, value] of Object.entries({
     challengeTtlMs, rateWindowMs, maxRosterAgeMs
   })) {
@@ -168,8 +178,31 @@ function createPlayerLinkService({
     throw new TypeError('codeLength must be an integer between 8 and 32');
   }
 
-  async function resolveAuthoritativePlayer(serverId, playerUuid) {
-    const snapshot = await Promise.resolve(roster.getSnapshot());
+  function assertIssuanceReady() {
+    if (sharedState && (
+      sharedState.shutdownInProgress
+      || sharedState.maintenanceMode
+      || sharedState.updateLocked
+    )) {
+      throw new PlayerLinkError(
+        'LINK_SERVER_LOCKED',
+        'Account linking is paused while the server is under maintenance.',
+        { status: 423 }
+      );
+    }
+    if (!processService) return;
+    const runtime = processService.getSnapshot();
+    if (!runtime || runtime.state !== 'ready' || runtime.running === false || runtime.ready === false) {
+      throw new PlayerLinkError(
+        'LINK_SERVER_NOT_READY',
+        'Account linking requires the Minecraft server to be ready.',
+        { status: 409 }
+      );
+    }
+  }
+
+  async function resolveAuthoritativePlayer(serverId, playerUuid, providedSnapshot = null) {
+    const snapshot = providedSnapshot || await Promise.resolve(roster.getSnapshot());
     if (snapshot && snapshot.serverId && snapshot.serverId !== serverId) {
       throw new PlayerLinkError('LINK_ROSTER_UNAVAILABLE', 'The live player roster is unavailable.', { status: 503 });
     }
@@ -178,6 +211,13 @@ function createPlayerLinkService({
         'LINK_ROSTER_NOT_AUTHORITATIVE',
         'Account linking requires the authoritative live roster.',
         { status: 503 }
+      );
+    }
+    if (snapshot && snapshot.roster && snapshot.roster.serverRunning === false) {
+      throw new PlayerLinkError(
+        'LINK_SERVER_NOT_READY',
+        'Account linking requires the Minecraft server to be ready.',
+        { status: 409 }
       );
     }
     const player = await Promise.resolve(roster.resolveOnlinePlayer({ uuid: playerUuid }));
@@ -191,12 +231,52 @@ function createPlayerLinkService({
         { status: 503 }
       );
     }
+    const nameOwner = await Promise.resolve(roster.resolveOnlinePlayer({ name: player.name }));
+    if (!nameOwner || requireUuid(nameOwner.uuid) !== playerUuid
+      || String(nameOwner.name).toLowerCase() !== String(player.name).toLowerCase()) {
+      throw new PlayerLinkError(
+        'LINK_ROSTER_NOT_AUTHORITATIVE',
+        'The live player identity could not be resolved uniquely.',
+        { status: 503 }
+      );
+    }
+    if (Array.isArray(snapshot && snapshot.players)) {
+      const nameKey = String(player.name).toLowerCase();
+      const uuidMatches = snapshot.players.filter(candidate => (
+        String(candidate && (candidate.uuid || candidate.id) || '').toLowerCase() === playerUuid
+      ));
+      const nameMatches = snapshot.players.filter(candidate => (
+        String(candidate && candidate.name || '').toLowerCase() === nameKey
+      ));
+      if (uuidMatches.length !== 1 || nameMatches.length !== 1
+        || String(nameMatches[0].uuid || nameMatches[0].id || '').toLowerCase() !== playerUuid) {
+        throw new PlayerLinkError(
+          'LINK_ROSTER_NOT_AUTHORITATIVE',
+          'The live player identity could not be resolved uniquely.',
+          { status: 503 }
+        );
+      }
+    }
     const observedAt = snapshotObservedAt(snapshot, player);
     const ageMs = observedAt ? asDate(now).getTime() - new Date(observedAt).getTime() : Infinity;
     if (!Number.isFinite(ageMs) || ageMs < -5000 || ageMs > maxRosterAgeMs) {
       throw new PlayerLinkError('LINK_ROSTER_STALE', 'The live player roster is stale.', { status: 503 });
     }
     return { uuid: playerUuid, name: String(player.name) };
+  }
+
+  async function refreshAuthoritativePlayer(serverId, playerUuid) {
+    let snapshot;
+    try {
+      snapshot = await roster.refreshNow();
+    } catch (error) {
+      throw new PlayerLinkError(
+        'LINK_ROSTER_UNAVAILABLE',
+        'The live player roster could not be refreshed.',
+        { status: 503, cause: error }
+      );
+    }
+    return resolveAuthoritativePlayer(serverId, playerUuid, snapshot);
   }
 
   async function deliverCode({ serverId, player, displayCode }) {
@@ -216,11 +296,13 @@ function createPlayerLinkService({
     }));
   }
 
-  async function createChallenge({ serverId, userId, playerUuid } = {}) {
+  async function createChallengeUnlocked({ serverId, userId, playerUuid } = {}) {
     const scopedServerId = requireIdentifier(serverId, 'serverId');
     const scopedUserId = requireIdentifier(userId, 'userId');
     const uuid = requireUuid(playerUuid);
-    const player = await resolveAuthoritativePlayer(scopedServerId, uuid);
+    assertIssuanceReady();
+    await refreshAuthoritativePlayer(scopedServerId, uuid);
+    assertIssuanceReady();
     const createdAt = asDate(now);
     const expiresAt = new Date(createdAt.getTime() + challengeTtlMs);
     const displayCode = generateChallengeCode(randomBytes, codeLength);
@@ -271,7 +353,16 @@ function createPlayerLinkService({
     }
 
     let delivery;
+    let deliveredPlayer = null;
     try {
+      // Re-read the synchronously maintained roster immediately before the
+      // command write. A leave, reconnect, duplicate-name anomaly, or runtime
+      // transition after the network refresh must invalidate this challenge
+      // rather than target a stale recyclable name.
+      assertIssuanceReady();
+      const player = await resolveAuthoritativePlayer(scopedServerId, uuid);
+      assertIssuanceReady();
+      deliveredPlayer = player;
       delivery = await deliverCode({ serverId: scopedServerId, player, displayCode });
     } catch (error) {
       if (error && error.acceptanceUncertain) {
@@ -288,7 +379,7 @@ function createPlayerLinkService({
         return {
           challengeId,
           expiresAt: expiresAt.toISOString(),
-          player,
+          player: deliveredPlayer,
           delivery: 'unknown',
           committed: true,
           deliveryStatus,
@@ -298,7 +389,7 @@ function createPlayerLinkService({
       try {
         await store.cancelPlayerLinkChallenge({
           challengeId,
-          reason: 'delivery_failed',
+          reason: error instanceof PlayerLinkError ? 'roster_revalidation_failed' : 'delivery_failed',
           at: asDate(now).toISOString()
         });
       } catch (_) {
@@ -306,6 +397,7 @@ function createPlayerLinkService({
         // create atomically supersedes any challenge whose cancellation marker
         // could not be recorded.
       }
+      if (error instanceof PlayerLinkError) throw error;
       throw new PlayerLinkError('LINK_DELIVERY_FAILED', 'The private link code could not be delivered.', {
         status: 503,
         cause: error
@@ -324,12 +416,17 @@ function createPlayerLinkService({
     return {
       challengeId,
       expiresAt: expiresAt.toISOString(),
-      player,
+      player: deliveredPlayer,
       delivery: delivery && delivery.acceptance ? delivery.acceptance : 'delivered',
       committed: true,
       deliveryStatus,
       retryable: false
     };
+  }
+
+  function createChallenge(input = {}) {
+    if (!processService) return createChallengeUnlocked(input);
+    return processService.operationMutex.runExclusive(() => createChallengeUnlocked(input));
   }
 
   async function verifyChallenge({ serverId, userId, challengeId, code } = {}) {

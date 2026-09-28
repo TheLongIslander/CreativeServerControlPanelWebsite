@@ -62,7 +62,7 @@ function createPlayerPresenceService({
   let revision = 0;
   let timer = null;
   let stopped = true;
-  let pollRunning = false;
+  let activeRefresh = null;
   let logKey = null;
   let offset = 0;
   let remainder = '';
@@ -72,6 +72,7 @@ function createPlayerPresenceService({
   let pendingRuntimeBoundary = null;
   let managementListener = null;
   let managementSnapshotVersion = 0;
+  let managementFailureKey = null;
   let processListener = null;
 
   function timestamp() {
@@ -299,10 +300,33 @@ function createPlayerPresenceService({
     }
     quality = 'authoritative';
     source = 'management_protocol';
+    managementFailureKey = null;
     revision += 1;
     observedAt = value.observedAt || timestamp();
     broadcast();
     return true;
+  }
+
+  function reportManagementFailure(err) {
+    const code = err && err.code ? String(err.code) : 'MANAGEMENT_UNKNOWN_ERROR';
+    const message = err && err.message ? String(err.message) : 'Unknown management protocol error.';
+    const failureKey = `${code}\0${message}`;
+    if (failureKey === managementFailureKey) return;
+    managementFailureKey = failureKey;
+
+    // The native endpoint comes up and goes down with Minecraft, independently
+    // from the panel. During that normal window listPlayers() is retried by the
+    // poller and the latest.log projection remains usable, so repeating a warning
+    // every poll only floods the terminal. The management client owns connection
+    // status reporting; this layer warns once per transition only for unexpected,
+    // non-retryable roster failures.
+    if (err && (err.retryable === true || [
+      'MANAGEMENT_DISABLED',
+      'MANAGEMENT_STOPPED',
+      'MANAGEMENT_UNAVAILABLE'
+    ].includes(code))) return;
+
+    logger.warn('Minecraft management roster unavailable; using log projection:', message);
   }
 
   async function readLogChunk() {
@@ -399,15 +423,15 @@ function createPlayerPresenceService({
       }
     } catch (err) {
       if (source === 'management_protocol') degradeManagementRoster('stale');
-      logger.warn('Minecraft management roster unavailable; using log projection:', err.message);
+      reportManagementFailure(err);
     }
     return false;
   }
 
   async function refreshNow() {
-    if (pollRunning || stopped) return snapshot();
-    pollRunning = true;
-    try {
+    if (stopped) return snapshot();
+    if (activeRefresh) return activeRefresh;
+    activeRefresh = (async () => {
       const runtime = processService.getSnapshot();
       const runtimeKey = runtime.runtimeKey && runtime.restartToken
         ? `${runtime.runtimeKey}:restart:${runtime.restartToken}`
@@ -468,8 +492,11 @@ function createPlayerPresenceService({
       if (changed) publish({ force: true });
       else observedAt = timestamp();
       return snapshot();
+    })();
+    try {
+      return await activeRefresh;
     } finally {
-      pollRunning = false;
+      activeRefresh = null;
     }
   }
 
@@ -498,7 +525,7 @@ function createPlayerPresenceService({
     }
     if (managementClient && typeof managementClient.start === 'function') {
       await managementClient.start().catch(err => {
-        logger.warn('Minecraft management protocol disabled or unavailable:', err.message);
+        reportManagementFailure(err);
       });
     }
     processListener = () => {

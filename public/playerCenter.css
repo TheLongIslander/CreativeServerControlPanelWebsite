@@ -1427,6 +1427,11 @@ body.control-panel #player-center-panel .player-center-trend-latest-button[hidde
     align-items: end;
 }
 
+.player-center-link-field {
+    min-width: 0;
+    grid-column: 1;
+}
+
 .player-center-link-form label,
 .player-center-code-form label,
 .player-center-access-form label,
@@ -1439,14 +1444,17 @@ body.control-panel #player-center-panel .player-center-trend-latest-button[hidde
     font-size: 11px;
 }
 
-.player-center-link-form label,
-.player-center-code-form label {
-    grid-column: 1;
-}
-
 .player-center-link-form select,
 .player-center-code-form input {
     width: 100%;
+}
+
+.player-center-field-hint {
+    display: block;
+    margin-top: 6px;
+    color: var(--pc-muted);
+    font-size: 10px;
+    line-height: 1.4;
 }
 
 .player-center-access-form {
@@ -2163,8 +2171,7 @@ body[data-color-scheme="light"] .player-center-badge[data-state="linked"] {
         grid-template-columns: minmax(0, 1fr);
     }
 
-    .player-center-link-form label,
-    .player-center-code-form label {
+    .player-center-link-field {
         grid-column: auto;
     }
 }
