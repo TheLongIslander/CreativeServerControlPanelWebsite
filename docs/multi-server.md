@@ -58,3 +58,7 @@ Manual Player Center death corrections can be stored in `data/servers/<id>/playe
 Run `npm test`. Tests cover concurrent slot admission, independent stores, profile persistence/collisions/access, scoped realtime delivery and revocation, file containment and disabled connections, and browser context isolation.
 
 Before deployment, preserve the repository including ignored databases/configuration and the server folders. Use consistent SQLite snapshots when the panel is running. Restore the matching repository/configuration/database checkpoint together after stopping the panel; retain separately created worlds/backups rather than deleting them during rollback. Local operator-specific checkpoint and disposable-test receipts are recorded in `plans.md` and the Downloads test directories.
+
+### Per-server update pipeline
+
+In **Admin → Server Profiles → Edit profile**, uncheck **Enable update pipeline** for modpacks or installations pinned to specific versions. Stop the server before saving profile changes. The setting defaults to enabled, persists across panel restarts, and only affects that profile. Disabling it stops background update discovery and blocks preflight checks, upgrades, downgrades, and update snapshot restores. Installed-version information and historical update records remain available. Re-enable the setting to use the pipeline again.

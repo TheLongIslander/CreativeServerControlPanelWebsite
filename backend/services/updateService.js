@@ -774,7 +774,6 @@ module.exports = function createUpdateService({
     excludeVersion,
     operation
   }) {
-    requireUpdatePipeline();
     const normalizedOperation = normalizeUpdateOperation(operation);
     const releaseEntries = getReleaseEntries(manifest);
     return releaseEntries.filter(entry => {
@@ -857,7 +856,6 @@ module.exports = function createUpdateService({
     const manifest = providedManifest || await fetchMinecraftVersionManifest();
     const candidates = buildCandidateEntries({
       manifest,
-      updatePipelineEnabled,
       currentVersion,
       latestVersion,
       excludeVersion,
@@ -1165,6 +1163,7 @@ module.exports = function createUpdateService({
     }
 
     return {
+      updatePipelineEnabled,
       currentVersion,
       latestVersion,
       latestMinecraftVersion: latestMinecraftVersion || null,
@@ -1233,6 +1232,7 @@ module.exports = function createUpdateService({
     operation = 'update',
     advanced = false
   } = {}) {
+    requireUpdatePipeline();
     const normalizedOperation = normalizeUpdateOperation(operation);
     const status = await getStatus({ forceRefresh: true });
     const latestVersion = status.latestVersion;

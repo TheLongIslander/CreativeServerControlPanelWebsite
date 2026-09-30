@@ -278,3 +278,22 @@ test('RAM sync restores the script if profile persistence fails', async t => {
     { launch: { heapMb: 2048 } }, async () => { throw new Error('Database unavailable'); }), /Database unavailable/);
   assert.equal(fs.readFileSync(initial.startCommandPath, 'utf8'), original);
 });
+
+test('update pipeline setting defaults on, validates booleans, and persists independently per profile', async t => {
+  const { profile, env, registry } = await fixture(t);
+  assert.equal(publicServerContext(registry.require('default')).updatePipelineEnabled, true);
+  await registry.register(profile('modpack', 25562, { updatePipelineEnabled: false }));
+  await registry.update('modpack', { displayName: 'Pinned modpack' });
+  assert.equal(registry.require('modpack').updatePipelineEnabled, false);
+  for (const value of ['false', 0, null]) {
+    await assert.rejects(() => registry.update('modpack', { updatePipelineEnabled: value }), /must be boolean/);
+  }
+  await registry.close();
+  const reopened = createServerRegistry({ env });
+  t.after(() => reopened.close());
+  await reopened.initialize();
+  assert.equal(publicServerContext(reopened.require('modpack')).updatePipelineEnabled, false);
+  assert.equal(reopened.require('default').updatePipelineEnabled, true);
+  await reopened.update('modpack', { updatePipelineEnabled: true });
+  assert.equal(reopened.require('modpack').updatePipelineEnabled, true);
+});

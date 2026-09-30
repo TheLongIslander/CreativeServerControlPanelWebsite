@@ -39,9 +39,12 @@ test('admin RAM editor fetches current script values and sends sync or override 
   assert.equal($('profile-heap').value, 4096);
   assert.equal($('profile-ram-override').checked, false);
   assert.match($('profile-ram-help').textContent, /updates the startup script/);
+  assert.equal($('profile-update-pipeline').checked, true);
+  $('profile-update-pipeline').checked = false;
   $('profile-heap').value = '8192';
   $('profile-initial-heap').value = '512';
   await $('server-profile-form').fire('submit');
+  assert.equal(writes[0].updatePipelineEnabled, false);
   assert.equal(writes[0].launch.ramOverride, false);
   assert.equal(writes[0].launch.heapMb, 8192);
   assert.equal(writes[0].scriptRevision, 'a'.repeat(64));
