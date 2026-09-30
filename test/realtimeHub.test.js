@@ -465,3 +465,128 @@ test('periodic revalidation closes invalidated sessions and close clears timers'
   await runtime.close();
   assert.equal(cleared.length, 2);
 });
+
+test('multi-server upgrade and initial status resolve exact authorized identities', async t => {
+  const snapshots = [];
+  const runtime = await createHubServer({
+    authorizeServer(user, id) { return ['default', 'survival'].includes(id) && !(user.id === 8 && id === 'survival'); },
+    getStatusSnapshot(user, serverId) {
+      snapshots.push({ userId: user.id, serverId });
+      return { type: 'minecraft-chat-session-status', stateEpoch: serverId, stateRevision: 1 };
+    }
+  });
+  t.after(() => runtime.close());
+  assert.equal(await rejectionStatus(runtime.url('/ws?serverId=unknown'), { cookie: 'auth_token=7' }), 404);
+  assert.equal(await rejectionStatus(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=8' }), 404);
+  assert.equal(await rejectionStatus(runtime.url('/ws?serverId=default&serverId=survival'), { cookie: 'auth_token=7' }), 400);
+  assert.equal(await rejectionStatus(runtime.url('/ws?serverId=..%2Fsurvival'), { cookie: 'auth_token=7' }), 404);
+  const first = await connect(runtime.url('/ws'), { cookie: 'auth_token=7' });
+  const second = await connect(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=7' });
+  await waitFor(() => first.messages.length === 1 && second.messages.length === 1);
+  assert.deepEqual(snapshots, [{ userId: 7, serverId: 'default' }, { userId: 7, serverId: 'survival' }]);
+  assert.equal(first.messages[0].serverId, 'default');
+  assert.equal(second.messages[0].serverId, 'survival');
+  assert.equal(second.messages[0].stateEpoch, 'survival');
+});
+
+test('server and user broadcasts cannot cross socket server scope and maintenance remains global', async t => {
+  const runtime = await createHubServer({ authorizeServer: () => true });
+  t.after(() => runtime.close());
+  const creative = await connect(runtime.url('/ws'), { cookie: 'auth_token=7' });
+  const survival = await connect(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=7' });
+  const otherUser = await connect(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=8' });
+  const publicClient = await connect(runtime.url('/ws/public'));
+  await waitFor(() => creative.messages.length && survival.messages.length && otherUser.messages.length);
+  runtime.hub.broadcastServer('survival', { type: 'survival-only' });
+  runtime.hub.broadcastUser(7, { type: 'owner-only', serverId: 'survival' });
+  runtime.hub.broadcastAuthenticated({ type: 'legacy-creative' });
+  runtime.hub.broadcastAuthenticated({ type: 'scoped-creative', serverId: 'default' });
+  runtime.hub.broadcastMaintenance({ reason: 'panel stop', serverId: 'survival' });
+  await waitFor(() => creative.messages.length === 4 && survival.messages.length === 4 && otherUser.messages.length === 3 && publicClient.messages.length === 1);
+  assert.deepEqual(creative.messages.map(message => message.type), ['minecraft-chat-session-status', 'legacy-creative', 'scoped-creative', 'maintenance']);
+  assert.deepEqual(survival.messages.map(message => message.type), ['minecraft-chat-session-status', 'survival-only', 'owner-only', 'maintenance']);
+  assert.deepEqual(otherUser.messages.map(message => message.type), ['minecraft-chat-session-status', 'survival-only', 'maintenance']);
+  assert.equal(survival.messages[1].serverId, 'survival');
+  assert.equal(Object.hasOwn(publicClient.messages[0], 'serverId'), false);
+});
+
+test('access revocation immediately closes only denied server scopes and every send rechecks access', async t => {
+  const denied = new Set();
+  const runtime = await createHubServer({ authorizeServer: (user, id) => !denied.has(`${user.id}:${id}`) });
+  t.after(() => runtime.close());
+  const creative = await connect(runtime.url('/ws'), { cookie: 'auth_token=7' });
+  const survival = await connect(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=7' });
+  const otherUser = await connect(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=8' });
+  await waitFor(() => creative.messages.length && survival.messages.length && otherUser.messages.length);
+  const closed = new Promise(resolve => survival.socket.once('close', code => resolve(code)));
+  denied.add('7:survival');
+  runtime.hub.disconnectUnauthorized();
+  runtime.hub.broadcastServer('survival', { type: 'after-restriction' });
+  assert.equal(await closed, 1008);
+  await waitFor(() => otherUser.messages.length === 2);
+  assert.equal(survival.messages.length, 1);
+  assert.equal(creative.socket.readyState, WebSocket.OPEN);
+  const creativeClosed = new Promise(resolve => creative.socket.once('close', code => resolve(code)));
+  denied.add('7:default');
+  runtime.hub.broadcastUser(7, { type: 'must-not-deliver', serverId: 'default' });
+  assert.equal(await creativeClosed, 1008);
+  assert.equal(creative.messages.length, 1);
+});
+
+test('a restriction added during authentication denies the pending upgrade', async t => {
+  let verified = false;
+  let allowed = true;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const runtime = await createHubServer({
+    authorizeServer: () => allowed,
+    async verifyToken() { verified = true; await gate; return verifiedUser(); }
+  });
+  t.after(() => runtime.close());
+  const pending = upgradeOutcome(runtime.url('/ws?serverId=survival'));
+  await waitFor(() => verified);
+  allowed = false;
+  release();
+  assert.deepEqual(await pending, { type: 'rejected', status: 404 });
+});
+
+test('revocation during initialization discards the snapshot and buffered server events', async t => {
+  let allowed = true;
+  let hub;
+  const runtime = await createHubServer({
+    authorizeServer: () => allowed,
+    getStatusSnapshot() {
+      hub.broadcastServer('survival', { type: 'buffered-private-event' });
+      allowed = false;
+      return { type: 'minecraft-chat-session-status', stateEpoch: 'survival', stateRevision: 1 };
+    }
+  });
+  hub = runtime.hub;
+  t.after(() => runtime.close());
+  const socket = new WebSocket(runtime.url('/ws?serverId=survival'), { headers: { Origin: ORIGIN, Cookie: 'auth_token=7' } });
+  const messages = [];
+  socket.on('message', message => messages.push(message));
+  const close = await new Promise((resolve, reject) => {
+    socket.on('error', reject);
+    socket.on('close', code => resolve(code));
+  });
+  assert.equal(close, 1008);
+  assert.equal(messages.length, 0);
+});
+
+test('permission changes from token revalidation also reauthorize each server subscription', async t => {
+  const intervals = [];
+  let admin = true;
+  const runtime = await createHubServer({
+    authorizeServer: user => user.role === 'admin',
+    verifyToken: async () => { const result = verifiedUser(); result.user.role = admin ? 'admin' : 'user'; return result; },
+    setIntervalFn(callback, delay) { const timer = { callback, delay, unref() {} }; intervals.push(timer); return timer; },
+    clearIntervalFn() {}
+  });
+  t.after(() => runtime.close());
+  const client = await connect(runtime.url('/ws?serverId=survival'), { cookie: 'auth_token=7' });
+  const closed = new Promise(resolve => client.socket.once('close', code => resolve(code)));
+  admin = false;
+  await intervals.find(timer => timer.delay === 60000).callback();
+  assert.equal(await closed, 1008);
+});

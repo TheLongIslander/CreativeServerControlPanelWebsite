@@ -6,7 +6,7 @@ const authenticateJWT = require('../middleware/authenticate');
 const requireOnboarded = require('../middleware/requireOnboarded');
 const usersDb = require('../db/users');
 
-module.exports = function createUpdateRoutes({ updateService }) {
+module.exports = function createUpdateRoutes({ updateService, context = null }) {
   const router = express.Router();
 
   if (!updateService) {
@@ -36,6 +36,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
           targetUserId: null,
           action: 'server.update.check',
           metadata: {
+            ...(context ? { serverId: context.id } : {}),
             checkId: check.checkId,
             targetVersion: check.targetVersion,
             canApply: check.canApply
@@ -84,6 +85,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
           targetUserId: null,
           action: 'server.update.advanced_check',
           metadata: {
+            ...(context ? { serverId: context.id } : {}),
             checkId: check.checkId,
             targetVersion: check.targetVersion,
             operation: check.operation,
@@ -147,6 +149,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
           targetUserId: null,
           action: 'server.update.apply',
           metadata: {
+            ...(context ? { serverId: context.id } : {}),
             checkId,
             mode,
             operation: result.operation || 'update',
@@ -172,6 +175,7 @@ module.exports = function createUpdateRoutes({ updateService }) {
           targetUserId: null,
           action: 'server.update.apply_failed',
           metadata: {
+            ...(context ? { serverId: context.id } : {}),
             checkId,
             mode,
             error: msg

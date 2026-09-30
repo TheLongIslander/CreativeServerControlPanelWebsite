@@ -46,11 +46,29 @@ function screenListHasSession(output, sessionName) {
 
 function findScreenSessionId(output, sessionName) {
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*((?:\\d+\\.)?${escapeRegExp(sessionName)})\\s+\\((?:Detached|Attached)\\)`,
+    `(?:^|\\n)\\s*((?:\\d+\\.)?${escapeRegExp(sessionName)})\\s+(?:\\([^\\r\\n()]*\\)\\s+)?\\((?:Detached|Attached)\\)`,
     'm'
   );
   const match = String(output || '').match(pattern);
   return match ? match[1] : null;
+}
+
+// Screen on macOS can exit 1 even when it printed the entire socket list.
+// Only an intact header/entry/footer sequence can prove a missing session is
+// offline; truncated listings and diagnostics must never release server slots.
+function isCompleteScreenListing(output) {
+  const lines = String(output || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length < 3 || !/^There (?:is a screen|are screens) on:$/.test(lines[0])) return false;
+  const footer = lines.at(-1).match(/^(\d+) Sockets? in .+\.$/);
+  if (!footer) return false;
+  const count = Number(footer[1]);
+  const entries = lines.slice(1, -1);
+  return Number.isSafeInteger(count) && count > 0 && entries.length === count
+    && entries.every(line => /^\d+\.[^\s()]+\s+(?:\([^\r\n()]*\)\s+)?\((?:Detached|Attached)\)$/.test(line));
+}
+
+function hasNoScreenSessions(output) {
+  return /^(?:No Sockets found(?: in [^\r\n]+)?\.?|No screen session found\.?)$/i.test(String(output || '').trim());
 }
 
 function classifyLogState(text) {
@@ -201,6 +219,7 @@ function createMinecraftProcessService({
   state,
   screenSessionName = process.env.MINECRAFT_SCREEN_SESSION || 'MinecraftSession',
   startCommandPath = process.env.START_COMMAND_PATH,
+  launchProcess = null,
   logPath = process.env.MINECRAFT_LOG_PATH
     || path.join(process.env.MINECRAFT_SERVER_PATH || '.', 'logs', 'latest.log'),
   execFileAsync = defaultExecFileAsync,
@@ -233,8 +252,11 @@ function createMinecraftProcessService({
   });
   let timer = null;
   let stopped = true;
-  let reconciling = false;
+  let reconciliation = null;
+  let reconciliationStartSnapshot = null;
   let requestedState = null;
+  let lifecycleRevision = 0;
+  let launchPending = false;
   let reasonHint = null;
   let requestedStartGate = null;
   let trackedScreenIdentity = null;
@@ -393,12 +415,16 @@ function createMinecraftProcessService({
     try {
       const result = await execFileAsync('screen', ['-ls'], { timeout: 3000, windowsHide: true });
       const output = `${result && result.stdout ? result.stdout : ''}\n${result && result.stderr ? result.stderr : ''}`;
-      return findScreenSessionId(output, screenSessionName);
+      const identity = findScreenSessionId(output, screenSessionName);
+      if (identity) return identity;
+      if (hasNoScreenSessions(output) || isCompleteScreenListing(output)) return null;
+      throw Object.assign(new Error('Screen returned an incomplete or unrecognized session listing.'), { code: 'SCREEN_PROBE_UNRECOGNIZED' });
     } catch (err) {
       const output = `${err && err.stdout ? err.stdout : ''}\n${err && err.stderr ? err.stderr : ''}`;
       const identity = findScreenSessionId(output, screenSessionName);
       if (identity) return identity;
-      if (/No Sockets found|No screen session found/i.test(output)) return null;
+      if (!err.killed && !err.signal && (err.code === 1 || err.code === 0)
+        && (hasNoScreenSessions(output) || isCompleteScreenListing(output))) return null;
       throw err;
     }
   }
@@ -407,17 +433,55 @@ function createMinecraftProcessService({
     return Boolean(await probeScreenIdentity());
   }
 
-  async function reconcile({ reason = null } = {}) {
-    if (reconciling) return snapshot;
-    reconciling = true;
+  async function probeLifecycleScreen() {
+    // Screen sockets can briefly report Dead ??? while their new process is
+    // attaching. Keep that state unknown and allow a short bounded recovery.
+    for (let attempt = 0; ; attempt++) {
+      try { return Boolean(await probeScreenIdentity()); }
+      catch (error) {
+        const transient = error && (error.code === 1 || error.code === 'SCREEN_PROBE_UNRECOGNIZED');
+        if (!transient || error.killed || error.signal || attempt >= 3) throw error;
+        await new Promise(resolve => setTimer(resolve, 250 * (2 ** attempt)));
+      }
+    }
+  }
+
+  function assertCanStart() {
+    if (state.shutdownInProgress) {
+      throw Object.assign(new Error('The panel is shutting down.'), { code: 'PANEL_SHUTTING_DOWN', status: 503 });
+    }
+  }
+
+  function reconcile(options = {}) {
+    if (reconciliation) {
+      // A late caller may arrive after publish() but before the shared promise
+      // settles. It needs a new observation instead of the already-published
+      // object, so admission can distinguish success from a failed probe.
+      if (snapshot !== reconciliationStartSnapshot) return reconciliation.then(() => reconcile(options));
+      return reconciliation;
+    }
+    reconciliationStartSnapshot = snapshot;
+    const pending = performReconciliation(options).finally(() => {
+      if (reconciliation === pending) { reconciliation = null; reconciliationStartSnapshot = null; }
+    });
+    reconciliation = pending;
+    return pending;
+  }
+
+  async function performReconciliation({ reason = null } = {}) {
+    const observedRevision = lifecycleRevision;
     try {
       // Screen absence is authoritative even if latest.log is unreadable. Read
       // it only after proving that the configured Screen session exists so a
       // stale prior-ready snapshot cannot survive a successful absent probe.
       const screenIdentity = await probeScreenIdentity();
+      if (observedRevision !== lifecycleRevision) return snapshot;
       const screenRunning = Boolean(screenIdentity);
       const runtimeKey = screenRunning ? `screen:${screenIdentity}` : null;
       if (!screenRunning) {
+        if (launchPending && requestedState === 'starting') {
+          return publish({ ...snapshot, state: 'starting', lastSuccessfulProbeAt: now().toISOString(), reason: reason || reasonHint || 'launch_pending' });
+        }
         trackedScreenIdentity = null;
         currentRestartToken = null;
         requestedState = null;
@@ -441,6 +505,7 @@ function createMinecraftProcessService({
           continuityGate: previousLogObservation
         });
       } catch (err) {
+        if (observedRevision !== lifecycleRevision) return snapshot;
         // Screen remains the runtime source of truth. If it is present but the
         // log cannot prove readiness, report a conservative running/starting
         // state instead of retaining a stale ready or offline snapshot.
@@ -458,6 +523,7 @@ function createMinecraftProcessService({
           reason: 'log_unreadable'
         });
       }
+      if (observedRevision !== lifecycleRevision) return snapshot;
       const startupIdentity = log.startupSignature
         ? `${log.key || 'unknown'}:${log.startupPosition ?? 'unknown'}:${log.incarnationSignature || log.startupSignature}`
         : null;
@@ -492,6 +558,7 @@ function createMinecraftProcessService({
           nextState = archived && archived.ready ? 'ready' : 'starting';
         }
       }
+      if (observedRevision !== lifecycleRevision) return snapshot;
       if (nextState === 'ready') {
         requestedState = null;
         requestedStartGate = null;
@@ -516,8 +583,6 @@ function createMinecraftProcessService({
     } catch (err) {
       emitter.emit('probe-error', err);
       return snapshot;
-    } finally {
-      reconciling = false;
     }
   }
 
@@ -555,13 +620,22 @@ function createMinecraftProcessService({
     return false;
   }
 
+  async function reconcileLifecycle(reason) {
+    if (reconciliation) await reconciliation;
+    return reconcile({ reason });
+  }
+
   async function startUnlocked({ reason = 'requested_start' } = {}) {
+    assertCanStart();
     if (!startCommandPath) throw new Error('START_COMMAND_PATH is not configured');
-    if (await probeScreen()) {
-      await reconcile({ reason: 'start_already_running' });
+    if (await probeLifecycleScreen()) {
+      await reconcileLifecycle('start_already_running');
       return { started: false, snapshot };
     }
     const priorLog = await readRuntimeLogObservation().catch(() => ({ key: null, size: 0 }));
+    assertCanStart();
+    lifecycleRevision++;
+    launchPending = true;
     reasonHint = reason;
     requestedState = 'starting';
     requestedStartGate = {
@@ -573,29 +647,37 @@ function createMinecraftProcessService({
     };
     publish({ ...snapshot, state: 'starting', reason });
     try {
-      await execFileAsync('sh', [startCommandPath], { timeout: 20000, windowsHide: true });
-      const appeared = await waitFor(() => probeScreen(), 20000, 750);
+      if (launchProcess) await launchProcess();
+      else await execFileAsync('sh', [startCommandPath], { timeout: 20000, windowsHide: true });
+      const appeared = await waitFor(() => probeLifecycleScreen(), 20000, 750);
       if (!appeared) {
         throw new Error('Minecraft Screen session did not appear before the startup deadline');
       }
     } catch (err) {
+      lifecycleRevision++;
+      launchPending = false;
       requestedState = null;
-      requestedStartGate = null;
+      // A failed appearance probe may still leave a live JVM. Preserve its
+      // baseline until a fresh ready record or authoritative absence is seen.
       reasonHint = null;
-      await reconcile({ reason: 'start_failed' });
+      await reconcileLifecycle('start_failed');
       throw err;
     }
-    await reconcile({ reason });
+    lifecycleRevision++;
+    launchPending = false;
+    await reconcileLifecycle(reason);
     return { started: true, snapshot };
   }
 
   async function stopUnlocked({ reason = 'requested_stop', wait = true } = {}) {
-    const running = await probeScreen();
+    const running = await probeLifecycleScreen();
     if (!running) {
+      lifecycleRevision++;
       requestedState = null;
-      await reconcile({ reason: 'stop_already_offline' });
+      await reconcileLifecycle('stop_already_offline');
       return { stopped: false, snapshot };
     }
+    lifecycleRevision++;
     reasonHint = reason;
     requestedState = 'stopping';
     publish({ ...snapshot, state: 'stopping', reason });
@@ -604,16 +686,18 @@ function createMinecraftProcessService({
         '-S', screenSessionName, '-p', '0', '-X', 'stuff', `stop${String.fromCharCode(13)}`
       ], { timeout: 3000, windowsHide: true });
       if (wait) {
-        const disappeared = await waitFor(async () => !(await probeScreen()), 60000, 1000);
+        const disappeared = await waitFor(async () => !(await probeLifecycleScreen()), 60000, 1000);
         if (!disappeared) throw new Error('Minecraft Screen session did not stop before the deadline');
       }
     } catch (err) {
+      lifecycleRevision++;
       requestedState = null;
       reasonHint = null;
-      await reconcile({ reason: 'stop_failed' });
+      await reconcileLifecycle('stop_failed');
       throw err;
     }
-    await reconcile({ reason });
+    lifecycleRevision++;
+    await reconcileLifecycle(reason);
     return { stopped: true, snapshot };
   }
 

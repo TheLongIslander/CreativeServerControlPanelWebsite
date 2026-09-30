@@ -147,8 +147,8 @@ function getManifestAuthors(manifest) {
     .filter(Boolean);
 }
 
-async function listInstalledMods() {
-  const modsDir = path.join(getServerPath(), 'mods');
+async function listInstalledMods(context) {
+  const modsDir = path.join(context ? context.rootPath : getServerPath(), 'mods');
   let entries = [];
   try {
     entries = await fsp.readdir(modsDir, { withFileTypes: true });
@@ -354,26 +354,28 @@ async function listGalleryImages() {
   return groups;
 }
 
-async function getServerInfo({ updateService } = {}) {
+async function getServerInfo({ updateService, context = null } = {}) {
+  const creative = !context || context.id === 'default';
   const [versionResult, modsResult, galleryResult] = await Promise.allSettled([
     updateService && typeof updateService.getCurrentVersion === 'function'
       ? updateService.getCurrentVersion()
       : Promise.resolve(null),
-    listInstalledMods(),
-    listGalleryImages()
+    listInstalledMods(context),
+    creative ? listGalleryImages() : Promise.resolve([])
   ]);
 
   return {
-    name: 'El Capital',
+    serverId: context ? context.id : 'default',
+    name: context ? context.displayName : 'El Capital',
     currentVersion: versionResult.status === 'fulfilled' ? versionResult.value : null,
-    startedDate: SERVER_STARTED_DATE,
-    startedLabel: SERVER_STARTED_LABEL,
-    startVersion: SERVER_START_VERSION,
+    startedDate: creative ? SERVER_STARTED_DATE : null,
+    startedLabel: creative ? SERVER_STARTED_LABEL : null,
+    startVersion: creative ? SERVER_START_VERSION : null,
     mods: modsResult.status === 'fulfilled' ? modsResult.value : [],
     modsError: modsResult.status === 'rejected' ? 'Unable to load installed mods.' : null,
     gallery: galleryResult.status === 'fulfilled' ? galleryResult.value : [],
     galleryError: galleryResult.status === 'rejected' ? 'Unable to load server screenshots.' : null,
-    loreSections: LORE_SECTIONS
+    loreSections: creative ? LORE_SECTIONS : []
   };
 }
 

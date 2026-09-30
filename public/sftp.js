@@ -3,7 +3,31 @@
  * Functions: setupWebSocket, fetchFiles, createDirectory, openDirectory, uploadFiles,
  *            preview helpers, and UI event handlers.
  */
+const serverContext = window.ServerContext;
 const downloadWindows = {};
+let directoryGeneration = 0;
+let directoryRequest = null;
+let sftpPending = false;
+function scopedFetch(path, options) { return serverContext.fetch(path, options); }
+function validVirtualPath(value) {
+    return typeof value === 'string' && !/[\\\0\r\n]/.test(value) && !value.startsWith('//') && !value.split('/').some(part => part === '..' || part === '.');
+}
+function showSftpState(message) {
+    const status = document.getElementById('sftp-state');
+    status.textContent = message;
+    status.hidden = !message;
+}
+function setPendingSetup() {
+    sftpPending = true;
+    currentDisplayedPath = '/';
+    updatePathInput('/');
+    toggleUpDirectoryButton('/');
+    document.getElementById('file-list').replaceChildren();
+    showSftpState('Backup file access is awaiting setup for this server. Your administrator will connect its backup folder when the SFTP settings are ready.');
+    for (const id of ['go-button', 'path-input', 'create-directory-button', 'up-directory-button', 'upload-button']) document.getElementById(id).disabled = true;
+    clearInterval(refreshInterval);
+    refreshInterval = null;
+}
 const progressStateMap = {};
 let activityTimeout;
 let refreshInterval;
@@ -44,6 +68,7 @@ function isGlassThemeActive() {
 }
 
 function redirectToLogin() {
+    serverContext.clearAll();
     localStorage.removeItem('token');
     window.location.href = '/';
 }
@@ -88,7 +113,7 @@ function handleAuthResponse(response) {
         redirectToSetPassword();
         throw new Error('PASSWORD_RESET_REQUIRED');
     }
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
         alert('Session has expired, please log in again.');
         redirectToLogin();
         throw new Error('SESSION_EXPIRED');
@@ -647,7 +672,7 @@ async function handleSocketPreOpenFailure() {
             redirectToSetPassword();
             return;
         }
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
             redirectToLogin();
             return;
         }
@@ -711,6 +736,8 @@ function setupWebSocket() {
             return;
         }
 
+        if (message.serverId && message.serverId !== serverContext.id) return;
+
         if (typeof message.requestId !== 'string' || !message.requestId) {
             return;
         }
@@ -729,7 +756,7 @@ function setupWebSocket() {
                 delete form.dataset.requestId;
             }
 
-            const downloadUrl = `${window.location.origin}/downloads/${requestId}`;
+            const downloadUrl = `${window.location.origin}${serverContext.apiPath(`/downloads/${requestId}`)}`;
             const popup = downloadWindows[requestId];
 
             if (popup && !popup.closed) {
@@ -838,7 +865,8 @@ window.addEventListener('pageshow', async (event) => {
 
 function getInitialPath() {
     const params = new URLSearchParams(window.location.search);
-    return params.get('path') || '/';
+    const requested = params.get('path') || serverContext.read('sftp:directory', '/');
+    return validVirtualPath(requested) ? requested : '/';
 }
 
 // Ensure the WebSocket is only initialized once on DOMContentLoaded
@@ -847,6 +875,18 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (!currentUser) {
         return;
     }
+    serverContext.init(currentUser);
+    try {
+        const response = await fetch('/api/servers', { headers: { Authorization: 'Bearer ' + localStorage.getItem('token') }, cache: 'no-store' });
+        handleAuthResponse(response);
+        if (!response.ok) throw new Error('Unable to load the server list.');
+        const payload = await response.json();
+        const profile = (Array.isArray(payload) ? payload : payload.servers || []).find(server => server.id === serverContext.id);
+        if (!profile) { serverContext.revoke(); return; }
+        serverContext.setProfile(profile);
+    } catch (error) { showSftpState('Unable to load this server. Return to All servers and try again.'); return; }
+    document.title = `${serverContext.serverName} · Backup Files`;
+    document.querySelector('.content h1').textContent = `${serverContext.serverName} Backup Files`;
     if (window.Appearance && typeof window.Appearance.init === 'function') {
         window.Appearance.init({ user: currentUser });
     }
@@ -902,7 +942,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 });
 
 window.addEventListener('popstate', throttle(function (event) {
-    if (event.state && event.state.path) {
+    if (event.state && event.state.path && (!event.state.serverId || event.state.serverId === serverContext.id)) {
         fetchFiles(event.state.path, false, true);
     }
 }, 200));
@@ -920,7 +960,7 @@ function resetActivityTimeout() {
     clearTimeout(activityTimeout);
     activityTimeout = setTimeout(setUserInactive, 300000);
 
-    if (!refreshInterval) {
+    if (!refreshInterval && !sftpPending) {
         refreshInterval = setInterval(() => {
             fetchFiles(currentDisplayedPath || '/', false, true);
         }, 1000);
@@ -937,10 +977,21 @@ function triggerFileUpload() {
 }
 
 function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
+    if (sftpPending) return;
+    if (!validVirtualPath(path)) {
+        updatePathInput(currentDisplayedPath || '/');
+        showSftpState('You can only browse inside this server’s backup folder.');
+        return;
+    }
+    if (directoryRequest?.path === path) return;
     if (!forceUpdate && currentDisplayedPath === path) {
         return;
     }
 
+    directoryRequest?.controller.abort();
+    const generation = ++directoryGeneration;
+    const controller = new AbortController();
+    directoryRequest = { path, controller };
     currentDisplayedPath = path;
 
     const token = localStorage.getItem('token');
@@ -957,16 +1008,22 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
     }
 
     if (shouldPushState) {
-        history.pushState({ path }, null, `/sftp.html?path=${encodeURIComponent(path)}`);
+        history.pushState({ path, serverId: serverContext.id }, null, `${serverContext.sftpUrl()}&path=${encodeURIComponent(path)}`);
     }
 
-    fetch(`/sftp/list?path=${encodeURIComponent(path)}`, {
+    scopedFetch(`/sftp/list?path=${encodeURIComponent(path)}`, {
+        signal: controller.signal,
         headers: {
             'Authorization': 'Bearer ' + token
         }
     })
         .then(async response => {
+            if (generation !== directoryGeneration) return null;
             handleAuthResponse(response);
+            if (response.status === 503) {
+                const data = await response.clone().json().catch(() => ({}));
+                if (data.error?.code === 'SFTP_NOT_CONFIGURED') { setPendingSetup(); return null; }
+            }
             if (response.status === 404) {
                 const data = await response.json().catch(() => null);
                 if (data && data.fallbackPath) {
@@ -985,9 +1042,11 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
             return response.json();
         })
         .then(files => {
-            if (!files) {
+            if (!files || generation !== directoryGeneration) {
                 return;
             }
+            showSftpState('');
+            serverContext.write('sftp:directory', path);
             const fileList = document.getElementById('file-list');
             const existingItems = Array.from(fileList.children);
             const existingFileMap = {};
@@ -1084,7 +1143,7 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
                         showLoadingSpinner(this, requestId);
 
                         try {
-                            const res = await fetch('/download', {
+                            const res = await scopedFetch('/download', {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
@@ -1147,18 +1206,17 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
             });
         })
         .catch(error => {
+            if (error.name === 'AbortError' || generation !== directoryGeneration) return;
             console.error('Error fetching files:', error);
-            if (error.message !== 'Session expired') {
-                alert('Error fetching files. Please try again.');
-            }
-        });
+            showSftpState('Unable to load this directory. Choose a directory inside this server’s backup folder.');
+        }).finally(() => { if (generation === directoryGeneration) directoryRequest = null; });
 }
 
 function createDirectory(directoryName) {
     const token = localStorage.getItem('token');
     const currentPath = document.getElementById('path-input').value;
 
-    fetch('/sftp/create-directory', {
+    scopedFetch('/sftp/create-directory', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token,
@@ -1272,7 +1330,8 @@ function logout() {
         .then(handleFetchResponse)
         .then(response => {
             if (response && response.ok) {
-                localStorage.removeItem('token');
+                serverContext.clearAll();
+    localStorage.removeItem('token');
                 window.location.href = '/';
             }
         })
@@ -1295,13 +1354,18 @@ function handleFetchResponse(response) {
 
 function changeDirectory() {
     const path = document.getElementById('path-input').value;
+    if (!validVirtualPath(path)) {
+        showSftpState('You can only browse inside this server’s backup folder.');
+        updatePathInput(currentDisplayedPath || '/');
+        return;
+    }
 
     if (!path || path.trim() === '') {
         return;
     }
 
     const token = localStorage.getItem('token');
-    fetch('/change-directory', {
+    scopedFetch('/change-directory', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token,
@@ -1322,7 +1386,7 @@ function openDirectory(currentPath, dirName) {
     const token = localStorage.getItem('token');
     const newPath = currentPath.endsWith('/') ? currentPath + dirName : currentPath + '/' + dirName;
 
-    fetch('/open-directory', {
+    scopedFetch('/open-directory', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token,
@@ -1349,7 +1413,7 @@ function upDirectory() {
     const newPath = currentPath.split('/').slice(0, -1).join('/') || '/';
 
     const token = localStorage.getItem('token');
-    fetch('/open-directory', {
+    scopedFetch('/open-directory', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token,
@@ -1407,7 +1471,7 @@ function uploadFiles() {
     uploadPercentage.textContent = 'Uploading...';
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/upload', true);
+    xhr.open('POST', serverContext.apiPath('/upload'), true);
     xhr.setRequestHeader('Authorization', 'Bearer ' + token);
 
     xhr.upload.onprogress = function (event) {
@@ -1481,7 +1545,7 @@ function createImagePreview(file, path) {
     const imageElement = document.createElement('img');
     const filePath = joinPath(path, file.name);
 
-    fetch(`/download-preview?path=${encodeURIComponent(filePath)}`, {
+    scopedFetch(`/download-preview?path=${encodeURIComponent(filePath)}`, {
         headers: {
             'Authorization': 'Bearer ' + localStorage.getItem('token')
         }
@@ -1505,7 +1569,7 @@ function createVideoPreview(file, path) {
     const videoThumbnail = document.createElement('img');
     const filePath = joinPath(path, file.name);
 
-    fetch(`/download-preview?path=${encodeURIComponent(filePath)}`, {
+    scopedFetch(`/download-preview?path=${encodeURIComponent(filePath)}`, {
         headers: {
             'Authorization': 'Bearer ' + localStorage.getItem('token')
         }
@@ -1529,7 +1593,7 @@ function createPDFPreview(file, path) {
     const pdfThumbnail = document.createElement('img');
     const filePath = joinPath(path, file.name);
 
-    fetch(`/download-preview?path=${encodeURIComponent(filePath)}`, {
+    scopedFetch(`/download-preview?path=${encodeURIComponent(filePath)}`, {
         headers: {
             'Authorization': 'Bearer ' + localStorage.getItem('token')
         }

@@ -11,6 +11,7 @@ const { Worker } = require('node:worker_threads');
 const { logSFTPServerAction } = require('../utils/logger');
 const authenticateJWT = require('../middleware/authenticate');
 const requireOnboarded = require('../middleware/requireOnboarded');
+const { authorize, reserveConnection, reserveStorage, respondError, scope, virtualPath } = require('../services/scopedSftp');
 
 const REQUEST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -43,7 +44,19 @@ module.exports = function createDownloadRoutes({
   const downloads = new Map();
   const tempDownloadLinks = new Map();
 
-  function notifyUser(userId, payload) {
+  function notifyUser(userId, payload, entry) {
+    if (entry) {
+      payload = { ...payload, serverId: entry.serverId };
+      if (entry.requireServerAccess) {
+        let allowed;
+        try { allowed = entry.requireServerAccess(entry.user, entry.serverId); } catch (_) { return; }
+        if (allowed && typeof allowed.then === 'function') {
+          allowed.then(result => { if (result) notifyUser(userId, payload); }).catch(() => {});
+          return;
+        }
+        if (!allowed) return;
+      }
+    }
     if (realtimeHub && typeof realtimeHub.broadcastUser === 'function') {
       realtimeHub.broadcastUser(userId, payload);
     }
@@ -74,6 +87,11 @@ module.exports = function createDownloadRoutes({
     });
   }
 
+  function cleanupWork(entry) {
+    if (!entry.workDirectory) return Promise.resolve();
+    return fs.promises.rm(entry.workDirectory, { recursive: true, force: true }).catch(() => {});
+  }
+
   function isTempArtifact(filePath) {
     if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false;
     const tempRoot = path.resolve(os.tmpdir());
@@ -87,21 +105,25 @@ module.exports = function createDownloadRoutes({
     tempDownloadLinks.delete(requestId);
     clearEntryTimers(entry);
     entry.status = 'discarded';
-    if (notify) notifyUser(entry.userId, { type: 'download-error', requestId });
+    if (notify) notifyUser(entry.userId, { type: 'download-error', requestId }, entry);
     let termination = Promise.resolve();
     if (terminate && entry.worker && typeof entry.worker.terminate === 'function') {
       termination = Promise.resolve(entry.worker.terminate()).catch(() => {});
     }
     // A worker may create its output between an early unlink and termination.
     // Wait until it cannot write again, then perform the final artifact cleanup.
-    return termination.then(() => unlinkArtifact(entry.filePath));
+    return termination.then(async () => { entry.releaseConnection?.(); await unlinkArtifact(entry.filePath); await cleanupWork(entry); entry.releaseStorage?.(); });
   }
 
-  router.post('/download', authenticate, onboarded, (req, res) => {
+  router.post('/download', authenticate, onboarded, async (req, res) => {
+    let context;
+    try { context = scope(req); await authorize(req, context.serverId); }
+    catch (error) { return respondError(res, error); }
     const { path: filePath, requestId: suppliedRequestId } = req.body || {};
     if (typeof filePath !== 'string' || !filePath.trim()) {
       return res.status(400).json({ error: { code: 'DOWNLOAD_INVALID_PATH', message: 'A file path is required.' } });
     }
+    try { virtualPath(filePath); } catch (error) { return respondError(res, error); }
     if (suppliedRequestId !== undefined && !isValidRequestId(suppliedRequestId)) {
       return res.status(400).json({ error: { code: 'DOWNLOAD_INVALID_REQUEST_ID', message: 'requestId must be a UUID.' } });
     }
@@ -127,11 +149,19 @@ module.exports = function createDownloadRoutes({
     }
     const formattedIpAddress = req.ip || req.socket.remoteAddress || null;
     const outputFilePath = path.join(os.tmpdir(), `minecraft-panel-${crypto.randomUUID()}.zip`);
+    const workDirectory = path.join(os.tmpdir(), `minecraft-panel-download-${crypto.randomUUID()}`);
     let worker;
+    let releaseConnection;
+    let releaseStorage;
     try {
+      releaseStorage = reserveStorage();
+      releaseConnection = reserveConnection();
       worker = new WorkerClass(workerPath, {
         workerData: {
-          filePath,
+          filePath: virtualPath(filePath),
+          serverId: context.serverId,
+          rootPath: context.rootPath,
+          maxBytes: 10 * 1024 ** 3,
           user: {
             id: userId,
             username: req.user.username,
@@ -139,18 +169,29 @@ module.exports = function createDownloadRoutes({
           },
           requestId,
           formattedIpAddress,
-          outputFilePath
+          outputFilePath,
+          workDirectory
         }
       });
     } catch (err) {
+      releaseConnection?.();
+      releaseStorage?.();
+      if (err.status) return respondError(res, err);
       console.error(`Download worker ${requestId} failed to start:`, err.message);
       return res.status(503).json({ error: { code: 'DOWNLOAD_UNAVAILABLE', message: 'The download worker is unavailable.' } });
     }
 
     const entry = {
       worker,
+      releaseConnection,
+      releaseStorage,
+      serverId: context.serverId,
+      rootPath: context.rootPath,
+      user: req.user,
+      requireServerAccess: req.requireServerAccess,
       status: 'in-progress',
       filePath: outputFilePath,
+      workDirectory,
       userId,
       workerTimer: null,
       expiryTimer: null
@@ -166,22 +207,23 @@ module.exports = function createDownloadRoutes({
       if (!message || downloads.get(requestId) !== entry) return;
       if (message.type === 'progress') {
         const progress = Math.max(0, Math.min(100, Number(message.progress) || 0));
-        notifyUser(userId, { type: 'progress', requestId, progress });
+        notifyUser(userId, { type: 'progress', requestId, progress }, entry);
         return;
       }
       if (message.type === 'done' && isTempArtifact(message.filePath)) {
         if (entry.workerTimer) clearTimeoutFn(entry.workerTimer);
         entry.workerTimer = null;
         entry.status = 'ready';
+        entry.releaseConnection();
         if (entry.filePath !== message.filePath) unlinkArtifact(entry.filePath).catch(() => {});
         entry.filePath = message.filePath;
-        tempDownloadLinks.set(requestId, { filePath: message.filePath, userId, entry });
+        tempDownloadLinks.set(requestId, { filePath: message.filePath, userId, serverId: context.serverId, rootPath: context.rootPath, entry });
         entry.expiryTimer = setTimeoutFn(() => {
           discardEntry(requestId, entry).catch(() => {});
         }, Math.max(1, Number(readyTtlMs) || (15 * 60 * 1000)));
         if (entry.expiryTimer && typeof entry.expiryTimer.unref === 'function') entry.expiryTimer.unref();
-        notifyUser(userId, { type: 'progress', requestId, progress: 100 });
-        notifyUser(userId, { type: 'complete', requestId });
+        notifyUser(userId, { type: 'progress', requestId, progress: 100 }, entry);
+        notifyUser(userId, { type: 'complete', requestId }, entry);
         return;
       }
       if (message.type === 'done' || message.type === 'error') {
@@ -202,18 +244,23 @@ module.exports = function createDownloadRoutes({
     });
 
     Promise.resolve()
-      .then(() => logAction(req.user.username, 'download', filePath, formattedIpAddress))
+      .then(() => logAction(req.user.username, 'download', `${context.serverId}:${virtualPath(filePath)}`, formattedIpAddress))
       .catch(err => console.warn(`Download audit ${requestId} failed:`, err.message));
-    return res.status(202).json({ requestId, message: 'Download queued' });
+    return res.status(202).json({ requestId, serverId: context.serverId, message: 'Download queued' });
   });
 
-  router.get('/downloads/:requestId', authenticate, onboarded, (req, res) => {
+  router.get('/downloads/:requestId', authenticate, onboarded, async (req, res) => {
+    let context;
+    try { context = scope(req); await authorize(req, context.serverId); }
+    catch (error) { return respondError(res, error); }
     const requestId = req.params.requestId;
     res.setHeader('Cache-Control', 'no-store');
     const link = tempDownloadLinks.get(requestId);
 
     if (!isValidRequestId(requestId)
       || !link
+      || link.serverId !== context.serverId
+      || link.rootPath !== context.rootPath
       || String(link.userId) !== String(req.user.id)) {
       return res.status(404).send('File not found');
     }
@@ -262,8 +309,10 @@ module.exports = function createDownloadRoutes({
   router.close = async () => {
     const terminations = [];
     const artifacts = new Set();
+    const entries = [...downloads.values()];
     for (const entry of downloads.values()) {
       clearEntryTimers(entry);
+      entry.releaseConnection?.();
       if (entry.filePath) artifacts.add(entry.filePath);
       if (entry.worker && typeof entry.worker.terminate === 'function' && entry.status === 'in-progress') {
         terminations.push(Promise.resolve(entry.worker.terminate()).catch(() => {}));
@@ -273,6 +322,8 @@ module.exports = function createDownloadRoutes({
     tempDownloadLinks.clear();
     await Promise.all(terminations);
     await Promise.all([...artifacts].map(unlinkArtifact));
+    await Promise.all(entries.map(cleanupWork));
+    for (const entry of entries) entry.releaseStorage?.();
   };
 
   return router;

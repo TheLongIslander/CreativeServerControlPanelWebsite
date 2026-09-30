@@ -125,6 +125,10 @@ test('download events and temporary artifacts are scoped to their authenticated 
       broadcastAuthenticated() { throw new Error('download events must not be global'); }
     }
   });
+  app.use((req, _res, next) => {
+    req.serverContext = { id: 'default', sftp: { enabled: true, rootPath: '/fixtures/backups/default' } };
+    next();
+  });
   app.use(routes);
   const runtime = await listen(app);
   t.after(async () => {
@@ -204,6 +208,10 @@ test('download jobs are bounded and unclaimed artifacts expire', async t => {
     setTimeoutFn,
     clearTimeoutFn
   });
+  app.use((req, _res, next) => {
+    req.serverContext = { id: 'default', sftp: { enabled: true, rootPath: '/fixtures/backups/default' } };
+    next();
+  });
   app.use(routes);
   const runtime = await listen(app);
   t.after(async () => {
@@ -275,6 +283,10 @@ test('download cancellation terminates the worker before its final artifact unli
   });
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    req.serverContext = { id: 'default', sftp: { enabled: true, rootPath: '/fixtures/backups/default' } };
+    next();
+  });
   app.use(routes);
   const runtime = await listen(app);
   t.after(async () => {
@@ -301,9 +313,12 @@ test('download cancellation terminates the worker before its final artifact unli
   // Model the exact race: output appears after cancellation starts, but before
   // Worker.terminate() has confirmed that no more writes are possible.
   await fs.writeFile(workers[0].workerData.outputFilePath, 'late archive');
+  await fs.mkdir(workers[0].workerData.workDirectory, { recursive: true });
+  await fs.writeFile(path.join(workers[0].workerData.workDirectory, 'partial-world'), 'staging');
   releaseTermination(0);
   await new Promise(resolve => setTimeout(resolve, 25));
   await assert.rejects(fs.access(workers[0].workerData.outputFilePath));
+  await assert.rejects(fs.access(workers[0].workerData.workDirectory));
 });
 
 test('maintenance stops HTTP acceptance and sockets before dependency cleanup', async () => {

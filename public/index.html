@@ -2,16 +2,19 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Creative Server Control Panel</title>
+    <base href="/">
+    <title>Server Control Panel</title>
     <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
     <link rel="stylesheet" href="chat.css?v=20260828-4">
     <link rel="stylesheet" href="playerCenter.css?v=20260831-14">
     <link rel="stylesheet" href="windowMotion.css?v=20260831-2">
+    <link rel="stylesheet" href="servers.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body class="control-panel">
     <header>
+        <a class="all-servers-link" href="/servers.html">← All servers</a>
         <div class="account-container">
             <button id="account-button"
                     type="button"
@@ -56,11 +59,12 @@
         </div>
     </header>
     <div class="content">
-        <h1>Creative Server Control Panel</h1>
-        <button id="start-server">Start Server</button>
-        <button id="restart-server">Restart Server</button>
-        <button id="stop-server">Stop Server</button>
-        <button id="backup-server">Backup Server</button>
+        <h1 id="selected-server-title">Server Control Panel</h1>
+        <div id="server-runtime-status" class="server-runtime-status" role="status">Loading server…</div>
+        <button id="start-server" disabled>Start Server</button>
+        <button id="restart-server" disabled>Restart Server</button>
+        <button id="stop-server" disabled>Stop Server</button>
+        <button id="backup-server" disabled>Backup Server</button>
         <div id="update-status-message" class="update-status-message hidden"></div>
         <div id="progress-area">
             <div id="progress-container">
@@ -165,7 +169,7 @@
         <div class="modal-content server-info-modal-content" role="dialog" aria-modal="true" aria-labelledby="server-info-title">
             <div class="server-info-heading">
                 <div>
-                    <div class="server-info-kicker">El Capital Archive</div>
+                    <div id="server-info-kicker" class="server-info-kicker">El Capital Archive</div>
                     <h2 id="server-info-title">Server Info</h2>
                 </div>
                 <button id="server-info-close-btn" class="server-info-close-btn" type="button">Close</button>
@@ -343,9 +347,10 @@
         </section>
     </div>
 
+    <script src="serverContext.js"></script>
     <script src="appearance.js?v=20260831-1"></script>
     <script src="serverChat.js?v=20260831-1"></script>
-    <script src="playerCenter.js?v=20260831-17"></script>
+    <script src="playerCenter.js?v=20260928-1"></script>
     <script src="script.js?v=20260831-8&amp;pc=20260831-17"></script>
 </body>
 </html>

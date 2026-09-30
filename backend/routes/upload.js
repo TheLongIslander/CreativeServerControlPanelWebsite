@@ -1,278 +1,107 @@
-/*
- * Purpose: Upload endpoint for files/folders with optional ZIP extraction to SFTP.
- * Routes: POST /upload.
- * Functions: getUniqueFilePath, getUniqueDirectoryPath, fileExists, unzipFile,
- *            uploadDirectory, ensureDirectoryExists.
- */
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
-const { spawn } = require('child_process');
-const { Client } = require('ssh2');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { pipeline } = require('node:stream/promises');
 const authenticateJWT = require('../middleware/authenticate');
 const requireOnboarded = require('../middleware/requireOnboarded');
-const sftpConnectionDetails = require('../config/sftp');
 const { logSFTPServerAction } = require('../utils/logger');
-
-module.exports = function createUploadRoutes() {
+const { extractZip, MAX_EXPANDED_BYTES } = require('../services/safeZip');
+const { authorize, call, failure, isMissing, reserveUpload, respondError, scope, virtualPath, withSession } = require('../services/scopedSftp');
+async function uniquePath(resolver, desired) {
+  for (let index = 0; index < 1000; index++) {
+    const extension = path.posix.extname(desired);
+    const candidate = index === 0 ? desired : `${extension ? desired.slice(0, -extension.length) : desired} copy${index}${extension}`;
+    try { await resolver.resolve(candidate); } catch (error) { if (isMissing(error)) return candidate; throw error; }
+  }
+  throw failure(409, 'SFTP_NAME_CONFLICT', 'Too many files share this name. Rename the file and try again.');
+}
+async function writeFile(sftp, resolver, localFile, virtual, req, serverId) {
+  await authorize(req, serverId);
+  const remote = await resolver.resolve(virtual, { allowMissing: true });
+  await pipeline(fs.createReadStream(localFile), sftp.createWriteStream(remote, { flags: 'wx', mode: 0o600 }), { signal: req.sftpUploadAbort ? AbortSignal.any([req.sftpUploadAbort.signal, AbortSignal.timeout(60 * 60 * 1000)]) : AbortSignal.timeout(60 * 60 * 1000) });
+}
+async function uploadTree(sftp, resolver, local, virtual, req, serverId) {
+  await authorize(req, serverId);
+  await resolver.mkdir(virtual);
+  for (const entry of await fs.promises.readdir(local, { withFileTypes: true })) {
+    const destination = path.posix.join(virtual, entry.name);
+    const source = path.join(local, entry.name);
+    if (entry.isDirectory()) await uploadTree(sftp, resolver, source, destination, req, serverId);
+    else if (entry.isFile()) await writeFile(sftp, resolver, source, destination, req, serverId);
+    else throw failure(400, 'SFTP_INVALID_ARCHIVE', 'The archive contains a special file.');
+  }
+}
+module.exports = function createUploadRoutes({ authenticate = authenticateJWT, onboarded = requireOnboarded, connectSession, logAction = logSFTPServerAction } = {}) {
   const router = express.Router();
-  router.use(authenticateJWT, requireOnboarded);
-
-  router.post('/upload', (req, res) => {
-    let files = req.files.files;
-    const destinationPath = req.body.path;
-    const lastModifiedRaw = req.body.lastModified;
-    const parsedLastModified = Array.isArray(lastModifiedRaw)
-      ? parseInt(lastModifiedRaw[0], 10)
-      : parseInt(lastModifiedRaw, 10);
-    const lastModified = Number.isFinite(parsedLastModified) ? parsedLastModified : Date.now();
-
-    console.log('Files received:', files);
-    console.log('Destination path:', destinationPath);
-
-    const conn = new Client();
-    conn.on('ready', () => {
-      conn.sftp(async (err, sftp) => {
-        if (err) {
-          console.error('SFTP connection error:', err);
-          res.status(500).send('SFTP connection error: ' + err.message);
-          return;
-        }
-
-        try {
-          if (!Array.isArray(files)) {
-            files = [files];
-          }
-
-          for (const file of files) {
-            const localFilePath = file.tempFilePath || file.path;
-            console.log('Processing file:', file.name);
-            console.log('Local file path:', localFilePath);
-
-            if (!localFilePath) {
-              throw new Error('Local file path is undefined for file: ' + file.name);
+  router.post('/upload', authenticate, onboarded, async (req, res) => {
+    const files = req.files?.files ? [req.files.files].flat() : [];
+    let stage;
+    let releaseUpload;
+    try {
+      const context = scope(req); // Fail closed before inspecting uploads or creating temporary files.
+      await authorize(req, context.serverId);
+      releaseUpload = req.releaseSftpUpload || reserveUpload();
+      req.sftpUploadProcessing = true;
+      req.sftpUploadAbort?.signal.throwIfAborted();
+      const destination = virtualPath(req.body?.path || '/');
+      if (!files.length || files.length > 1000) throw failure(400, 'SFTP_INVALID_UPLOAD', 'Choose between 1 and 1000 files.');
+      let total = 0;
+      for (const file of files) {
+        if (!file.name || file.name.startsWith('/') || /^[a-z]:/i.test(file.name)) throw failure(400, 'SFTP_INVALID_PATH', 'Invalid upload filename.');
+        virtualPath(file.name);
+        total += Number(file.size) || 0;
+        if (file.truncated || total > MAX_EXPANDED_BYTES) throw failure(413, 'SFTP_UPLOAD_LIMIT', 'The upload exceeds the transfer size limit.');
+        if (!file.tempFilePath && !file.path) throw failure(400, 'SFTP_INVALID_UPLOAD', 'The upload is incomplete.');
+      }
+      const prepared = [];
+      // Every ZIP is inspected and staged before any remote mutations.
+      for (const file of files) {
+        const source = file.tempFilePath || file.path;
+        if (path.extname(file.name).toLowerCase() === '.zip') {
+          stage ||= await fs.promises.mkdtemp(path.join(os.tmpdir(), 'panel-upload-'));
+          const folder = path.join(stage, String(prepared.length));
+          await fs.promises.mkdir(folder, { mode: 0o700 });
+          await extractZip(source, folder, { maxBytes: MAX_EXPANDED_BYTES - total, signal: req.sftpUploadAbort?.signal });
+          prepared.push({ file, source: folder, directory: true });
+          // Bound aggregate staging across multiple archives, not only each ZIP.
+          async function sizeOf(directory) {
+            for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
+              const item = path.join(directory, entry.name);
+              if (entry.isDirectory()) await sizeOf(item); else total += (await fs.promises.stat(item)).size;
             }
-
-            const relativeFilePath = file.name;
-            let remoteFilePath = path.join(destinationPath, relativeFilePath);
-
-            const remoteDir = path.dirname(remoteFilePath);
-            await ensureDirectoryExists(sftp, remoteDir);
-
-            remoteFilePath = await getUniqueFilePath(sftp, remoteFilePath);
-
-            console.log(`Uploading ${localFilePath} to ${remoteFilePath}`);
-
-            await new Promise((resolve, reject) => {
-              sftp.fastPut(localFilePath, remoteFilePath, (putErr) => {
-                if (putErr) reject(putErr);
-                else resolve();
-              });
-            });
-
-            const modifiedDate = new Date(lastModified);
-            await new Promise((resolve, reject) => {
-              sftp.utimes(remoteFilePath, modifiedDate, modifiedDate, (timeErr) => {
-                if (timeErr) reject(timeErr);
-                else resolve();
-              });
-            });
-
-            if (path.extname(file.name) === '.zip') {
-              const baseName = path.basename(file.name, '.zip');
-              const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `${baseName}-`));
-              let newDir = path.join(destinationPath, baseName);
-              const expectedZipSize = Number(file.size);
-
-              newDir = await getUniqueDirectoryPath(sftp, newDir);
-
-              if (Number.isFinite(expectedZipSize)) {
-                const stats = fs.statSync(localFilePath);
-                if (stats.size !== expectedZipSize) {
-                  throw new Error(`ZIP size mismatch: expected ${expectedZipSize}, got ${stats.size}`);
-                }
-              }
-
-              await unzipFile(localFilePath, tempDir);
-              await ensureDirectoryExists(sftp, newDir);
-              await uploadDirectory(sftp, tempDir, newDir);
-              fs.rmSync(tempDir, { recursive: true, force: true });
-
-              await new Promise((resolve, reject) => {
-                sftp.unlink(remoteFilePath, (unlinkErr) => {
-                  if (unlinkErr) reject(unlinkErr);
-                  else resolve();
-                });
-              });
-              console.log(`Deleted ZIP file: ${remoteFilePath}`);
-            }
-
-            fs.unlink(localFilePath, (unlinkErr) => {
-              if (unlinkErr) console.error('Error deleting temp file:', unlinkErr);
-              else console.log('Temp file deleted:', localFilePath);
-            });
-
-            const ipAddress = req.ip || req.socket.remoteAddress || null;
-            console.log('IP Address:', ipAddress);
-            logSFTPServerAction(req.user.username, 'upload', remoteFilePath, ipAddress);
           }
-
-          res.send('Files uploaded successfully');
-        } catch (error) {
-          console.error('Error uploading files:', error);
-          res.status(500).send('Error uploading files: ' + error.message);
-        } finally {
-          conn.end();
+          await sizeOf(folder);
+        } else prepared.push({ file, source, directory: false });
+      }
+      await withSession(req, async ({ sftp, resolver, serverId }) => {
+        await resolver.resolve(destination);
+        for (const item of prepared) {
+          let virtual = path.posix.join(destination, virtualPath(item.file.name).slice(1));
+          if (item.directory) virtual = virtual.slice(0, -4);
+          await authorize(req, serverId);
+          await resolver.mkdir(path.posix.dirname(virtual));
+          virtual = await uniquePath(resolver, virtual);
+          if (item.directory) {
+            // Exclusive directory creation prevents concurrent extractions merging.
+            await call(sftp, 'mkdir', await resolver.resolve(virtual, { allowMissing: true }));
+            await uploadTree(sftp, resolver, item.source, virtual, req, serverId);
+          } else {
+            await writeFile(sftp, resolver, item.source, virtual, req, serverId);
+            const modified = Number.parseInt([req.body?.lastModified].flat()[0], 10);
+            if (Number.isFinite(modified)) await call(sftp, 'utimes', await resolver.resolve(virtual), new Date(modified), new Date(modified));
+          }
+          await Promise.resolve(logAction(req.user.username, 'upload', `${serverId}:${virtual}`, req.ip || null));
         }
-      });
-    }).connect(sftpConnectionDetails);
+        await authorize(req, serverId);
+        res.json({ message: 'Files uploaded successfully', serverId });
+      }, { connectSession });
+    } catch (error) { respondError(res, error); }
+    finally {
+      if (stage) await fs.promises.rm(stage, { recursive: true, force: true }).catch(() => {});
+      await Promise.all(files.filter(file => file.tempFilePath || file.path).map(file => fs.promises.unlink(file.tempFilePath || file.path).catch(() => {})));
+      releaseUpload?.();
+    }
   });
-
   return router;
 };
-
-async function getUniqueFilePath(sftp, remoteFilePath) {
-  const baseName = path.basename(remoteFilePath, path.extname(remoteFilePath));
-  const ext = path.extname(remoteFilePath);
-  const dir = path.dirname(remoteFilePath);
-  let uniqueFilePath = remoteFilePath;
-  let counter = 1;
-
-  while (await fileExists(sftp, uniqueFilePath)) {
-    uniqueFilePath = path.join(dir, `${baseName} copy${counter}${ext}`);
-    counter++;
-  }
-
-  return uniqueFilePath;
-}
-
-async function getUniqueDirectoryPath(sftp, remoteDirPath) {
-  let uniqueDirPath = remoteDirPath;
-  let counter = 2;
-
-  while (await fileExists(sftp, uniqueDirPath)) {
-    uniqueDirPath = path.join(path.dirname(remoteDirPath), `${path.basename(remoteDirPath)}-${counter}`);
-    counter++;
-  }
-
-  return uniqueDirPath;
-}
-
-async function fileExists(sftp, remoteFilePath) {
-  return new Promise((resolve, reject) => {
-    sftp.stat(remoteFilePath, (err, stats) => {
-      if (err) {
-        if (err.code === 2) {
-          resolve(false);
-        } else {
-          reject(err);
-        }
-      } else {
-        resolve(true);
-      }
-    });
-  });
-}
-
-async function unzipFile(zipFilePath, destinationPath) {
-  return new Promise((resolve, reject) => {
-    const unzip = spawn('unzip', ['-o', '-qq', zipFilePath, '-d', destinationPath], {
-      stdio: ['ignore', 'ignore', 'pipe']
-    });
-    let stderr = '';
-    const timeoutId = setTimeout(() => {
-      unzip.kill('SIGKILL');
-      reject(new Error('unzip timed out'));
-    }, 10 * 60 * 1000);
-
-    unzip.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    unzip.on('close', (code) => {
-      clearTimeout(timeoutId);
-      if (code !== 0) {
-        reject(new Error(`unzip failed with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
-        return;
-      }
-      console.log(`Unzipped file to ${destinationPath}`);
-      resolve();
-    });
-
-    unzip.on('error', (err) => {
-      clearTimeout(timeoutId);
-      reject(err);
-    });
-  });
-}
-
-async function uploadDirectory(sftp, localDir, remoteDir) {
-  const items = fs.readdirSync(localDir);
-  for (const item of items) {
-    const localItemPath = path.join(localDir, item);
-    const remoteItemPath = path.join(remoteDir, item);
-
-    let stats;
-    try {
-      stats = fs.lstatSync(localItemPath);
-    } catch (error) {
-      if (error && error.code === 'ENOENT') {
-        console.warn(`Skipping missing item during upload: ${localItemPath}`);
-        continue;
-      }
-      throw error;
-    }
-
-    if (stats.isSymbolicLink()) {
-      console.warn(`Skipping symlink during upload: ${localItemPath}`);
-      continue;
-    }
-
-    if (stats.isDirectory()) {
-      await ensureDirectoryExists(sftp, remoteItemPath);
-      await uploadDirectory(sftp, localItemPath, remoteItemPath);
-    } else {
-      await new Promise((resolve, reject) => {
-        sftp.fastPut(localItemPath, remoteItemPath, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-    }
-  }
-}
-
-async function ensureDirectoryExists(sftp, dir) {
-  const dirs = dir.split('/');
-  let currentDir = '';
-
-  for (const part of dirs) {
-    if (part) {
-      currentDir += '/' + part;
-
-      try {
-        await new Promise((resolve, reject) => {
-          sftp.stat(currentDir, (err) => {
-            if (err) {
-              if (err.code === 2) {
-                sftp.mkdir(currentDir, (mkdirErr) => {
-                  if (mkdirErr) reject(mkdirErr);
-                  else resolve();
-                });
-              } else {
-                reject(err);
-              }
-            } else {
-              resolve();
-            }
-          });
-        });
-      } catch (error) {
-        if (error.code !== 4) {
-          throw error;
-        }
-      }
-    }
-  }
-}

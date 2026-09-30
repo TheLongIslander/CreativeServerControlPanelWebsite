@@ -287,6 +287,10 @@
 
         if (logoutButton) {
             logoutButton.addEventListener('click', () => {
+                if (window.ServerContext) window.ServerContext.clearAll();
+                else {
+                    try { Object.keys(sessionStorage).filter(key => key.startsWith('server-tab:')).forEach(key => sessionStorage.removeItem(key)); } catch (_) {}
+                }
                 if (typeof logout === 'function') {
                     logout();
                 } else {

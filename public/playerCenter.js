@@ -1,7 +1,7 @@
 (function playerCenterModule(global) {
     'use strict';
 
-    const SERVER_ID = 'default';
+    const SERVER_ID = global.ServerContext ? global.ServerContext.id : 'default';
     const API_ROOT = `/api/servers/${encodeURIComponent(SERVER_ID)}`;
     const POLL_OPEN_MS = 15000;
     const POLL_CLOSED_MS = 45000;
@@ -475,6 +475,25 @@
         return { value };
     }
 
+    function profileEventPresentation(profile) {
+        const retained = retainedEventPresentation(profile.summary);
+        const deathStat = (profile.stats || []).find(stat => (
+            statKey(stat) === 'minecraft:deaths'
+            && stat.correction && stat.correction.type === 'manual_death_baseline'
+        ));
+        const deaths = deathStat && statNumericValue(deathStat);
+        if (deaths == null) return { title: 'Retained log events', ...retained };
+        const joins = finiteNumber(profile.summary && profile.summary.observedJoinEvents);
+        const joinLabel = joins > 0
+            ? `${formatNumber(joins)} ${joins === 1 ? 'join' : 'joins'}`
+            : 'No retained joins';
+        return {
+            title: 'Joins & deaths',
+            value: `${joinLabel} · ${formatNumber(deaths)} ${deaths === 1 ? 'death' : 'deaths'}`,
+            detail: 'Joins from retained logs; deaths adjusted to match the leaderboard.'
+        };
+    }
+
     function mergePlayer(previous, incoming) {
         if (!previous) {
             return incoming;
@@ -717,7 +736,7 @@
             return null;
         }
         const promise = (async () => {
-            const response = await fetch(`${API_ROOT}/players/${encodeURIComponent(key)}/avatar`, {
+            const response = await (global.ServerContext ? global.ServerContext.fetch : fetch)(`${API_ROOT}/players/${encodeURIComponent(key)}/avatar`, {
                 method: 'GET',
                 headers: { ...authHeaders(false), Accept: 'image/png' },
                 cache: 'force-cache',
@@ -815,7 +834,7 @@
 
     async function apiRequest(path, options = {}) {
         const hasBody = options.body !== undefined;
-        const response = await fetch(`${API_ROOT}${path}`, {
+        const response = await (global.ServerContext ? global.ServerContext.fetch : fetch)(`${API_ROOT}${path}`, {
             method: options.method || 'GET',
             headers: { ...authHeaders(hasBody), ...(options.headers || {}) },
             body: hasBody ? JSON.stringify(options.body) : undefined,
@@ -1700,6 +1719,9 @@
         profile.stats.slice(0, 40).forEach((stat) => {
             const wrapper = createElement('div', 'player-center-stat-row');
             const key = statKey(stat);
+            if (stat.correction && stat.correction.type === 'manual_death_baseline') {
+                wrapper.title = 'Death count manually adjusted to match the server leaderboard.';
+            }
             wrapper.append(createElement('dt', null, humanize(key)));
             wrapper.append(createElement('dd', null, formatStatValue(stat)));
             list.appendChild(wrapper);
@@ -1877,7 +1899,7 @@
 
         const activity = activityTimestampPresentation(player);
         const firstActivity = firstActivityTimestampPresentation(player);
-        const retainedEvents = retainedEventPresentation(profile.summary);
+        const retainedEvents = profileEventPresentation(profile);
         const cards = createElement('div', 'player-center-summary-grid');
         cards.append(
             summaryCard('Observed playtime', player.playtimeSeconds === null ? 'Not observed' : formatDuration(player.playtimeSeconds, { compact: true })),
@@ -1887,7 +1909,7 @@
                 firstActivity.value,
                 firstActivity.detail
             ),
-            summaryCard('Retained log events', retainedEvents.value)
+            summaryCard(retainedEvents.title, retainedEvents.value, retainedEvents.detail)
         );
         view.append(cards, renderTrendSection(profile), renderStatsSection(profile), renderAdvancementsSection(profile), renderSessionsSection(profile));
         dom.view.replaceChildren(view);
@@ -3348,6 +3370,7 @@
             activityTimestampPresentation,
             firstActivityTimestampPresentation,
             retainedEventPresentation,
+            profileEventPresentation,
             overviewInsights,
             hasHistoricalDirectoryData,
             normalizePlayer,

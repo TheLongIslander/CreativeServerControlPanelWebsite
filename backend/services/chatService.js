@@ -126,6 +126,7 @@ function createChatService({
   sharedState = {},
   usersDb = null,
   serverId = 'default',
+  authorizeServer = null,
   now = () => new Date(),
   random = Math.random,
   setTimer = setTimeout,
@@ -1010,6 +1011,7 @@ function createChatService({
     pendingSendOperations += 1;
     try {
       return await processService.operationMutex.runExclusive(async () => {
+        if (authorizeServer && !await authorizeServer(user, serverId)) throw new ChatError(404, 'SERVER_NOT_FOUND', 'Server was not found.');
         if (!storeAvailable) throw errorForBlockedReason('service_unavailable');
         const existing = await storeCall(() => store.getPanelMessageByClientId(user.id, clientMessageId));
         if (existing) {
@@ -1049,6 +1051,7 @@ function createChatService({
         const blocked = computeSendBlockedReason();
         if (blocked) throw errorForBlockedReason(blocked);
 
+        if (authorizeServer && !await authorizeServer(user, serverId)) throw new ChatError(404, 'SERVER_NOT_FOUND', 'Server was not found.');
         const session = currentSession;
         const reserved = await storeCall(() => store.reservePanelMessage({
           serverId,
@@ -1061,6 +1064,10 @@ function createChatService({
           metadata: { codePointCount: validation.codePointCount }
         }));
         const pending = reserved.message;
+        if (authorizeServer && !await authorizeServer(user, serverId)) {
+          await store.setMessageDelivery({ messageId: pending.id, status: 'failed', expectedStatus: 'pending', metadata: { failureCode: 'SERVER_NOT_FOUND' } });
+          throw new ChatError(404, 'SERVER_NOT_FOUND', 'Server was not found.');
+        }
         try {
           await consoleTransport.send(built);
         } catch (err) {

@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>The Creative Server Backup File Browser</title>
+    <base href="/">
+    <title>Server Backup Files</title>
     <link id="theme-stylesheet" rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styleSFTP.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
@@ -19,7 +20,7 @@
         <div class="toolbar-actions">
             <button id="create-directory-button">Create Directory</button>
             <button id="up-directory-button" onclick="upDirectory()">Up Directory</button>
-            <button id="control-panel" onclick="location.href='index.html'">Control Panel</button>
+            <button id="control-panel" onclick="location.href=window.ServerContext.panelUrl()">Control Panel</button>
             <div class="account-container">
                 <button id="account-button">Account</button>
                 <div id="account-dropdown" class="account-dropdown hidden">
@@ -54,7 +55,8 @@
         </div>
     </header>
     <div class="content">
-        <h1 onclick="goToRoot()">The Creative Server Backup File Browser</h1>
+        <h1 onclick="goToRoot()">Server Backup Files</h1>
+        <p id="sftp-state" role="status" hidden></p>
         <ul id="file-list"></ul>
     </div>
     <div class="upload-section">
@@ -69,6 +71,7 @@
     </div>
     <div id="loading-spinner" class="spinner" style="display:none;"></div>
     <script src="appearance.js"></script>
+    <script src="serverContext.js"></script>
     <script src="sftp.js"></script>
 </body>
 </html>

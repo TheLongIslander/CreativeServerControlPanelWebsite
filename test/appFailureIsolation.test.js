@@ -261,8 +261,8 @@ test('chat initialization failure leaves core application surfaces operational',
     headers: { cookie, 'content-type': 'application/json' },
     body: JSON.stringify({ path: '/isolated-test' })
   });
-  assert.equal(sftp.status, 200);
-  assert.deepEqual(await readJson(sftp), { path: '/isolated-test' });
+  assert.equal(sftp.status, 503);
+  assert.equal((await readJson(sftp)).error.code, 'SFTP_NOT_CONFIGURED');
 
   await running.close();
   running = null;

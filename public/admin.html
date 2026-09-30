@@ -5,12 +5,13 @@
     <title>Admin Management</title>
     <link id="theme-stylesheet" rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="styleAdmin.css">
+    <link rel="stylesheet" href="adminServers.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
     <header>
-        <button id="back-button" onclick="location.href='index.html'">Back to Control Panel</button>
+        <button id="back-button" onclick="location.href='/servers.html'">All servers</button>
         <div class="account-container">
             <button id="account-button">Account</button>
             <div id="account-dropdown" class="account-dropdown hidden">
@@ -79,9 +80,44 @@
             </div>
         </section>
 
+        <section class="server-profiles" aria-labelledby="server-profiles-title">
+            <div class="section-header">
+                <h2 id="server-profiles-title">Server Profiles</h2>
+                <button id="add-server-profile" type="button">Register existing server</button>
+            </div>
+            <p class="profile-help">Everyone has access by default. Manage individual restrictions below. Stop a server before changing its runtime settings, disabling, or removing it.</p>
+            <div id="server-admin-notice" role="status"></div>
+            <div id="server-profile-list"></div>
+            <form id="server-profile-form" class="hidden">
+                <h3 id="server-profile-form-title">Register existing server</h3>
+                <div class="profile-fields">
+                    <label>Stable server ID<input id="profile-id" required pattern="[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}" maxlength="64" placeholder="survival"></label>
+                    <label>Display name<input id="profile-name" required maxlength="120" placeholder="Survival"></label>
+                    <label>Existing server folder<input id="profile-root" required placeholder="/absolute/path/to/server"></label>
+                    <label>Startup script<input id="profile-start" required placeholder="/absolute/path/to/server/start.command"></label>
+                    <label>Screen session<input id="profile-screen" required placeholder="MinecraftSurvival"></label>
+                    <label>Local backup folder<input id="profile-backup" placeholder="Not configured yet"></label>
+                    <label>Timezone<input id="profile-timezone" required value="America/New_York"></label>
+                    <label>Java executable (optional)<input id="profile-java" placeholder="Use startup script setting"></label>
+                    <label>Maximum heap, MiB (optional)<input id="profile-heap" type="number" min="128" max="262144" step="1" placeholder="12288 for Pogeg"></label>
+                    <label>Initial heap, MiB (optional)<input id="profile-initial-heap" type="number" min="128" max="262144" step="1" placeholder="12288 for Pogeg"></label>
+                </div>
+                <label class="profile-enabled"><input id="profile-enabled" type="checkbox" checked> Enabled in the panel</label>
+                <p class="profile-help">SFTP stays disconnected until its directory mappings are supplied. Registering a profile preserves existing server files and does not start it.</p>
+                <div class="profile-actions"><button type="submit" id="save-server-profile">Save profile</button><button type="button" id="cancel-server-profile">Cancel</button></div>
+            </form>
+            <section id="server-access-editor" class="hidden" aria-labelledby="server-access-title">
+                <h3 id="server-access-title">Server access</h3>
+                <p class="profile-help">Uncheck a user to restrict this server. Administrators retain access. Restrictions take effect on active connections too.</p>
+                <div id="server-access-users"></div>
+                <button id="close-server-access" type="button">Done</button>
+            </section>
+        </section>
+
         <section class="update-history">
             <div class="section-header">
                 <h2>Server Update History</h2>
+                <label class="update-history-server-label">Server <select id="update-history-server" aria-label="Server for update history"></select></label>
                 <button id="refresh-update-history-button" type="button">Refresh History</button>
             </div>
             <div class="table-wrapper">
@@ -116,7 +152,9 @@
         </div>
     </div>
 
+    <script src="serverContext.js"></script>
     <script src="appearance.js"></script>
+    <script src="adminServers.js"></script>
     <script src="admin.js"></script>
 </body>
 </html>

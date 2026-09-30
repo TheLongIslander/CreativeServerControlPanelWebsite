@@ -3,8 +3,11 @@
  */
 let currentUser = null;
 const updateHistorySummariesByRunId = new Map();
+let updateHistoryRequest = null;
+let updateHistoryGeneration = 0;
 
 function redirectToLogin() {
+    window.ServerContext?.clearAll();
     localStorage.removeItem('token');
     window.location.href = '/';
 }
@@ -38,7 +41,7 @@ async function loadCurrentUser() {
     }
 
     if (user.role !== 'admin') {
-        window.location.href = '/index.html';
+        window.location.href = '/servers.html';
         return null;
     }
 
@@ -125,9 +128,11 @@ async function fetchUsers() {
     return res.json();
 }
 
-async function fetchUpdateHistory() {
+async function fetchUpdateHistory(serverId, signal) {
     const token = localStorage.getItem('token');
-    const res = await fetch('/admin/updates?limit=200', {
+    const res = await fetch(`/admin/updates?serverId=${encodeURIComponent(serverId)}&limit=200`, {
+        signal,
+        cache: 'no-store',
         headers: {
             'Authorization': 'Bearer ' + token
         }
@@ -329,6 +334,8 @@ function openUpdateSummaryFromRun(run) {
         targetVersion: summary.targetVersion || run.targetVersion || null
     };
     openUpdateSummaryModal(result);
+    const selector = document.getElementById('update-history-server');
+    document.getElementById('update-summary-title').textContent = `${selector.selectedOptions[0]?.textContent || run.serverId} — Update Summary`;
 }
 
 function renderUpdateHistory(runs) {
@@ -715,10 +722,20 @@ async function refreshUsers() {
 }
 
 async function refreshUpdateHistory() {
+    const serverId = document.getElementById('update-history-server').value;
+    if (updateHistoryRequest) updateHistoryRequest.abort();
+    const generation = ++updateHistoryGeneration;
+    updateHistoryRequest = new AbortController();
+    closeUpdateSummaryModal();
+    renderUpdateHistory([]);
+    if (!serverId) return;
+    document.getElementById('update-history-empty').textContent = 'Loading update history…';
     try {
-        const runs = await fetchUpdateHistory();
+        const runs = await fetchUpdateHistory(serverId, updateHistoryRequest.signal);
+        if (generation !== updateHistoryGeneration) return;
         renderUpdateHistory(runs);
     } catch (err) {
+        if (err.name === 'AbortError' || generation !== updateHistoryGeneration) return;
         console.error(err);
         const empty = document.getElementById('update-history-empty');
         if (empty) {
@@ -785,11 +802,14 @@ document.addEventListener('DOMContentLoaded', async function() {
             options: { adminOnly: true }
         });
     }
+    window.ServerContext?.init(currentUser);
+    await window.AdminServers?.init();
     refreshUsers();
     refreshUpdateHistory();
     document.getElementById('audit-log-button').addEventListener('click', () => {
         window.location.href = '/admin-audit.html';
     });
+    document.getElementById('update-history-server').addEventListener('change', refreshUpdateHistory);
     const refreshUpdateHistoryButton = document.getElementById('refresh-update-history-button');
     if (refreshUpdateHistoryButton) {
         refreshUpdateHistoryButton.addEventListener('click', () => {

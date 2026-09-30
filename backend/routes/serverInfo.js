@@ -6,12 +6,12 @@ const authenticateJWT = require('../middleware/authenticate');
 const requireOnboarded = require('../middleware/requireOnboarded');
 const { getServerInfo } = require('../services/serverInfoService');
 
-module.exports = function createServerInfoRoutes({ updateService }) {
+module.exports = function createServerInfoRoutes({ updateService, context = null }) {
   const router = express.Router();
 
   router.get('/server-info', authenticateJWT, requireOnboarded, async (req, res) => {
     try {
-      const payload = await getServerInfo({ updateService });
+      const payload = await getServerInfo({ updateService, context });
       res.json(payload);
     } catch (err) {
       console.error('Failed to load server info:', err);

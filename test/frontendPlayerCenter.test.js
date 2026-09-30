@@ -65,7 +65,7 @@ test('Player Center glass mode remains translucent and Search names has one purp
   const css = source('public/playerCenter.css');
 
   assert.match(html, /playerCenter\.css\?v=20260831-14/);
-  assert.match(html, /playerCenter\.js\?v=20260831-17/);
+  assert.match(html, /playerCenter\.js\?v=20260928-1/);
   assert.match(html, /class="player-center-search-shell" data-pointer-profile="input-shell"/);
   assert.match(css, /#player-center-shell\s*\{[\s\S]*?--pc-panel:\s*#14101d;/);
   assert.match(css, /body\[data-ui-theme="glass"\] #player-center-panel\s*\{[\s\S]*?--pc-panel:\s*rgba\(15, 10, 23, 0\.52\);/);
@@ -582,6 +582,21 @@ test('retained event summaries stay compact and scoped to retained observations'
   assert.equal(partial.value, '1 join · No retained deaths');
   assert.equal(partial.detail, undefined);
   assert.doesNotMatch(partial.value, /0/);
+});
+
+test('manual death corrections show in the summary without rewriting retained log history', () => {
+  const helpers = loadPlayerCenter().__testing;
+  const summary = { observedJoinEvents: 147, observedDeathEvents: 7 };
+  const stat = { key: 'minecraft:deaths', value: 2, correction: { type: 'manual_death_baseline' } };
+  const adjusted = helpers.profileEventPresentation({ summary, stats: [stat] });
+  assert.equal(adjusted.title, 'Joins & deaths');
+  assert.equal(adjusted.value, '147 joins · 2 deaths');
+  assert.match(adjusted.detail, /deaths adjusted to match the leaderboard/);
+  assert.equal(summary.observedDeathEvents, 7);
+  assert.equal(helpers.profileEventPresentation({ summary, stats: [{ ...stat, value: 0 }] }).value, '147 joins · 0 deaths');
+  const unadjusted = helpers.profileEventPresentation({ summary, stats: [] });
+  assert.equal(unadjusted.title, 'Retained log events');
+  assert.equal(unadjusted.value, '147 joins · 7 deaths');
 });
 
 test('link challenge normalization preserves committed degraded delivery receipts', () => {

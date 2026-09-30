@@ -88,12 +88,7 @@ function validateStartupEnvironment(env = process.env) {
     'TEMP_PASSWORD_ENCRYPTION_KEY',
     'START_COMMAND_PATH',
     'MINECRAFT_SERVER_PATH',
-    'BACKUP_PATH',
-    'SFTP_HOST',
-    'SFTP_PORT',
-    'SFTP_USERNAME',
-    'SFTP_PASSWORD',
-    'TMP_UPLOAD_SERVER_PATH'
+    // Backups and SFTP are optional until an administrator configures them.
   ];
   const missing = required.filter(name => !String(env[name] || '').trim());
   if (missing.length) {

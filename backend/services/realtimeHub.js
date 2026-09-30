@@ -10,6 +10,7 @@ function createRealtimeHub({
   allowedOrigins,
   verifyToken = (token) => defaultVerifyToken(token, { requireOnboarded: true }),
   getStatusSnapshot = () => null,
+  authorizeServer = null,
   maxConnections = 100,
   maxConnectionsPerUser = 5,
   maxBufferedBytes = 1024 * 1024,
@@ -35,6 +36,7 @@ function createRealtimeHub({
   let heartbeatTimer = null;
   let revalidateTimer = null;
   let statusProvider = getStatusSnapshot;
+  let serverAuthorizer = typeof authorizeServer === 'function' ? authorizeServer : null;
   const clients = new Set();
   const inFlightOperations = new Set();
   const pendingUserUpgrades = new Map();
@@ -83,8 +85,21 @@ function createRealtimeHub({
     return typeof payload === 'string' ? payload : JSON.stringify(payload);
   }
 
+  function serverAllowed(user, serverId) {
+    if (!serverAuthorizer) return true;
+    try { return serverAuthorizer(user, serverId) === true; } catch (_) { return false; }
+  }
+
+  function authorizedClient(client) {
+    if (!client.meta || client.meta.scope !== 'authenticated') return true;
+    if (serverAllowed(client.meta.user, client.meta.serverId)) return true;
+    client.meta.initQueue.length = 0;
+    try { client.close(1008, 'Server access changed'); } catch (_) { client.terminate(); }
+    return false;
+  }
+
   function sendSerialized(client, data) {
-    if (client.readyState !== WebSocket.OPEN) return false;
+    if (client.readyState !== WebSocket.OPEN || !authorizedClient(client)) return false;
     if (client.bufferedAmount > maxBufferedBytes) {
       closeForSync(client);
       return false;
@@ -105,6 +120,8 @@ function createRealtimeHub({
   }
 
   function deliver(client, payload) {
+    if (!authorizedClient(client)) return false;
+    if (payload && payload.serverId && client.meta && client.meta.serverId !== payload.serverId) return false;
     if (client.meta && client.meta.phase === 'initializing') {
       if (client.meta.initQueue.length >= initBufferLimit) {
         closeForSync(client);
@@ -184,7 +201,9 @@ function createRealtimeHub({
     if (meta.scope === 'authenticated') {
       let snapshot = null;
       try {
-        snapshot = statusProvider(meta.user) || null;
+        snapshot = statusProvider(meta.user, meta.serverId) || null;
+        if (snapshot && snapshot.serverId && snapshot.serverId !== meta.serverId) snapshot = null;
+        if (snapshot && (serverAuthorizer || meta.serverId !== 'default')) snapshot = { ...snapshot, serverId: meta.serverId };
       } catch (_) {
         logger.warn('Failed to build initial realtime status (status_snapshot_unavailable).');
       }
@@ -202,7 +221,9 @@ function createRealtimeHub({
     return {
       id: user.id,
       role: user.role,
-      onboarded: !user.must_reset_password
+      onboarded: !user.must_reset_password,
+      must_reset_password: Boolean(user.must_reset_password),
+      disabled: Boolean(user.disabled)
     };
   }
 
@@ -218,8 +239,19 @@ function createRealtimeHub({
     }
 
     let pathname;
+    let serverId = 'default';
     try {
-      pathname = new URL(request.url, 'http://realtime.invalid').pathname;
+      const url = new URL(request.url, 'http://realtime.invalid');
+      pathname = url.pathname;
+      if ([...url.searchParams.keys()].some(key => key !== 'serverId') || url.searchParams.getAll('serverId').length > 1) {
+        rejectUpgrade(socket, 400, 'Bad Request');
+        return;
+      }
+      if (url.searchParams.has('serverId')) serverId = url.searchParams.get('serverId');
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(serverId)) {
+        rejectUpgrade(socket, 404, 'Not Found');
+        return;
+      }
     } catch (_) {
       rejectUpgrade(socket, 400, 'Bad Request');
       return;
@@ -256,8 +288,12 @@ function createRealtimeHub({
           rejectUpgrade(socket, 503, 'Service Unavailable');
           return;
         }
-        if (!verified.user || verified.user.must_reset_password) {
+        if (!verified.user || verified.user.must_reset_password || verified.user.disabled) {
           rejectUpgrade(socket, 403, 'Forbidden');
+          return;
+        }
+        if (!serverAllowed(sanitizeUser(verified.user), serverId)) {
+          rejectUpgrade(socket, 404, 'Not Found');
           return;
         }
         const userId = verified.user.id;
@@ -270,6 +306,7 @@ function createRealtimeHub({
         pendingUserUpgrades.set(userId, reservedForUser + 1);
         meta = {
           scope: 'authenticated',
+          serverId,
           userId,
           role: verified.user.role,
           user: sanitizeUser(verified.user),
@@ -323,9 +360,14 @@ function createRealtimeHub({
         try {
           const verified = await verifyToken(client.meta.token);
           if (!acceptingUpgrades || !clients.has(client)) return;
+          if (!verified.user || verified.user.id !== client.meta.userId || verified.user.must_reset_password || verified.user.disabled) {
+            client.close(1008, 'Session invalid');
+            continue;
+          }
           client.meta.user = sanitizeUser(verified.user);
           client.meta.role = verified.user.role;
           client.meta.payload = verified.payload;
+          authorizedClient(client);
         } catch (_) {
           if (acceptingUpgrades && clients.has(client)) client.close(1008, 'Session invalid');
         }
@@ -347,19 +389,43 @@ function createRealtimeHub({
     }
   }
 
-  function broadcastAuthenticated(payload) {
-    broadcastWhere(client => client.meta && client.meta.scope === 'authenticated', payload);
+  function objectPayload(payload) {
+    if (typeof payload === 'string') {
+      try { return JSON.parse(payload); } catch (_) { throw new TypeError('Realtime events must be JSON objects.'); }
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new TypeError('Realtime events must be JSON objects.');
+    return payload;
   }
 
-  function broadcastChat(payload) {
-    broadcastWhere(client => client.meta && client.meta.scope === 'authenticated', payload);
+  function broadcastServer(serverId, payload) {
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(String(serverId || ''))) throw new TypeError('A valid realtime server ID is required.');
+    const event = { ...objectPayload(payload), serverId };
+    broadcastWhere(client => client.meta && client.meta.scope === 'authenticated' && client.meta.serverId === serverId, event);
   }
+
+  function broadcastAuthenticated(payload) {
+    const event = objectPayload(payload);
+    if (event.type === 'maintenance') {
+      const { serverId: ignored, ...globalEvent } = event;
+      broadcastWhere(client => client.meta && client.meta.scope === 'authenticated', globalEvent);
+    } else if (event.serverId || serverAuthorizer) {
+      // Legacy unscoped operations belong to Creative. They must never expand
+      // to every registered server when the multi-server authorizer is enabled.
+      broadcastServer(event.serverId || 'default', event);
+    } else broadcastWhere(client => client.meta && client.meta.scope === 'authenticated', event);
+  }
+
+  function broadcastChat(payload) { broadcastAuthenticated(payload); }
 
   function broadcastUser(userId, payload) {
     const target = Number(userId);
+    const event = objectPayload(payload);
+    const serverId = event.serverId || (serverAuthorizer ? 'default' : null);
+    const scoped = serverId ? { ...event, serverId } : event;
     broadcastWhere(client => client.meta
       && client.meta.scope === 'authenticated'
-      && client.meta.userId === target, payload);
+      && client.meta.userId === target
+      && (!serverId || client.meta.serverId === serverId), scoped);
   }
 
   function broadcastPublic(payload) {
@@ -373,6 +439,7 @@ function createRealtimeHub({
     const normalized = typeof payload === 'string'
       ? { type: 'maintenance', reason: payload }
       : { ...payload, type: 'maintenance' };
+    delete normalized.serverId;
     broadcastPublic(normalized);
     broadcastAuthenticated(normalized);
   }
@@ -397,6 +464,15 @@ function createRealtimeHub({
       else publicSockets += 1;
     }
     return { authenticatedSockets, publicSockets, droppedSockets };
+  }
+
+  function disconnectUnauthorized() {
+    for (const client of clients) authorizedClient(client);
+  }
+
+  function setServerAuthorizer(authorizer) {
+    serverAuthorizer = typeof authorizer === 'function' ? authorizer : null;
+    disconnectUnauthorized();
   }
 
   function setStatusProvider(provider) {
@@ -433,13 +509,16 @@ function createRealtimeHub({
     broadcastChat,
     broadcastMaintenance,
     broadcastPublic,
+    broadcastServer,
     broadcastUser,
     close,
     disconnectToken,
     disconnectUser,
+    disconnectUnauthorized,
     getMetrics,
     handleUpgrade,
     setStatusProvider,
+    setServerAuthorizer,
     wss
   };
 }

@@ -1,264 +1,100 @@
-/*
- * Purpose: Worker that downloads files/folders via SFTP and produces ZIPs with progress.
- * Functions: sftpStat, getTotalSize, countFiles, zipDirectory, zipFile, downloadFile,
- *            downloadWithProgress.
- */
-const { parentPort, workerData } = require('worker_threads');
-const { Client } = require('ssh2');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
+/* Each worker receives a server root, never a caller-selected remote absolute path. */
+const { parentPort, workerData } = require('node:worker_threads');
+const path = require('node:path');
+const os = require('node:os');
+const fs = require('node:fs');
 const archiver = require('archiver');
-
-const sftpConnectionDetails = {
-  host: process.env.SFTP_HOST,
-  port: process.env.SFTP_PORT,
-  username: process.env.SFTP_USERNAME,
-  password: process.env.SFTP_PASSWORD,
-  readyTimeout: 600000,
-  keepaliveInterval: 10000
-};
-
-const { filePath, user, requestId, formattedIpAddress, outputFilePath } = workerData;
-// Never derive a local filesystem target from an SFTP basename. A remote `/`,
-// `.`, `..`, or duplicate basename must not resolve to or collide inside the
-// shared system temp directory.
-const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'minecraft-panel-download-'));
-const localPath = path.join(workDirectory, 'payload');
-const tempRoot = path.resolve(os.tmpdir());
-const zipFilePath = path.resolve(String(outputFilePath || ''));
-if (!zipFilePath.startsWith(`${tempRoot}${path.sep}`) || path.extname(zipFilePath) !== '.zip') {
-  throw new Error('Download output path must be a ZIP inside the system temp directory.');
-}
-let downloadedSize = 0;
-let totalSize = 0;
-
-function cleanupWorkDirectory() {
-  try {
-    fs.rmSync(workDirectory, { recursive: true, force: true });
-  } catch (_) {
-    // The OS temp cleaner remains a fallback; never mask the worker result.
-  }
-}
-
-process.once('exit', cleanupWorkDirectory);
-
-const conn = new Client();
-
-conn.on('ready', async () => {
-  conn.sftp(async (err, sftp) => {
-    if (err) {
-      console.error('SFTP connection error:', err);
-      parentPort.postMessage({ type: 'error', requestId, message: 'SFTP connection failed' });
-      cleanupWorkDirectory();
-      conn.end();
-      return;
-    }
-
-    try {
-      const stats = await sftpStat(sftp, filePath);
-
-      if (stats.isDirectory()) {
-        console.log(`Downloading directory: ${filePath}`);
-
-        await fs.promises.mkdir(localPath, { recursive: true });
-        totalSize = await getTotalSize(sftp, filePath);
-
-        await downloadWithProgress(sftp, filePath, localPath);
-        console.log(`Download complete: ${filePath}`);
-
-        let totalFiles = countFiles(localPath);
-        console.log(`Total files to zip: ${totalFiles}`);
-
-        console.log(`Starting ZIP compression for: ${localPath}`);
-        await zipDirectory(localPath, zipFilePath, totalFiles);
-      } else {
-        console.log(`Downloading file: ${filePath}`);
-
-        await downloadFile(sftp, filePath, localPath);
-        if (!filePath.endsWith('.zip')) {
-          console.log(`Zipping file: ${filePath}`);
-          await zipFile(localPath, zipFilePath);
-        } else {
-          fs.renameSync(localPath, zipFilePath);
-          fs.chmodSync(zipFilePath, 0o600);
-        }
-      }
-
-      console.log(`ZIP file created: ${zipFilePath}`);
-
-      console.log(`[DEBUG] Worker done. Sending completion message for Request ID: ${requestId}`);
-      console.log(`[DEBUG] Worker created ZIP file at: ${zipFilePath}`);
-
-      parentPort.postMessage({ 
-        type: 'done', 
-        requestId, 
-        filePath: zipFilePath, 
-        filename: `${requestId}.zip`  // Explicitly include the filename
-      });
-      
-
-    } catch (error) {
-      console.error('Error in worker:', error);
-      try { fs.rmSync(zipFilePath, { force: true }); } catch (_) { /* best effort */ }
-      parentPort.postMessage({ type: 'error', requestId, message: error.message });
-    } finally {
-      conn.end();
-      cleanupWorkDirectory();
-    }
-  });
-}).connect(sftpConnectionDetails);
-
-
-async function sftpStat(sftp, filePath) {
-  return new Promise((resolve, reject) => {
-    sftp.stat(filePath, (err, stats) => {
-      if (err) reject(err);
-      else resolve(stats);
-    });
-  });
-}
-
-async function getTotalSize(sftp, dirPath) {
-  let totalSize = 0;
-  const items = await new Promise((resolve, reject) => {
-    sftp.readdir(dirPath, (err, list) => {
-      if (err) reject(err);
-      else resolve(list);
-    });
-  });
-
-  for (const item of items) {
-    assertSafeSftpEntryName(item.filename);
-    const remoteItemPath = path.posix.join(dirPath, item.filename);
-    const stats = await sftpStat(sftp, remoteItemPath);
-    if (stats.isDirectory()) {
-      totalSize += await getTotalSize(sftp, remoteItemPath);
-    } else {
-      totalSize += stats.size;
-    }
-  }
-  return totalSize;
-}
-
-function countFiles(directory) {
-  try {
-    let count = 0;
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) count += countFiles(entryPath);
-      else if (entry.isFile()) count += 1;
-    }
-    return count || 1;
-  } catch (err) {
-    console.error("Error counting files:", err);
-    return 1;
-  }
-}
-
-async function zipDirectory(localPath, zipFilePath, totalFiles) {
-  let zippedFiles = 0;
-  await createZip(zipFilePath, archive => {
-    archive.on('entry', () => {
-      zippedFiles += 1;
-      const progress = totalFiles > 0 ? Math.min((zippedFiles / totalFiles) * 100, 100) : 100;
-      parentPort.postMessage({ type: 'progress', requestId, progress });
-    });
-    archive.directory(localPath, false);
-  });
-}
-
-
-
-async function zipFile(filePath, zipFilePath) {
-  await createZip(zipFilePath, archive => {
-    archive.file(filePath, { name: path.basename(filePath) });
-  });
-  parentPort.postMessage({ type: 'progress', requestId, progress: 100 });
-}
-
-function createZip(destination, populate) {
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const { call, connect, createResolver, entryName, virtualPath } = require('../services/scopedSftp');
+const { filePath, requestId, serverId, rootPath, outputFilePath } = workerData;
+const MAX_BYTES = Math.min(Number(workerData.maxBytes) || 10 * 1024 ** 3, 10 * 1024 ** 3);
+const MAX_FILES = 100000;
+let workDirectory;
+let downloaded = 0;
+let total = 0;
+let lastProgressAt = 0;
+function cleanup() { if (workDirectory) { try { fs.rmSync(workDirectory, { recursive: true, force: true }); } catch (_) {} } }
+process.once('exit', cleanup);
+function message(value) { parentPort.postMessage({ ...value, requestId, serverId }); }
+async function createZip(destination, populate) {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(destination, { flags: 'wx', mode: 0o600 });
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', { zlib: { level: 6 } });
     let settled = false;
-    const finish = error => {
+    function finish(error) {
       if (settled) return;
       settled = true;
-      if (error) {
-        try { archive.abort(); } catch (_) { /* already stopped */ }
-        try { output.destroy(); } catch (_) { /* already closed */ }
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
+      if (error) { archive.abort(); output.destroy(); reject(error); } else resolve();
+    }
     output.once('close', () => finish());
     output.once('error', finish);
     archive.once('error', finish);
-    archive.on('warning', warning => finish(warning));
+    archive.on('warning', finish);
     archive.pipe(output);
-    try {
-      populate(archive);
-      Promise.resolve(archive.finalize()).catch(finish);
-    } catch (error) {
-      finish(error);
+    populate(archive);
+    archive.finalize().catch(finish);
+  });
+}
+async function run() {
+  // Validate worker input before allocating storage or opening the shared account.
+  if (!serverId || !rootPath || rootPath === '/' || !path.posix.isAbsolute(rootPath)) throw new Error('A configured server backup root is required.');
+  const requested = virtualPath(filePath);
+  const output = path.resolve(String(outputFilePath || ''));
+  if (!output.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`) || path.extname(output) !== '.zip') throw new Error('Invalid download output.');
+  const suppliedWork = path.resolve(String(workerData.workDirectory || ''));
+  if (path.dirname(suppliedWork) !== path.resolve(os.tmpdir()) || !path.basename(suppliedWork).startsWith('minecraft-panel-download-')) throw new Error('Invalid download staging directory.');
+  fs.mkdirSync(suppliedWork, { mode: 0o700 });
+  workDirectory = suppliedWork;
+  const payload = path.join(workDirectory, 'payload');
+  const { sftp, connection } = await connect();
+  try {
+    const resolver = await createResolver(sftp, rootPath);
+    const entries = [];
+    async function inspect(virtual, relative = '', depth = 0) {
+      if (depth > 64 || entries.length >= MAX_FILES) throw new Error('The download contains too many files or directory levels.');
+      const remote = await resolver.resolve(virtual);
+      const stats = await call(sftp, 'stat', remote);
+      if (!stats.isDirectory() && !stats.isFile()) throw new Error('Special files cannot be downloaded.');
+      entries.push({ virtual, relative, directory: stats.isDirectory(), size: Number(stats.size) || 0 });
+      if (stats.isDirectory()) {
+        const children = await call(sftp, 'readdir', remote);
+        for (const child of children) {
+          entryName(child.filename);
+          await inspect(path.posix.join(virtual, child.filename), path.join(relative, child.filename), depth + 1);
+        }
+      } else {
+        total += Number(stats.size) || 0;
+        if (total > MAX_BYTES) throw new Error('The download exceeds the 10 GB transfer limit.');
+      }
     }
-  });
-}
-
-async function downloadFile(sftp, remotePath, localPath) {
-  return new Promise((resolve, reject) => {
-    sftp.fastGet(remotePath, localPath, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-async function downloadWithProgress(sftp, remotePath, localPath) {
-  await fs.promises.mkdir(localPath, { recursive: true });
-
-  const items = await new Promise((resolve, reject) => {
-    sftp.readdir(remotePath, (err, list) => {
-      if (err) reject(err);
-      else resolve(list);
-    });
-  });
-
-  for (const item of items) {
-    assertSafeSftpEntryName(item.filename);
-    const remoteItemPath = path.posix.join(remotePath, item.filename);
-    const localItemPath = path.join(localPath, item.filename);
-
-    if (item.longname.startsWith('d')) {
-      await downloadWithProgress(sftp, remoteItemPath, localItemPath);
-    } else {
-      await new Promise((resolve, reject) => {
-        sftp.fastGet(remoteItemPath, localItemPath, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-
-      downloadedSize += item.attrs.size;
-      const progress = Math.min((downloadedSize / totalSize) * 100, 100);
-      console.log(`[DEBUG] Broadcasting download progress ${progress}% for Request ID: ${requestId}`);
-      parentPort.postMessage({ type: 'progress', requestId, progress });
+    await inspect(requested);
+    for (const entry of entries) {
+      const local = path.join(payload, entry.relative);
+      if (entry.directory) { await fs.promises.mkdir(local, { recursive: true, mode: 0o700 }); continue; }
+      await fs.promises.mkdir(path.dirname(local), { recursive: true, mode: 0o700 });
+      // Re-resolve every item immediately before reading; the remote tree may change.
+      const remote = await resolver.resolve(entry.virtual);
+      let fileBytes = 0;
+      const meter = new Transform({ transform(chunk, _encoding, callback) {
+        downloaded += chunk.length;
+        fileBytes += chunk.length;
+        if (downloaded > MAX_BYTES || fileBytes > entry.size) return callback(new Error('A remote file changed or exceeds the transfer limit.'));
+        if (Date.now() - lastProgressAt > 250) {
+          lastProgressAt = Date.now();
+          message({ type: 'progress', progress: total ? Math.min(downloaded / total * 90, 90) : 90 });
+        }
+        callback(null, chunk);
+      } });
+      await pipeline(sftp.createReadStream(remote), meter, fs.createWriteStream(local, { flags: 'wx', mode: 0o600 }));
     }
-  }
+    if (!entries[0].directory && requested.toLowerCase().endsWith('.zip')) await fs.promises.copyFile(payload, output, fs.constants.COPYFILE_EXCL);
+    else await createZip(output, archive => entries[0].directory ? archive.directory(payload, false) : archive.file(payload, { name: path.posix.basename(requested) }));
+    await fs.promises.chmod(output, 0o600);
+    message({ type: 'done', filePath: output, filename: `${requestId}.zip` });
+  } catch (error) {
+    await fs.promises.rm(output, { force: true }).catch(() => {});
+    throw error;
+  } finally { connection.end(); cleanup(); }
 }
-
-function assertSafeSftpEntryName(value) {
-  if (
-    typeof value !== 'string'
-    || !value
-    || value === '.'
-    || value === '..'
-    || value.includes('/')
-    || value.includes('\\')
-    || value.includes('\0')
-  ) {
-    throw new Error('The remote directory contains an unsafe entry name.');
-  }
-}
+run().catch(() => { message({ type: 'error', message: 'The backup download could not be completed.' }); cleanup(); });

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <base href="/">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Your servers</title>
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
+    <link rel="stylesheet" href="servers.css">
+    <link rel="icon" type="image/x-icon" href="/assets/favicon.ico">
+</head>
+<body class="server-overview">
+    <header class="overview-header">
+        <span class="overview-brand"><span aria-hidden="true">▧</span> Minecraft servers</span>
+        <div class="account-container">
+            <button id="account-button"
+                    type="button"
+                    aria-controls="account-dropdown"
+                    aria-expanded="false">Account</button>
+            <div id="account-dropdown" class="account-dropdown hidden" aria-hidden="true">
+                <button id="manage-account-button">Manage Account</button>
+                <button id="admin-management-button" class="hidden">Admin Management</button>
+                <button id="appearance-button">Appearance</button>
+                <div id="appearance-panel" class="appearance-panel hidden">
+                    <div class="appearance-row">
+                        <span>Classic</span>
+                        <label class="switch">
+                            <input type="checkbox" id="appearance-classic-toggle">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="appearance-label">Color Mode</div>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="system">
+                        System
+                    </label>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="light">
+                        Light
+                    </label>
+                    <label class="appearance-option">
+                        <input type="radio" name="appearance-color" value="dark">
+                        Dark
+                    </label>
+                </div>
+                <button id="logout-button">Logout</button>
+            </div>
+        </div>
+    </header>
+    <main class="overview-main">
+        <div class="overview-intro">
+            <div class="overview-eyebrow">YOUR WORLDS, ONE PLACE</div>
+            <h1>Where to next?</h1>
+            <p>Choose a server to open its control panel.</p>
+        </div>
+        <div class="overview-toolbar">
+            <p id="server-slots" role="status">Checking shared server slots…</p>
+            <button id="refresh-servers" type="button">Refresh</button>
+        </div>
+        <div id="overview-notice" class="overview-notice hidden" role="status"></div>
+        <div id="server-tiles" class="server-tiles" aria-label="Available servers" aria-busy="true">
+            <p class="overview-empty">Loading your servers…</p>
+        </div>
+        <p id="overview-updated" class="overview-updated"></p>
+        <p class="overview-footer">Opening a panel leaves your other servers and their operations running.</p>
+    </main>
+    <script src="serverContext.js"></script>
+    <script src="appearance.js"></script>
+    <script src="servers.js"></script>
+</body>
+</html>

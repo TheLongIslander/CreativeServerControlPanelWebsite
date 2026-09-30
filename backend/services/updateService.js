@@ -10,7 +10,8 @@ const net = require('net');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { execFile } = require('child_process');
-const updateStore = require('../db/updateStore');
+const unzipper = require('unzipper');
+const defaultUpdateStore = require('../db/updateStore');
 const { resolveModsForTarget } = require('./modResolver');
 
 const MOJANG_VERSION_MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
@@ -28,6 +29,45 @@ const ADVANCED_DOWNGRADE_MIN_VERSION = '1.15.2';
 const ADVANCED_DOWNGRADE_MIN_RELEASE_DATE = '2020-04-30';
 const COMPATIBLE_TARGET_RESULT_LIMIT = 5;
 const COMPATIBLE_TARGET_SCAN_LIMIT = 30;
+const MAX_EMBEDDED_VERSION_BYTES = 64 * 1024;
+
+async function readEmbeddedMinecraftVersion(jarPath) {
+  try {
+    const archive = await unzipper.Open.file(jarPath);
+    const entries = archive.files.filter(entry => entry.path === 'version.json');
+    if (entries.length !== 1) return null;
+    const entry = entries[0];
+    if (entry.type !== 'File' || (entry.flags & 1)
+        || !Number.isSafeInteger(entry.uncompressedSize)
+        || entry.uncompressedSize <= 0 || entry.uncompressedSize > MAX_EMBEDDED_VERSION_BYTES
+        || !Number.isSafeInteger(entry.compressedSize)
+        || entry.compressedSize <= 0 || entry.compressedSize > MAX_EMBEDDED_VERSION_BYTES + 1024) return null;
+    const stream = entry.stream();
+    const chunks = [];
+    let size = 0;
+    try {
+      for await (const chunk of stream) {
+        size += chunk.length;
+        // Check actual output too: the ZIP directory's declared size is not
+        // sufficient to bound a malformed compressed entry.
+        if (size > MAX_EMBEDDED_VERSION_BYTES || size > entry.uncompressedSize) return null;
+        chunks.push(chunk);
+      }
+    } finally {
+      stream.destroy();
+    }
+    if (size !== entry.uncompressedSize) return null;
+    const metadata = JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+    const version = metadata && metadata.id;
+    return typeof version === 'string'
+      && /^(?:[1-9]\d?)\.(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2}))?$/.test(version)
+      ? version : null;
+  } catch (_) {
+    // Older launchers may not have embedded metadata, and a partially replaced
+    // or unreadable JAR must still allow the existing detection fallbacks.
+    return null;
+  }
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -528,6 +568,9 @@ function stripTrailingPathSlash(value) {
 
 module.exports = function createUpdateService({
   state,
+  env = process.env,
+  context = null,
+  updateStore = defaultUpdateStore,
   minecraftProcessService,
   processService,
   realtimeHub = null,
@@ -539,15 +582,17 @@ module.exports = function createUpdateService({
   const minecraft = minecraftProcessService || processService || null;
   if (!state) throw new Error('createUpdateService requires shared state');
   let refreshTimer = null;
+  let stopping = false;
+  const pendingRefreshes = new Set();
 
   function getScreenSessionName() {
     return minecraft && minecraft.screenSessionName
       ? minecraft.screenSessionName
-      : (process.env.MINECRAFT_SCREEN_SESSION || DEFAULT_SCREEN_SESSION_NAME);
+      : (env.MINECRAFT_SCREEN_SESSION || DEFAULT_SCREEN_SESSION_NAME);
   }
 
   function getServerPath() {
-    const serverPath = stripTrailingPathSlash(process.env.MINECRAFT_SERVER_PATH || '');
+    const serverPath = stripTrailingPathSlash(env.MINECRAFT_SERVER_PATH || '');
     if (!serverPath) {
       throw new Error('MINECRAFT_SERVER_PATH is not configured.');
     }
@@ -559,7 +604,7 @@ module.exports = function createUpdateService({
   }
 
   function getStartCommandPath() {
-    const startPath = process.env.START_COMMAND_PATH;
+    const startPath = env.START_COMMAND_PATH;
     if (!startPath) {
       throw new Error('START_COMMAND_PATH is not configured.');
     }
@@ -591,6 +636,14 @@ module.exports = function createUpdateService({
       rootStat = await fsp.stat(rootServerJar);
     } catch (_) {
       rootStat = null;
+    }
+
+    if (rootStat && rootStat.isFile()) {
+      // The installed root JAR is authoritative. Modern Minecraft distributions
+      // bundle the inner server JAR, so their sizes differ; logs may also have
+      // rotated or describe a version that has since been replaced.
+      const embeddedVersion = await readEmbeddedMinecraftVersion(rootServerJar);
+      if (embeddedVersion) return embeddedVersion;
     }
 
     const latestLog = await readTextIfExists(path.join(serverPath, 'logs', 'latest.log'));
@@ -747,6 +800,7 @@ module.exports = function createUpdateService({
     }
 
     const mods = await resolveModsForTarget({
+      updateStore,
       modsDir: getModsPath(),
       targetVersion: candidate,
       loader: 'fabric'
@@ -879,6 +933,7 @@ module.exports = function createUpdateService({
   }
 
   async function resolveJavaBinaryPath() {
+    if (context && context.launch && context.launch.javaPath) return context.launch.javaPath;
     const startScript = getStartCommandPath();
     const scriptContent = await readTextIfExists(startScript);
     if (!scriptContent) {
@@ -985,11 +1040,12 @@ module.exports = function createUpdateService({
   }
 
   async function runDiskPreflight() {
+    if (context && !context.backupRoot) return { configured: false, requiredBytes: null, serverFreeBytes: null, backupFreeBytes: null, sufficient: false };
     const serverPath = getServerPath();
     const modsPath = getModsPath();
-    const backupRoot = process.env.BACKUP_PATH
-      ? stripTrailingPathSlash(process.env.BACKUP_PATH)
-      : path.join(path.dirname(serverPath), 'update-snapshots');
+    const backupRoot = env.BACKUP_PATH
+      ? stripTrailingPathSlash(env.BACKUP_PATH)
+      : path.join(path.dirname(serverPath), 'update-snapshots', context ? context.id : 'default');
 
     const [modsSize, serverJarStat, serverFreeBytes, backupFreeBytes] = await Promise.all([
       getDirectorySizeBytes(modsPath),
@@ -1010,7 +1066,15 @@ module.exports = function createUpdateService({
     };
   }
 
-  async function refreshLatestVersion({ force = false } = {}) {
+  function refreshLatestVersion(options = {}) {
+    if (stopping) return Promise.reject(new Error('Update service is closing.'));
+    const pending = refreshLatestVersionInternal(options);
+    pendingRefreshes.add(pending);
+    pending.finally(() => pendingRefreshes.delete(pending)).catch(() => {});
+    return pending;
+  }
+
+  async function refreshLatestVersionInternal({ force = false } = {}) {
     const lastCheckedAt = await updateStore.getState('latestMinecraftCheckedAt');
     if (!force && lastCheckedAt) {
       const elapsed = Date.now() - new Date(lastCheckedAt).getTime();
@@ -1216,9 +1280,8 @@ module.exports = function createUpdateService({
     }
 
     const disk = await runDiskPreflight();
-    if (!disk.sufficient) {
-      blockingReasons.push('blocked_by_disk');
-    }
+    if (disk.configured === false) blockingReasons.push('blocked_by_backup_configuration');
+    else if (!disk.sufficient) blockingReasons.push('blocked_by_disk');
 
     let fabric = {
       supported: false,
@@ -1249,6 +1312,7 @@ module.exports = function createUpdateService({
     };
     try {
       mods = await resolveModsForTarget({
+        updateStore,
         modsDir: getModsPath(),
         targetVersion: resolvedTarget,
         loader: 'fabric'
@@ -1435,7 +1499,7 @@ module.exports = function createUpdateService({
     direct = false
   } = {}) {
     if (state.shutdownInProgress) return false;
-    if (!direct && minecraft && typeof minecraft.start === 'function') {
+    if ((!direct || context) && minecraft && typeof minecraft.start === 'function') {
       const result = await minecraft.start({ reason });
       const snapshot = result && result.snapshot
         ? result.snapshot
@@ -1457,10 +1521,11 @@ module.exports = function createUpdateService({
   }
 
   async function createSnapshot(targetVersion) {
+    if (context && !context.backupRoot) throw new Error('Local backup storage must be configured before applying updates.');
     const serverPath = getServerPath();
-    const backupBase = process.env.BACKUP_PATH
-      ? stripTrailingPathSlash(process.env.BACKUP_PATH)
-      : path.join(path.dirname(serverPath), 'update-snapshots');
+    const backupBase = env.BACKUP_PATH
+      ? stripTrailingPathSlash(env.BACKUP_PATH)
+      : path.join(path.dirname(serverPath), 'update-snapshots', context ? context.id : 'default');
     const snapshotRoot = path.join(backupBase, 'UpdateSnapshots');
     const snapshotName = `${targetVersion}-${formatTimestampForFolder()}`;
     const snapshotPath = path.join(snapshotRoot, snapshotName);
@@ -2025,14 +2090,14 @@ module.exports = function createUpdateService({
     }
   }
 
-  async function initialize() {
+  async function initialize({ refresh = true } = {}) {
     await updateStore.initUpdateStore();
     const lock = await updateStore.getLock();
     state.updateLocked = Boolean(lock);
     state.updateLockOwner = lock ? lock.owner : null;
     await getCurrentVersion();
     try {
-      await refreshLatestVersion({ force: true });
+      if (refresh) await refreshLatestVersion({ force: true });
     } catch (err) {
       console.warn('Initial latest-version refresh failed:', err.message);
     }
@@ -2060,6 +2125,7 @@ module.exports = function createUpdateService({
   }
 
   async function restoreLatestSnapshot({ actorUserId } = {}) {
+    if (context && !context.backupRoot) throw new Error('Local backup storage must be configured before restoring updates.');
     const owner = `restore-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await acquireUpdateLock(owner);
 
@@ -2161,6 +2227,7 @@ module.exports = function createUpdateService({
   }
 
   return {
+    async shutdown() { stopping = true; stopStatusRefreshTimer(); await Promise.allSettled([...pendingRefreshes]); },
     initialize,
     startStatusRefreshTimer,
     stopStatusRefreshTimer,

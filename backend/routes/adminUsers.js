@@ -68,7 +68,7 @@ function buildFallbackNotes({
   return lines.join('\n');
 }
 
-module.exports = function createAdminUserRoutes({ realtimeHub = null } = {}) {
+module.exports = function createAdminUserRoutes({ realtimeHub = null, resolveUpdateStore = null } = {}) {
   const router = express.Router();
   router.use('/admin', authenticateJWT, requireOnboarded, requireAdmin);
 
@@ -149,9 +149,12 @@ module.exports = function createAdminUserRoutes({ realtimeHub = null } = {}) {
 
   router.get('/admin/updates', async (req, res) => {
     try {
+      const serverId = typeof req.query.serverId === 'string' ? req.query.serverId : 'default';
+      const scopedUpdateStore = resolveUpdateStore ? resolveUpdateStore(serverId) : (serverId === 'default' ? updateStore : null);
+      if (!scopedUpdateStore) return res.status(404).json({ error: { code: 'SERVER_NOT_FOUND', message: 'Server update history is unavailable.' } });
       const parsedLimit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
       const [runs, users] = await Promise.all([
-        updateStore.listRuns(parsedLimit),
+        scopedUpdateStore.listRuns(parsedLimit),
         usersDb.listUsers()
       ]);
       const usernamesById = new Map(users.map(user => [user.id, user.username]));
@@ -160,7 +163,7 @@ module.exports = function createAdminUserRoutes({ realtimeHub = null } = {}) {
           .map(run => run && Number.isInteger(run.checkId) ? run.checkId : null)
           .filter(Boolean)
       ));
-      const checks = await Promise.all(checkIds.map(id => updateStore.getCheckById(id)));
+      const checks = await Promise.all(checkIds.map(id => scopedUpdateStore.getCheckById(id)));
       const checksById = new Map();
       checks.forEach(check => {
         if (check && Number.isInteger(check.id)) {
@@ -206,6 +209,7 @@ module.exports = function createAdminUserRoutes({ realtimeHub = null } = {}) {
 
         return {
           id: run.id,
+          serverId,
           checkId: run.checkId || null,
           actorUserId: run.actorUserId || null,
           actorUsername: run.actorUserId ? (usernamesById.get(run.actorUserId) || 'Unknown') : 'System',

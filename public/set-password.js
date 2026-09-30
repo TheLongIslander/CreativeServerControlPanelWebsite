@@ -87,13 +87,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     });
 
     passkeySkip.addEventListener('click', () => {
-        window.location.href = '/index.html';
+        window.location.href = '/servers.html';
     });
 
     passkeyAccept.addEventListener('click', async () => {
         if (!window.PublicKeyCredential) {
             alert('Passkeys are not supported on this device.');
-            window.location.href = '/index.html';
+            window.location.href = '/servers.html';
             return;
         }
         try {
@@ -102,6 +102,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         } catch (err) {
             alert(err.message || 'Passkey setup failed.');
         }
-        window.location.href = '/index.html';
+        window.location.href = '/servers.html';
     });
 });

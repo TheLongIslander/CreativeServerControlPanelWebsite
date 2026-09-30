@@ -1,0 +1,22 @@
+.server-profiles { background: var(--surface-2); border: 1px solid var(--border); border-radius: 18px; padding: 22px; margin: 24px 0; }
+body[data-color-scheme="light"] .server-profiles, body[data-color-scheme="light"] #update-history-server { --surface: #f4f6f7; --surface-2: rgba(255,255,255,.66); --text: #24343b; --muted: #586a73; --border: rgba(32,64,75,.17); }
+@media (prefers-color-scheme: light) { body:not([data-color-scheme]) .server-profiles, body:not([data-color-scheme]) #update-history-server { --surface: #f4f6f7; --surface-2: rgba(255,255,255,.66); --text: #24343b; --muted: #586a73; --border: rgba(32,64,75,.17); } }
+.profile-help { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.server-profile-row { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 18px 0; border-bottom: 1px solid var(--border); }
+.server-profile-row p { font-size: 12px; color: var(--muted); margin-bottom: 0; }
+.profile-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.server-profiles button { margin: 0; padding: 9px 14px; font-size: 13px; }
+.profile-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.profile-fields label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.profile-fields input { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 14px; }
+.profile-fields input:focus-visible { outline: 2px solid #2dd4bf; outline-offset: 2px; }
+.profile-enabled, .server-access-user { display: flex; align-items: center; gap: 10px; padding: 12px 0; font-size: 14px; }
+.profile-enabled input, .server-access-user input { width: 18px; height: 18px; accent-color: #0f9e89; }
+#server-profile-form, #server-access-editor { padding-top: 12px; }
+#server-admin-notice { font-size: 14px; margin: 10px 0; line-height: 1.6; }
+#server-admin-notice.profile-error { color: #dc5b51; }
+#server-access-users { margin-bottom: 15px; }
+@media (max-width: 700px) { .profile-fields { grid-template-columns: 1fr; } .server-profile-row { align-items: flex-start; flex-direction: column; } .server-profiles { padding: 16px; } }
+
+.update-history-server-label { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+#update-history-server { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); padding: 8px 12px; font-size: 14px; }

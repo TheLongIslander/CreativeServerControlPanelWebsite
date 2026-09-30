@@ -19,6 +19,7 @@ const {
 } = require('../utils/logger');
 
 module.exports = function createBackupRoutes({
+  context = null,
   minecraftProcessService,
   processService,
   realtimeHub = null,
@@ -116,20 +117,61 @@ module.exports = function createBackupRoutes({
     });
   }
 
-  async function performBackup(now) {
-    const sourcePath = process.env.MINECRAFT_SERVER_PATH;
-    const backupRoot = process.env.BACKUP_PATH;
-    if (!sourcePath || !backupRoot) {
+  async function prepareBackup(now) {
+    const configuredSource = context ? context.rootPath : process.env.MINECRAFT_SERVER_PATH;
+    const backupRoot = context ? context.backupRoot : process.env.BACKUP_PATH;
+    if (!configuredSource || !backupRoot) {
       throw new Error('MINECRAFT_SERVER_PATH and BACKUP_PATH must be configured.');
     }
-    const dateFolder = getFormattedDate(now);
-    const hourLabel = now.getHours() >= 12
-      ? `${(now.getHours() % 12) || 12} PM`
-      : `${now.getHours()} AM`;
-    const destinationPath = path.join(backupRoot, dateFolder, hourLabel);
-    await fs.promises.mkdir(destinationPath, { recursive: true });
+    // Require the configured destination to exist. In particular, do not
+    // recreate /Volumes/... on the system disk when a backup drive is absent.
+    let rootPath;
+    try {
+      rootPath = await fs.promises.realpath(backupRoot);
+      if (!(await fs.promises.stat(rootPath)).isDirectory()) throw new Error('Not a directory');
+      await fs.promises.access(rootPath, fs.constants.W_OK);
+    } catch (cause) {
+      throw Object.assign(new Error('The backup folder is unavailable or not writable. Check that the backup drive is connected.'), { status: 503, cause });
+    }
+    const sourceRoot = await fs.promises.realpath(configuredSource);
+    if (!(await fs.promises.stat(sourceRoot)).isDirectory()) throw new Error('The Minecraft source must be a directory.');
+    if (rootPath === sourceRoot || rootPath.startsWith(`${sourceRoot}${path.sep}`)) {
+      throw new Error('The backup folder must be outside the Minecraft source directory.');
+    }
+    const dateFolder = getFormattedDate(now, context?.timezone);
+    const hourLabel = context
+      ? new Intl.DateTimeFormat('en-US', { timeZone: context.timezone, hour: 'numeric', hour12: true }).format(now)
+      : now.getHours() >= 12 ? `${(now.getHours() % 12) || 12} PM` : `${now.getHours()} AM`;
+    const datePath = path.join(rootPath, dateFolder);
+    try { await fs.promises.mkdir(datePath); } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    if ((await fs.promises.realpath(datePath)) !== datePath || !(await fs.promises.stat(datePath)).isDirectory()) {
+      throw new Error('The backup date folder must be a directory inside the configured backup root.');
+    }
+    const destinationPath = path.join(datePath, hourLabel);
+    await requireUnusedDestination(destinationPath);
+    // Publish a completed folder only after rsync succeeds, and clean up this
+    // explicitly incomplete staging directory on any ordinary failure.
+    const stagingPath = await fs.promises.mkdtemp(path.join(datePath, `.incomplete-${hourLabel}-`));
+    return { sourcePath: `${sourceRoot}${path.sep}`, destinationPath, stagingPath };
+  }
+
+  async function requireUnusedDestination(destinationPath) {
+    try {
+      await fs.promises.lstat(destinationPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    throw Object.assign(new Error('A backup already exists for this hour.'), { status: 429 });
+  }
+
+  async function performBackup({ sourcePath, destinationPath, stagingPath }) {
     const totalSize = await calculateDirectorySize(sourcePath);
-    await runRsyncBackup({ sourcePath, destinationPath, totalSize });
+    await runRsyncBackup({ sourcePath, destinationPath: `${stagingPath}${path.sep}`, totalSize });
+    await requireUnusedDestination(destinationPath);
+    await fs.promises.rename(stagingPath, destinationPath);
   }
 
   router.post('/backup', authenticateJWT, requireOnboarded, async (req, res) => {
@@ -141,7 +183,7 @@ module.exports = function createBackupRoutes({
     }
 
     const now = new Date();
-    const currentHour = getEasternDateHour();
+    const currentHour = context ? new Intl.DateTimeFormat('en-US', { timeZone: context.timezone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false }).format(now) : getEasternDateHour();
     if (state.lastBackupHour === currentHour) {
       return res.status(429).send('A backup has already been performed this hour.');
     }
@@ -151,7 +193,11 @@ module.exports = function createBackupRoutes({
     let restartRequired = false;
     let operationError = null;
     let restartError = null;
+    let backup = null;
     try {
+      // Validate the drive and create a writable staging directory before
+      // interrupting a running server.
+      backup = await prepareBackup(now);
       if (typeof minecraft.reconcile === 'function') {
         await minecraft.reconcile({ reason: 'backup_preflight' });
       }
@@ -171,7 +217,7 @@ module.exports = function createBackupRoutes({
         }
       }
 
-      await performBackup(now);
+      await performBackup(backup);
       state.lastBackupHour = currentHour;
       broadcastBackupProgress({ type: 'progress', value: 100 });
       logger.log(`Backup performed successfully at ${getEasternTime()}`);
@@ -180,6 +226,10 @@ module.exports = function createBackupRoutes({
       operationError = err;
       logger.error('Backup failed:', err);
     } finally {
+      if (backup) {
+        try { await fs.promises.rm(backup.stagingPath, { recursive: true, force: true }); }
+        catch (err) { logger.warn('Failed to clean up an incomplete backup:', err.message); }
+      }
       if (restartRequired && !state.shutdownInProgress) {
         try {
           const started = await minecraft.start({ reason: 'backup_restart' });
@@ -206,10 +256,10 @@ module.exports = function createBackupRoutes({
     }
 
     if (operationError || restartError) {
-      return res.status(500).send(
+      return res.status(restartError ? 500 : operationError.status || 500).send(
         restartError
           ? 'Backup finished, but the Minecraft server failed to restart'
-          : 'Failed to perform backup'
+          : operationError.status ? operationError.message : 'Failed to perform backup'
       );
     }
     return res.send('Backup performed successfully');

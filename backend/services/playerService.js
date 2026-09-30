@@ -3,6 +3,8 @@
  * presence, backup-derived trends, and privacy-bounded archived activity.
  */
 
+const { createPlayerDeathCorrections } = require('./playerDeathCorrections');
+
 const PLAYTIME_CATEGORY = 'minecraft:custom';
 const PLAYTIME_KEY = 'minecraft:play_time';
 const MAX_DIRECTORY_PAGE_SIZE = 500;
@@ -338,6 +340,7 @@ function createPlayerService({
   clearTimer = clearTimeout,
   defer = setImmediate,
   historicalImport = true,
+  deathCorrections = null,
   logger = console
 } = {}) {
   if (!context || !context.id) throw new TypeError('playerService requires a server context');
@@ -347,6 +350,7 @@ function createPlayerService({
   if (!Number.isSafeInteger(collectionIntervalMs) || collectionIntervalMs < 10_000) {
     throw new TypeError('collectionIntervalMs must be at least 10000');
   }
+  const playerDeathCorrections = deathCorrections || createPlayerDeathCorrections({ serverId: context.id, logger });
 
   let initialized = false;
   let stopped = true;
@@ -868,6 +872,7 @@ function createPlayerService({
     const lifetimeDeaths = stats.find(stat => (
       stat.category === 'minecraft:custom' && stat.statKey === 'minecraft:deaths'
     ));
+    const publicStats = selectPublicStats(await playerDeathCorrections.apply({ uuid: profile.uuid, stats }));
     return {
       serverId: context.id,
       observedAt: live.observedAt,
@@ -903,8 +908,8 @@ function createPlayerService({
         completedAdvancements: completed.length,
         observedSessions: sessions.length
       },
-      stats: selectPublicStats(stats),
-      statistics: selectPublicStats(stats),
+      stats: publicStats,
+      statistics: publicStats,
       // Custom objectives can contain staff/internal metadata. Only the
       // explicitly recognized public playtime objective crosses the API.
       // Scoreboard holders are name-keyed legacy subjects. They are exposed in

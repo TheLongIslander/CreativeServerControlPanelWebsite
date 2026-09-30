@@ -2,8 +2,9 @@
  * Purpose: SFTP connection configuration sourced from environment variables.
  */
 const connectionDetails = {
-  readyTimeout: 600000,
-  keepaliveInterval: 10000
+  readyTimeout: 30000,
+  keepaliveInterval: 10000,
+  keepaliveCountMax: 3
 };
 
 // Routes are imported before startServer() loads .env. Keep credential fields

@@ -648,6 +648,7 @@ test('backup lifecycle and progress use the shared process service and authentic
   const sourcePath = path.join(tempRoot, 'server');
   const backupPath = path.join(tempRoot, 'backups');
   await fs.promises.mkdir(sourcePath, { recursive: true });
+  await fs.promises.mkdir(backupPath);
   await fs.promises.writeFile(path.join(sourcePath, 'level.dat'), 'test');
 
   const previousServerPath = process.env.MINECRAFT_SERVER_PATH;
@@ -824,4 +825,205 @@ test('update progress uses only authenticated broadcasts and releases its lock o
   assert.equal(state.updateLockOwner, null);
   assert.equal(state.maintenanceMode, false);
   assert.equal(typeof service.stopStatusRefreshTimer, 'function');
+});
+
+test('macOS Screen exit 1 with a complete other-session listing proves the selected server offline', async () => {
+  const listing = 'There is a screen on:\r\n\t19808.MCPanelDisposableCreative\t(Detached)\n1 Socket in /private/tmp/.screen.\n';
+  const calls = [];
+  const service = createMinecraftProcessService({
+    state: {}, screenSessionName: 'MCPanelDisposablePogeg',
+    execFileAsync: async (file, args) => {
+      calls.push([file, ...args]);
+      throw Object.assign(new Error('screen exited 1'), { code: 1, stdout: listing, stderr: '' });
+    },
+    fsPromises: { stat() { throw new Error('An absent server must not read its old log.'); } }
+  });
+  assert.equal(await service.probeScreenIdentity(), null);
+  const stopped = await service.stop({ wait: true });
+  assert.equal(stopped.stopped, false);
+  assert.equal(stopped.snapshot.state, 'offline');
+  assert.ok(stopped.snapshot.lastSuccessfulProbeAt);
+  assert.equal(calls.every(call => call[0] === 'screen' && call[1] === '-ls'), true);
+  const existing = createMinecraftProcessService({
+    state: {}, screenSessionName: 'MCPanelDisposableCreative',
+    execFileAsync: async () => { throw Object.assign(new Error('screen exited 1'), { code: 1, stdout: listing }); }
+  });
+  assert.equal(await existing.probeScreenIdentity(), '19808.MCPanelDisposableCreative');
+});
+
+test('incomplete, inconsistent and failed Screen listings cannot prove a missing server offline', async () => {
+  const complete = 'There are screens on:\n\t123.Other\t(Detached)\n\t456.Another\t(Attached)\n2 Sockets in /tmp/.screen.\n';
+  const cases = [
+    { code: 1, stdout: 'There is a screen on:\n\t123.Other\t(Detached)\n' },
+    { code: 1, stdout: complete.replace('2 Sockets', '3 Sockets') },
+    { code: 1, stdout: complete, stderr: 'Cannot access the socket directory.' },
+    { code: 'EACCES', stdout: complete },
+    { code: 1, stdout: complete, killed: true, signal: 'SIGTERM' },
+    { code: 1, stdout: 'screen: permission denied' }
+  ];
+  for (const result of cases) {
+    const error = Object.assign(new Error('unreliable Screen probe'), result);
+    const service = createMinecraftProcessService({ state: {}, execFileAsync: async () => { throw error; } });
+    await assert.rejects(service.probeScreenIdentity(), candidate => candidate === error);
+    const before = service.getSnapshot();
+    assert.equal(await service.reconcile(), before);
+    assert.equal(service.getSnapshot().lastSuccessfulProbeAt, null);
+  }
+  const truncatedSuccess = createMinecraftProcessService({ state: {}, execFileAsync: async () => ({ stdout: '', stderr: '' }) });
+  await assert.rejects(truncatedSuccess.probeScreenIdentity(), { code: 'SCREEN_PROBE_UNRECOGNIZED' });
+  const dated = createMinecraftProcessService({ state: {}, screenSessionName: 'Other', execFileAsync: async () => ({ stdout: '\t123.Other\t(09/28/2026 05:21:46 PM)\t(Detached)\n' }) });
+  assert.equal(await dated.probeScreenIdentity(), '123.Other');
+});
+
+test('overlapping reconciliation waits for the shared probe instead of returning the old snapshot', async () => {
+  const { createServerAdmission } = require('../backend/services/serverAdmission');
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  const service = createMinecraftProcessService({
+    state: {}, execFileAsync: async () => {
+      calls++;
+      await gate;
+      return { stdout: 'No Sockets found.\n' };
+    }
+  });
+  const before = service.getSnapshot();
+  const first = service.reconcile({ reason: 'background' });
+  const second = service.reconcile({ reason: 'foreground' });
+  assert.equal(first, second);
+  const admission = createServerAdmission({ runtimes: new Map([['a', { processService: service }]]) });
+  const admitted = admission.begin('a', { id: 7, role: 'user' }, 'start', { mayStart: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1);
+  release();
+  const observed = await second;
+  assert.notEqual(observed, before);
+  assert.ok(observed.lastSuccessfulProbeAt);
+  const releaseAdmission = await admitted;
+  assert.equal(admission.isBusy('a'), true);
+  await releaseAdmission();
+  assert.equal(admission.isBusy('a'), false);
+});
+
+test('a reconciliation requested during publication obtains a fresh subsequent probe', async () => {
+  let calls = 0;
+  const service = createMinecraftProcessService({ state: {}, execFileAsync: async () => { calls++; return { stdout: 'No Sockets found.\n' }; } });
+  let late;
+  service.once('change', () => { late = service.reconcile({ reason: 'late_preflight' }); });
+  const first = await service.reconcile({ reason: 'background' });
+  const second = await late;
+  assert.equal(calls, 2);
+  assert.notEqual(second, first);
+  assert.equal(second.reason, 'late_preflight');
+});
+
+test('stop retries transient Dead Screen probes without treating them as offline', async () => {
+  const dead = 'There are screens on:\r\n\t21421.MinecraftSession\t(Dead ???)\n\t20926.Other\t(Detached)\nRemove dead screens with screen -wipe.\n2 Sockets in /tmp/.screen.\n';
+  let probes = 0, commands = 0, live = true;
+  const delays = [];
+  const service = createMinecraftProcessService({
+    state: {},
+    setTimer(callback, delay) { delays.push(delay); queueMicrotask(callback); return null; },
+    execFileAsync: async (_file, args) => {
+      if (args[0] === '-ls') {
+        probes++;
+        if (probes <= 2) throw Object.assign(new Error('screen exited 1'), { code: 1, stdout: dead });
+        return { stdout: live ? '\t21421.MinecraftSession\t(Detached)\n' : 'No Sockets found.\n' };
+      }
+      commands++;
+      assert.deepEqual(args, ['-S', 'MinecraftSession', '-p', '0', '-X', 'stuff', 'stop\r']);
+      live = false;
+      return { stdout: '' };
+    }
+  });
+  const result = await service.stop();
+  assert.equal(result.stopped, true);
+  assert.equal(result.snapshot.state, 'offline');
+  assert.equal(commands, 1);
+  assert.deepEqual(delays, [250, 500]);
+  let failedProbes = 0;
+  const unknown = createMinecraftProcessService({
+    state: {}, setTimer(callback) { queueMicrotask(callback); return null; },
+    execFileAsync: async (_file, args) => {
+      assert.deepEqual(args, ['-ls']); failedProbes++;
+      throw Object.assign(new Error('screen exited 1'), { code: 1, stdout: dead });
+    }
+  });
+  await assert.rejects(unknown.stop(), /screen exited 1/);
+  assert.equal(failedProbes, 4);
+  assert.equal(unknown.getSnapshot().lastSuccessfulProbeAt, null);
+});
+
+test('startup retries transient Dead sockets and keeps readiness gated on the new log', async t => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'minecraft-dead-start-'));
+  const logPath = path.join(tempRoot, 'latest.log');
+  await fs.promises.writeFile(logPath, '[11:00:00] [Server thread/INFO]: Starting minecraft server version 1.21.1\n[11:00:03] [Server thread/INFO]: Done (3.0s)! For help, type "help"\n');
+  t.after(() => fs.promises.rm(tempRoot, { recursive: true, force: true }));
+  let launched = false, deadProbes = 0;
+  const service = createMinecraftProcessService({
+    state: {}, logPath, startCommandPath: '/fixture/start.sh',
+    setTimer(callback) { queueMicrotask(callback); return null; },
+    launchProcess: async () => { launched = true; },
+    execFileAsync: async () => {
+      if (!launched) return { stdout: 'No Sockets found.\n' };
+      if (deadProbes++ < 2) throw Object.assign(new Error('screen exited 1'), { code: 1, stdout: 'There is a screen on:\n\t123.MinecraftSession\t(Dead ???)\n1 Socket in /tmp/.screen.\n' });
+      return { stdout: '\t123.MinecraftSession\t(Detached)\n' };
+    }
+  });
+  const result = await service.start();
+  assert.equal(result.started, true);
+  assert.equal(result.snapshot.state, 'starting');
+  await fs.promises.writeFile(logPath, '[12:00:00] [Server thread/INFO]: Starting minecraft server version 1.21.1\n[12:00:09] [Server thread/INFO]: Done (9.0s)! For help, type "help"\n');
+  assert.equal((await service.reconcile()).state, 'ready');
+});
+
+test('an absent background probe during launch cannot clear the fresh-start readiness gate', async t => {
+  for (const probeBeganBeforeLaunch of [false, true]) {
+    const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'minecraft-launch-race-'));
+    const logPath = path.join(tempRoot, 'latest.log');
+    await fs.promises.writeFile(logPath, '[11:00:00] [Server thread/INFO]: Starting minecraft server version 1.21.1\n[11:00:03] [Server thread/INFO]: Done (3.0s)! For help, type "help"\n');
+    t.after(() => fs.promises.rm(tempRoot, { recursive: true, force: true }));
+    let live = false, probes = 0, releaseLaunch, releaseBackground, launchEntered;
+    const launchGate = new Promise(resolve => { releaseLaunch = resolve; });
+    const backgroundGate = new Promise(resolve => { releaseBackground = resolve; });
+    const launchStarted = new Promise(resolve => { launchEntered = resolve; });
+    const service = createMinecraftProcessService({
+      state: {}, logPath, startCommandPath: '/fixture/start.sh',
+      launchProcess: async () => { launchEntered(); await launchGate; live = true; },
+      execFileAsync: async () => {
+        probes++;
+        if (probeBeganBeforeLaunch && probes === 1) { await backgroundGate; return { stdout: 'No Sockets found.\n' }; }
+        return { stdout: live ? '\t321.MinecraftSession\t(Detached)\n' : 'No Sockets found.\n' };
+      }
+    });
+    let background = probeBeganBeforeLaunch ? service.reconcile({ reason: 'background' }) : null;
+    const starting = service.start();
+    await launchStarted;
+    background ||= service.reconcile({ reason: 'background' });
+    releaseBackground();
+    assert.equal((await background).state, 'starting');
+    releaseLaunch();
+    assert.equal((await starting).snapshot.state, 'starting');
+    assert.equal((await service.reconcile()).state, 'starting');
+    await fs.promises.writeFile(logPath, '[12:00:00] [Server thread/INFO]: Starting minecraft server version 1.21.1\n[12:00:12] [Server thread/INFO]: Done (12.0s)! For help, type "help"\n');
+    assert.equal((await service.reconcile()).state, 'ready');
+  }
+});
+
+test('a queued start cannot launch after panel shutdown begins', async () => {
+  const state = { shutdownInProgress: false };
+  let invoked = 0, unblock;
+  const service = createMinecraftProcessService({
+    state, startCommandPath: '/fixture/start.sh',
+    execFileAsync: async () => { invoked++; return { stdout: 'No Sockets found.\n' }; },
+    launchProcess: async () => { invoked++; }
+  });
+  const gate = new Promise(resolve => { unblock = resolve; });
+  const inFlight = service.operationMutex.runExclusive(() => gate);
+  const pendingStart = service.start({ reason: 'update_restart' });
+  state.shutdownInProgress = true;
+  unblock();
+  await inFlight;
+  await assert.rejects(pendingStart, { code: 'PANEL_SHUTTING_DOWN' });
+  assert.equal(invoked, 0);
 });

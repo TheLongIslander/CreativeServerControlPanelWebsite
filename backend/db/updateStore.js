@@ -4,11 +4,16 @@
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
+function createUpdateStore({ dbPath: configuredDbPath } = {}) {
 let db = null;
+let initialization = null;
+let closed = false;
 
 function getDb() {
+  if (closed) throw new Error('Update store is closed.');
   if (!db) {
-    const dbPath = path.resolve(process.env.UPDATES_DB_PATH || path.join(__dirname, '..', '..', 'updates.db'));
+    const dbPath = path.resolve(configuredDbPath || process.env.UPDATES_DB_PATH || path.join(__dirname, '..', '..', 'updates.db'));
+    require('node:fs').mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
     db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE);
   }
   return db;
@@ -65,7 +70,7 @@ function safeJsonParse(value, fallback = null) {
   }
 }
 
-async function initUpdateStore() {
+async function initializeSchema() {
   await run(`
     CREATE TABLE IF NOT EXISTS update_state (
       key TEXT PRIMARY KEY,
@@ -420,13 +425,21 @@ async function upsertModSourceCache({
 }
 
 async function close() {
+  closed = true;
+  initialization = null;
   if (!db) return;
   const handle = db;
   db = null;
   await new Promise((resolve, reject) => handle.close(err => (err ? reject(err) : resolve())));
 }
 
-module.exports = {
+function initUpdateStore() {
+  closed = false;
+  if (!initialization) initialization = initializeSchema().catch(error => { initialization = null; throw error; });
+  return initialization;
+}
+
+return {
   close,
   initUpdateStore,
   getState,
@@ -444,3 +457,7 @@ module.exports = {
   getModSourceCacheByHash,
   upsertModSourceCache
 };
+
+}
+
+module.exports = { ...createUpdateStore(), createUpdateStore };

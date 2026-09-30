@@ -6,6 +6,9 @@ const path = require('path');
 const express = require('express');
 const fileUpload = require('express-fileupload');
 
+const { createMultiServerRuntime } = require('./backend/services/multiServerRuntime');
+const { createMultiServerRoutes } = require('./backend/routes/multiServer');
+
 const defaultState = require('./backend/state');
 const logger = require('./backend/utils/logger');
 const usersDb = require('./backend/db/users');
@@ -32,8 +35,7 @@ const createDownloadRoutes = require('./backend/routes/download');
 const createUploadRoutes = require('./backend/routes/upload');
 const {
   closePreviewResources,
-  createPreviewRoutes,
-  precacheVideoThumbnails
+  createPreviewRoutes
 } = require('./backend/routes/preview');
 const createAdminUserRoutes = require('./backend/routes/adminUsers');
 const createWebAuthnRoutes = require('./backend/routes/webauthn');
@@ -48,6 +50,8 @@ const authenticateJWT = require('./backend/middleware/authenticate');
 const requireOnboarded = require('./backend/middleware/requireOnboarded');
 
 function createRuntime(overrides = {}) {
+  if (overrides.__composed) return overrides;
+  if (!overrides.processService && !overrides.minecraftProcessService && overrides.multiServer !== false) return createMultiServerRuntime(overrides);
   const env = overrides.env || process.env;
   const config = overrides.config || loadRuntimeConfig(env);
   const state = overrides.state || defaultState;
@@ -133,6 +137,7 @@ function createRuntime(overrides = {}) {
 
   return {
     ...overrides,
+    __composed: true,
     allowedOrigins,
     config,
     chatService,
@@ -159,6 +164,19 @@ function createApp(dependencies = {}) {
   app.disable('x-powered-by');
   app.set('trust proxy', runtime.config.trustProxy);
   app.locals.runtime = runtime;
+
+  if (runtime.multiServer) {
+    app.use(express.urlencoded({ extended: true, limit: '16kb' }));
+    app.use(express.json({ limit: '16kb' }));
+    app.use(createMultiServerRoutes(runtime));
+    app.use(createPageRoutes({ state: runtime.state }));
+    app.use(express.static(path.join(__dirname, 'public')));
+    app.use('/assets', express.static(path.join(__dirname, 'assets')));
+    app.use(createAuthRoutes({ logServerAction: runtime.logServerAction || logger.logServerAction, cleanupExpiredTokens: runtime.cleanupExpiredTokens || logger.cleanupExpiredTokens, realtimeHub: runtime.realtimeHub }));
+    app.use(createAdminUserRoutes({ realtimeHub: runtime.realtimeHub, resolveUpdateStore: id => runtime.servers.get(id)?.updateStore }));
+    app.use(createWebAuthnRoutes());
+    return app;
+  }
 
   const smallJson = express.json({ limit: '4kb', strict: false });
   app.use('/chat', smallJson, chatJsonErrorHandler, createChatRoutes({
@@ -310,6 +328,10 @@ async function startServer(options = {}) {
 
   function stopMinecraftForPanelShutdown() {
     if (minecraftShutdownPromise) return minecraftShutdownPromise;
+    if (runtime.multiServer) {
+      minecraftShutdownPromise = runtime.stopAll(boundedMinecraftShutdown);
+      return minecraftShutdownPromise;
+    }
     minecraftShutdownPromise = boundedMinecraftShutdown(async () => {
       const minecraft = runtime.processService;
       if (!minecraft || typeof minecraft.stop !== 'function') return;
@@ -354,6 +376,15 @@ async function startServer(options = {}) {
         failures.push(error);
         console.error('Minecraft shutdown failed; continuing panel cleanup:', error.message);
       }
+    }
+    if (runtime.multiServer) {
+      const results = await Promise.allSettled([runtime.shutdown(), closePreviewResources(), runtime.downloadRoutes?.close()]);
+      const closeSharedStores = () => Promise.allSettled([(runtime.usersDb || usersDb).close(), tokenBlacklist.close(), logger.close()]);
+      if (runtime.deferredShutdown) runtime.deferredShutdown.finally(closeSharedStores).catch(() => {});
+      else results.push(...await closeSharedStores());
+      failures.push(...results.filter(result => result.status === 'rejected').map(result => result.reason));
+      if (failures.length) throw new AggregateError(failures, 'One or more services failed to close cleanly.');
+      return;
     }
     if (typeof runtime.updateService.stopStatusRefreshTimer === 'function') {
       runtime.updateService.stopStatusRefreshTimer();
@@ -416,6 +447,7 @@ async function startServer(options = {}) {
         await runtimeUsersDb.initUsersDb();
         if (options.ensureAdmin !== false) await runtimeUsersDb.ensureAdminUser();
       }
+      if (runtime.multiServer) { await runtime.initialize(); return; }
       if (options.initializeUpdates !== false) await runtime.updateService.initialize();
       try {
         if (runtime.playerRuntime && typeof runtime.playerRuntime.initialize === 'function') {
@@ -435,6 +467,9 @@ async function startServer(options = {}) {
     await listen(server, { port, host });
     if (maintenanceService.isShuttingDown()) throw new Error('Startup interrupted by shutdown.');
 
+    if (runtime.multiServer) {
+      if (options.startBackgroundTasks !== false) runtime.startBackground();
+    } else {
     try {
       await runtime.processService.startReconciler();
     } catch (_) {
@@ -447,9 +482,8 @@ async function startServer(options = {}) {
     }
     if (options.startBackgroundTasks !== false && !maintenanceService.isShuttingDown()) {
       runtime.updateService.startStatusRefreshTimer();
-      Promise.resolve().then(() => precacheVideoThumbnails()).catch(err => {
-        console.warn('Video thumbnail pre-cache failed:', err.message);
-      });
+      // SFTP is explicitly configured per profile; startup never connects.
+    }
     }
     if (maintenanceService.isShuttingDown()) throw new Error('Startup interrupted by shutdown.');
   } catch (err) {

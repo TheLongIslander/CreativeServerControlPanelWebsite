@@ -18,7 +18,7 @@ parentPort.on('message', async (fileData) => {
     });
 
     // Resize the image and save it
-    const resizedBuffer = await sharp(outputBuffer).rotate().resize(800, 600).toBuffer();
+    const resizedBuffer = await sharp(outputBuffer, { limitInputPixels: 40000000 }).rotate().resize(800, 600).jpeg({ quality: 80 }).toBuffer();
     fs.writeFileSync(cacheFilePath, resizedBuffer);
 
     parentPort.postMessage({ success: true, cacheFilePath });

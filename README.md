@@ -2,6 +2,8 @@
 
 Engineering specification for the current implementation.
 
+The panel now supports multiple registered servers, floating server tiles, per-server access restrictions, and isolated service runtimes. See [Multi-server operation](docs/multi-server.md) for current setup, storage migration, shared slot limits, and shared-account SFTP configuration with separate server folders. Server-specific APIs use `/api/servers/:id`; legacy paths below remain aliases for Creative (`default`).
+
 ## 1. Purpose
 
 This service is a self-hosted web control plane for:
@@ -40,7 +42,7 @@ The system is implemented as a single Node.js process with Express HTTP routes, 
 - TLS termination.
 - External identity providers.
 - Automated DB migrations beyond startup-time SQLite column evolution.
-- Raw Minecraft console access, arbitrary command passthrough, private messages, and multi-server chat UI.
+- Raw Minecraft console access, arbitrary command passthrough, private messages, and a combined cross-server chat stream.
 - Guaranteed player-visible delivery acknowledgement from Minecraft; the v1 Screen transport can confirm only that Screen accepted the command bytes.
 
 ## 3. Runtime Architecture
@@ -88,7 +90,7 @@ Chat-specific ownership:
 
 Player Center ownership:
 
-- `backend/config/serverRegistry.js`: exact single-server context and path/secret boundary.
+- `backend/config/serverRegistry.js`: durable server profiles, access restrictions, listener collision checks, and path/secret boundaries.
 - `backend/db/playerStore.js`: `players.db` identities, snapshots, events, links, and access grants.
 - `backend/services/playerPresenceService.js`: authoritative Management Protocol roster with a
   privacy-bounded `latest.log` fallback.
@@ -117,7 +119,7 @@ Player Center ownership:
 8. Start authoritative Minecraft runtime reconciliation.
 9. Initialize chat storage/settings, reconcile the current session, and begin bounded backfill/tailing. Chat failure degrades only chat and does not abort core startup.
 10. Start periodic update status refresh.
-11. Trigger background video thumbnail pre-cache crawl from SFTP root (`/`).
+11. Start each enabled server runtime independently. SFTP stays idle until explicitly configured and requested; no startup thumbnail crawl runs.
 
 ### Graceful shutdown
 
@@ -182,10 +184,10 @@ cp .env.example .env
 | `TRUST_PROXY` | No | Disabled | Explicit Express proxy trust (for example `loopback`, an address/CIDR list, or a hop count). Never use unrestricted `true`; this controls trusted client IP and TLS-forwarding data. |
 | `BACKUP_PATH` | Yes | None | Target root for backup output hierarchy. |
 | `PORT` | No | `8087` | HTTP listen port. |
-| `SFTP_HOST` | Yes | None | SFTP host. |
-| `SFTP_PORT` | Yes | None | SFTP port. |
-| `SFTP_USERNAME` | Yes | None | SFTP username. |
-| `SFTP_PASSWORD` | Yes | None | SFTP password. |
+| `SFTP_HOST` | When enabled | None | SFTP host. |
+| `SFTP_PORT` | When enabled | None | SFTP port. |
+| `SFTP_USERNAME` | When enabled | None | SFTP username. |
+| `SFTP_PASSWORD` | When enabled | None | SFTP password. |
 | `TMP_UPLOAD_SERVER_PATH` | Yes | None | Temporary upload location for `express-fileupload`. |
 | `VIDEO_CACHE_DIR` | No | OS temp-based path | Video thumbnail cache directory override. |
 | `NODE_ENV` | No | unset | Affects WebAuthn fallback origins in non-production mode. |
@@ -218,7 +220,7 @@ Configured in `app.js`:
 - `/chat` and `/admin/chat` are mounted first with a strict 4 KiB body limit and stable JSON parse/size errors.
 - File upload middleware: mounted only on authenticated/onboarded `/upload` requests, with temp-file mode enabled.
 - File upload temp directory: `TMP_UPLOAD_SERVER_PATH`.
-- File upload max file size: `50GB`.
+- File upload maximum aggregate size: `10 GiB`, with panel-wide transfer/storage budgets.
 - File-size overflow handler returns HTTP `413`.
 
 Static serving:
@@ -962,8 +964,8 @@ Detailed UI contract is documented in `STYLE_GUIDE.md`.
 - SFTP page performs frequent refresh polling while user is active (1s interval) and stops after inactivity timeout (5 minutes).
 - Backup frequency limit is enforced in-memory by hour key; process restarts reset the limiter.
 - Maintenance mode flag is in-memory; process restart clears it.
-- Update status refresh is cached/polled on multiple layers: backend refresh timer every 6 hours (`updateService.startStatusRefreshTimer`), frontend status polling every 5 minutes plus tab-visibility return, and frontend background preflight TTL of 10 minutes for warning/icon refresh.
-- Video thumbnail pre-caching can be expensive on large SFTP trees because it recursively crawls from `/` at startup.
+- Update status refresh is cached/polled on multiple layers: backend refresh timer every 6 hours (`updateService.startStatusRefreshTimer`), frontend status polling every 5 minutes plus tab-visibility return. These refresh available-version metadata only. Compatibility preflights run on explicit update actions, so opening a panel cannot reserve its lifecycle operation slot.
+- Previews are generated on demand within the selected server subtree; no SFTP startup crawl runs.
 - Server Info screenshot assets are intentionally ignored by git via `assets/server-info/`; dropping new supported images into that folder tree is enough for the endpoint to discover them on the next request.
 - Logging timestamps are written using `America/New_York` locale formatting, not ISO-8601.
 - Backup hour-gating uses Eastern date-hour keying and in-memory state only.
@@ -1017,7 +1019,7 @@ Important design properties to be aware of:
 ## 17. Known Implementation Caveats
 
 - `GET /status` remains public, but its values come from the authoritative Screen/log reconciler.
-- Process-global `currentPath` in SFTP route module is shared state, not per-session state.
+- SFTP paths are virtual and server-scoped; the browser remembers its own directory per user/server/tab.
 - Preview cache filenames are based on basename, so same-name files in different directories can collide.
 - Backup and download share WS `type: 'progress'` with different payload shapes.
 - Download archives are built inside isolated worker-thread temp directories and expire if they are not claimed within 15 minutes.

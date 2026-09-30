@@ -145,7 +145,7 @@ document.getElementById('login-form').addEventListener('submit', function(e) {
             if (data.mustResetPassword) {
                 window.location.href = '/set-password.html';
             } else {
-                window.location.href = '/index.html';
+                window.location.href = '/servers.html';
             }
         } else {
             alert('Login failed');
@@ -166,7 +166,7 @@ if (window.PublicKeyCredential) {
                 if (data.mustResetPassword) {
                     window.location.href = '/set-password.html';
                 } else {
-                    window.location.href = '/index.html';
+                    window.location.href = '/servers.html';
                 }
             } else {
                 alert('Passkey login failed.');

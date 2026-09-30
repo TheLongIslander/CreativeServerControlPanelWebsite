@@ -17,3 +17,9 @@ players.db-wal
 players.db-shm
 plans.md
 assets/server-info/
+
+# Durable server registry and per-server runtime state
+servers.db
+servers.db-wal
+servers.db-shm
+data/servers/

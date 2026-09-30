@@ -6,7 +6,7 @@ const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const unzipper = require('unzipper');
-const updateStore = require('../db/updateStore');
+const defaultUpdateStore = require('../db/updateStore');
 
 const MODRINTH_API_BASE = 'https://api.modrinth.com/v2';
 const REQUEST_TIMEOUT_MS = 15000;
@@ -181,7 +181,7 @@ function hasTargetCompatibility(versionData, targetVersion, loader) {
   return gameVersions.includes(targetVersion) && loaders.includes(loader);
 }
 
-async function resolveVersionByHash(sha1) {
+async function resolveVersionByHash(sha1, updateStore = defaultUpdateStore) {
   const cache = await updateStore.getModSourceCacheByHash(sha1);
   if (cache && cache.metadata && cache.metadata.versionByHash) {
     return cache.metadata.versionByHash;
@@ -295,6 +295,7 @@ async function scanInstalledMods(modsDir) {
 }
 
 async function resolveModsForTarget({
+  updateStore = defaultUpdateStore,
   modsDir,
   targetVersion,
   loader = 'fabric'
@@ -310,7 +311,7 @@ async function resolveModsForTarget({
 
     let versionByHash;
     try {
-      versionByHash = await resolveVersionByHash(mod.sha1);
+      versionByHash = await resolveVersionByHash(mod.sha1, updateStore);
     } catch (err) {
       results.push(createUnknownModResult(mod, `Failed to query Modrinth: ${err.message}`));
       continue;

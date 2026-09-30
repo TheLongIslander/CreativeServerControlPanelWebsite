@@ -5,7 +5,7 @@
 (function attachServerChat(global) {
     'use strict';
 
-    const SERVER_ID = 'default';
+    const SERVER_ID = global.ServerContext ? global.ServerContext.id : 'default';
     const UNREAD_BADGE_CAP = 500;
     const HISTORY_PAGE_SIZE = 200;
     const CATCH_UP_PAGE_SIZE = 500;
@@ -114,6 +114,15 @@
     let focusComposerPending = false;
     let mobileQuery = null;
     let messageRenderGeneration = 0;
+    let rememberedScroll = null;
+
+    function rememberComposer() {
+        if (!global.ServerContext) return;
+        global.ServerContext.write('chat:draft', dom.input.value);
+        if (state.open && !rememberedScroll) global.ServerContext.write('chat:scroll', {
+            top: dom.messages.scrollTop, nearBottom: state.nearBottom, sessionKey: state.sessionKey
+        });
+    }
 
     function hasOwn(value, key) {
         return Boolean(value) && Object.prototype.hasOwnProperty.call(value, key);
@@ -141,7 +150,7 @@
             return null;
         }
         try {
-            return global.localStorage.getItem(key);
+            return (key === 'token' ? global.localStorage : (global.sessionStorage || global.localStorage)).getItem(key);
         } catch (error) {
             console.warn('Server chat preferences are unavailable in this browser.');
             return null;
@@ -153,7 +162,7 @@
             return;
         }
         try {
-            global.localStorage.setItem(key, value);
+            (key === 'token' ? global.localStorage : (global.sessionStorage || global.localStorage)).setItem(key, value);
         } catch (error) {
             console.warn('Server chat preferences could not be saved.');
         }
@@ -730,7 +739,12 @@
         }
         dom.messages.replaceChildren(fragment);
 
-        if (preserveScroll) {
+        if (state.open && historyInitialized && !state.loading && rememberedScroll) {
+            const restored = rememberedScroll;
+            rememberedScroll = null;
+            dom.messages.scrollTop = restored.sessionKey === state.sessionKey && !restored.nearBottom
+                ? restored.top : dom.messages.scrollHeight;
+        } else if (preserveScroll) {
             dom.messages.scrollTop = priorTop + (dom.messages.scrollHeight - priorHeight);
         } else if (stickToBottom || (state.open && state.nearBottom)) {
             dom.messages.scrollTop = dom.messages.scrollHeight;
@@ -889,7 +903,7 @@
             global.clearInterval(sessionClockTimer);
             sessionClockTimer = null;
         }
-        if (state.open && state.session && !state.session.endedAt) {
+        if (started && state.open && state.session && !state.session.endedAt) {
             sessionClockTimer = global.setInterval(renderSessionMeta, 30000);
         }
     }
@@ -1058,7 +1072,8 @@
     }
 
     async function requestJson(path, { method = 'GET', body = null, signal = null } = {}) {
-        const response = await fetch(path, {
+        const request = global.ServerContext ? global.ServerContext.fetch : fetch;
+        const response = await request(path, {
             method,
             headers: authHeaders(body !== null),
             body: body === null ? undefined : JSON.stringify(body),
@@ -1326,6 +1341,7 @@
     }
 
     async function loadInitialHistory() {
+        if (!started) return;
         if (historyLoadPromise) {
             return historyLoadPromise;
         }
@@ -1398,7 +1414,7 @@
         const targetSessionKey = state.sessionKey;
         const waitFor = historyLoadPromise || Promise.resolve();
         waitFor.finally(() => {
-            if (state.sessionKey === targetSessionKey && !historyInitialized) {
+            if (started && state.sessionKey === targetSessionKey && !historyInitialized) {
                 global.setTimeout(() => loadInitialHistory(), 0);
             }
         });
@@ -1599,6 +1615,7 @@
             }
             pendingSendAttempt = null;
             dom.input.value = '';
+            rememberComposer();
             sendNotice = result.payload.deduplicated
                 ? 'Message was already accepted by the server console.'
                 : 'Message accepted by the server console.';
@@ -1873,11 +1890,18 @@
         dom.toggle.setAttribute('aria-expanded', 'true');
         document.body.classList.add('server-chat-open');
         updateResponsiveSemantics();
+        const restoreOnOpen = rememberedScroll;
         renderMessages({ bulk: true, stickToBottom: true });
         global.requestAnimationFrame(() => {
-            dom.messages.scrollTop = dom.messages.scrollHeight;
-            state.nearBottom = true;
-            markReadThroughLatest();
+            if (restoreOnOpen && restoreOnOpen.sessionKey === state.sessionKey && !restoreOnOpen.nearBottom && historyInitialized && !state.loading) {
+                dom.messages.scrollTop = restoreOnOpen.top;
+                updateNearBottom();
+            } else {
+                dom.messages.scrollTop = dom.messages.scrollHeight;
+                state.nearBottom = true;
+                markReadThroughLatest();
+            }
+            if (historyInitialized && !state.loading) rememberedScroll = null;
             if (!dom.input.disabled) {
                 focusComposerPending = false;
                 dom.input.focus();
@@ -2104,6 +2128,7 @@
         });
         dom.messages.addEventListener('scroll', () => {
             updateNearBottom();
+            rememberComposer();
             if (dom.messages.scrollTop <= 32) {
                 loadOlderPage();
             }
@@ -2119,6 +2144,7 @@
             }
         });
         dom.input.addEventListener('input', () => {
+            rememberComposer();
             if (pendingSendAttempt && pendingSendAttempt.normalizedText !== normalizeChatText(dom.input.value)) {
                 pendingSendAttempt = null;
             }
@@ -2159,6 +2185,10 @@
             return false;
         }
         loadFilters();
+        if (global.ServerContext) {
+            dom.input.value = global.ServerContext.read('chat:draft', '');
+            rememberedScroll = global.ServerContext.read('chat:scroll');
+        }
         bindEvents();
         state.initialized = true;
         renderMessages({ bulk: true });
@@ -2177,7 +2207,19 @@
         }
     }
 
+    function stop() {
+        started = false;
+        state.connected = false;
+        sessionGeneration += 1;
+        abortStateGets();
+        clearHistoryRetry();
+        clearSocketStatusFallback();
+        if (sessionClockTimer) global.clearInterval(sessionClockTimer);
+        sessionClockTimer = null;
+    }
+
     const publicApi = {
+        stop,
         init,
         start,
         handleSocketOpen,

@@ -54,6 +54,7 @@ function createPlayerRuntime({
   usersDb,
   logger = console,
   registry = null,
+  serverId = null,
   store = null
 } = {}) {
   if (!processService) throw new TypeError('playerRuntime requires processService');
@@ -62,7 +63,7 @@ function createPlayerRuntime({
   if (!usersDb) throw new TypeError('playerRuntime requires usersDb');
 
   const serverRegistry = registry || createServerRegistry({ env });
-  const context = serverRegistry.require(serverRegistry.defaultServerId);
+  const context = serverRegistry.require(serverId || serverRegistry.defaultServerId);
   const playerStore = store || createPlayerStore({
     dbPath: env.PLAYER_DB_PATH || path.join(__dirname, '..', '..', 'players.db'),
     serverId: context.id

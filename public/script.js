@@ -3,6 +3,8 @@
  * Functions: setupWebSocket, checkServerStatus, updateBackupProgress, setBackupState,
  *            handleFetchResponse, and action button handlers.
  */
+const serverContext = window.ServerContext;
+const serverFetch = (path, options) => serverContext.fetch(path, options);
 let isBackingUp = false;
 let ws;
 let wsReconnectTimer = null;
@@ -21,12 +23,10 @@ let updateButtonAnimationTimer = null;
 let updateButtonAnimationBase = null;
 let currentUser = null;
 let updateButtonSeverity = 'none';
-let backgroundPreflightInFlight = false;
-let backgroundPreflightLastTarget = null;
-let backgroundPreflightLastAt = 0;
-const BACKGROUND_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
 const UPDATE_STATUS_POLL_INTERVAL_MS = 5 * 60 * 1000;
 let updateStatusPollTimer = null;
+let lifecycleStatusTimer = null;
+let lifecycleStatusPending = false;
 let updateStatusPollInFlight = false;
 let advancedUpdateDirection = 'update';
 const advancedVersionCache = {
@@ -49,6 +49,7 @@ function clearAdvancedVersionCache() {
 }
 
 function redirectToLogin() {
+    serverContext.clearAll();
     localStorage.removeItem('token');
     window.location.href = '/';
 }
@@ -297,57 +298,7 @@ function updateUpdateButtonLabel() {
     }
     button.classList.remove('hidden');
     setUpdateButtonLabel(`Update to ${latestUpdateStatus.latestVersion}`);
-}
-
-async function runBackgroundUpdateRiskCheck({ force = false } = {}) {
-    if (isApplyingUpdate || backgroundPreflightInFlight) {
-        return;
-    }
-    if (!latestUpdateStatus || !latestUpdateStatus.updateAvailable || latestUpdateStatus.updateInProgress) {
-        return;
-    }
-
-    const targetVersion = latestUpdateStatus.latestVersion || null;
-    if (!targetVersion) {
-        return;
-    }
-
-    const now = Date.now();
-    if (
-        !force
-        && backgroundPreflightLastTarget === targetVersion
-        && (now - backgroundPreflightLastAt) < BACKGROUND_PREFLIGHT_TTL_MS
-    ) {
-        return;
-    }
-
-    backgroundPreflightInFlight = true;
-    try {
-        const response = await fetch('/updates/check', {
-            method: 'POST',
-            headers: getAuthHeaders(true),
-            body: JSON.stringify({ targetVersion })
-        });
-        if (!response.ok) {
-            return;
-        }
-
-        const check = await response.json();
-        if (!check || !check.updateAvailable) {
-            setUpdateButtonSeverity('none');
-            updateUpdateButtonLabel();
-            return;
-        }
-
-        applySeverityFromCheck(check);
-        updateUpdateButtonLabel();
-    } catch (err) {
-        console.warn('Background update preflight failed:', err.message);
-    } finally {
-        backgroundPreflightInFlight = false;
-        backgroundPreflightLastTarget = targetVersion;
-        backgroundPreflightLastAt = now;
-    }
+    button.title = 'Optional update. Starting the server keeps its installed Minecraft version.';
 }
 
 async function loadUpdateStatus({ forceRefresh = false } = {}) {
@@ -368,7 +319,7 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
     }
 
     try {
-        const response = await fetch(endpoint, {
+        const response = await serverFetch(endpoint, {
             headers: getAuthHeaders(false)
         });
         if (!response.ok) {
@@ -394,7 +345,8 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
                 updateUpdateButtonLabel();
                 button.disabled = Boolean(isBackingUp) || isApplyingUpdate;
                 setUpdateStatusMessage('');
-                runBackgroundUpdateRiskCheck().catch(() => {});
+                // Polling advertises available versions only. A compatibility
+                // preflight reserves this server, so run it only on an explicit update action.
             }
         } else {
             button.classList.add('hidden');
@@ -1064,8 +1016,12 @@ async function openServerInfoModal() {
     const modal = document.getElementById('server-info-modal');
     const body = document.getElementById('server-info-body');
     const filter = document.getElementById('server-info-mod-filter');
+    const kicker = document.getElementById('server-info-kicker');
     if (!modal) {
         return;
+    }
+    if (kicker) {
+        kicker.textContent = serverContext.id === 'default' ? 'El Capital Archive' : serverContext.serverName;
     }
     if (filter) {
         filter.value = '';
@@ -1078,8 +1034,13 @@ async function openServerInfoModal() {
     modal.setAttribute('aria-hidden', 'false');
     syncModalOpenState();
 
+    if (serverContext.id === 'pogeg') {
+        setServerInfoStatus(`Server info for ${serverContext.serverName} is being created. Check back soon.`);
+        return;
+    }
+
     try {
-        const response = await fetch('/server-info', {
+        const response = await serverFetch('/server-info', {
             headers: getAuthHeaders(false)
         });
         if (response.status === 428) {
@@ -1390,6 +1351,7 @@ function describeBlockingReasons(reasons) {
     const lookup = {
         blocked_by_java: 'Java version is too old for the target Minecraft release.',
         blocked_by_java_detection: 'Java runtime could not be detected from the launch script.',
+        blocked_by_backup_configuration: 'An administrator must configure this server’s local backup folder before applying updates.',
         blocked_by_disk: 'Insufficient disk space for safe update + rollback.',
         blocked_by_fabric_support: 'Fabric loader support for the target version was not found.',
         blocked_by_mod_scan_failure: 'Mod compatibility scan failed.',
@@ -1472,7 +1434,7 @@ function openUpdateModal(check) {
     const targetInfo = getVersionInfo(check, 'target', check.targetVersion);
 
     if (title) {
-        title.textContent = operation === 'downgrade' ? 'Server Downgrade' : 'Server Update';
+        title.textContent = `${serverContext.serverName} — ${operation === 'downgrade' ? 'Server Downgrade' : 'Server Update'}`;
     }
     summary.textContent = `Current: ${formatVersionWithRelease(currentInfo, check.currentVersion)} | Target: ${formatVersionWithRelease(targetInfo, check.targetVersion)}.`;
 
@@ -1601,7 +1563,7 @@ async function runUpdatePreflightForTarget(targetVersion, options = {}) {
     setUpdateButtonLabel('Checking...', { includeSeverityIcon: false });
 
     try {
-        const response = await fetch(advanced ? '/updates/advanced/check' : '/updates/check', {
+        const response = await serverFetch(advanced ? '/updates/advanced/check' : '/updates/check', {
             method: 'POST',
             headers: getAuthHeaders(true),
             body: JSON.stringify(advanced
@@ -1648,8 +1610,6 @@ async function runUpdatePreflightForTarget(targetVersion, options = {}) {
 
         const hasConflicts = getConflictMods(check).length > 0;
         applySeverityFromCheck(check);
-        backgroundPreflightLastTarget = check.targetVersion || latestUpdateStatus.latestVersion || null;
-        backgroundPreflightLastAt = Date.now();
 
         if (!hasConflicts && check.canApply) {
             activeUpdateCheck = {
@@ -1722,7 +1682,7 @@ async function applyUpdateMode(mode) {
     setUpdateStatusMessage(`${getOperationVerb(operation)} started. Waiting for completion...`);
 
     try {
-        const response = await fetch('/updates/apply', {
+        const response = await serverFetch('/updates/apply', {
             method: 'POST',
             headers: getAuthHeaders(true),
             body: JSON.stringify({
@@ -1921,7 +1881,7 @@ function populateAdvancedVersionSelect(payload) {
 }
 
 async function fetchAdvancedVersionDirection(direction) {
-    const response = await fetch(`/updates/advanced/versions?direction=${encodeURIComponent(direction)}`, {
+    const response = await serverFetch(`/updates/advanced/versions?direction=${encodeURIComponent(direction)}`, {
         headers: getAuthHeaders(false)
     });
     if (response.status === 428) {
@@ -2038,7 +1998,7 @@ function setupServerManagementMenu() {
 
     if (backupButton) {
         backupButton.addEventListener('click', () => {
-            window.location.href = '/sftp.html';
+            window.location.href = serverContext.sftpUrl();
         });
     }
 
@@ -2899,6 +2859,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         return;
     }
     currentUser = user;
+    serverContext.init(user);
+    if (!await loadSelectedServer()) return;
     if (window.Appearance && typeof window.Appearance.init === 'function') {
         window.Appearance.init({ user });
     }
@@ -2920,14 +2882,48 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
         window.PlayerCenter.start();
     }
-    setupUpdateStatusPolling();
+    if (serverContext.profile.capabilities?.updates !== false) setupUpdateStatusPolling();
     checkServerStatus();
-    await loadUpdateStatus();
+    lifecycleStatusTimer = setInterval(() => { if (!document.hidden) checkServerStatus(); }, 10000);
+    if (serverContext.profile.capabilities?.updates !== false) await loadUpdateStatus();
 });
 
+async function loadSelectedServer() {
+    try {
+        const response = await fetch('/api/servers', { headers: getAuthHeaders(), cache: 'no-store' });
+        if (!response.ok) throw new Error('Could not load this server.');
+        const payload = await response.json();
+        const profile = (payload.servers || []).find(server => server.id === serverContext.id);
+        if (!profile) { serverContext.revoke(); return false; }
+        serverContext.setProfile(profile);
+        document.title = `${profile.displayName} — Server Control Panel`;
+        document.getElementById('selected-server-title').textContent = `${profile.displayName} Control Panel`;
+        const playerKicker = document.querySelector('.player-center-kicker');
+        if (playerKicker) playerKicker.textContent = `${profile.displayName} players`;
+        document.getElementById('server-chat-title').textContent = `${profile.displayName} Chat`;
+        const sftp = document.getElementById('sftp-button');
+        if (profile.sftp?.state !== 'available') {
+            sftp.textContent = 'Server Backups Browser · Not connected';
+        }
+        if (profile.capabilities?.updates === false) {
+            document.getElementById('server-version-button').disabled = true;
+            document.getElementById('server-version-button').title = 'Updates are not configured for this server.';
+        }
+        return true;
+    } catch (error) {
+        document.getElementById('server-runtime-status').textContent = error.message;
+        return false;
+    }
+}
+
 function checkServerStatus() {
-    fetch('/status')
-        .then(response => response.json())
+    if (lifecycleStatusPending) return;
+    lifecycleStatusPending = true;
+    return serverFetch('/server-status')
+        .then(async response => {
+            if (!response.ok) throw new Error('Server status unavailable');
+            return response.json();
+        })
         .then(data => {
             const startButton = document.getElementById('start-server');
             const stopButton = document.getElementById('stop-server');
@@ -2938,12 +2934,19 @@ function checkServerStatus() {
             const updateLocked = Boolean(data.updateInProgress);
             const localUpdateLock = Boolean(isApplyingUpdate)
                 || Boolean(latestUpdateStatus && latestUpdateStatus.updateInProgress);
-            const controlsLocked = isBackingUp || updateLocked || localUpdateLock;
+            const unresolved = ['unknown', 'unavailable', 'starting', 'stopping', 'restarting'].includes(data.state);
+            const controlsLocked = isBackingUp || updateLocked || localUpdateLock || unresolved || Boolean(data.operation);
+            const slotsFull = data.slots && !data.slots.canBypass && data.slots.occupied >= data.slots.limit;
+            const capability = serverContext.profile?.capabilities || {};
+            const status = document.getElementById('server-runtime-status');
+            const stateLabel = ({ ready: 'Online', offline: 'Stopped', starting: 'Starting', stopping: 'Stopping', unknown: 'Status unavailable' })[data.state] || data.state || (data.running ? 'Running' : 'Stopped');
+            const operationLabel = data.operation ? ` · ${data.operation.type || 'Operation'} in progress` : '';
+            status.textContent = `${serverContext.serverName} · ${stateLabel}${operationLabel}${slotsFull && !data.running ? ' · Both shared server slots are in use. Stop a server to free a slot.' : ''}`;
 
-            startButton.disabled = controlsLocked || data.running;
-            stopButton.disabled = controlsLocked || !data.running;
-            backupButton.disabled = controlsLocked;
-            restartButton.disabled = controlsLocked || !data.running;
+            startButton.disabled = controlsLocked || data.running || slotsFull || capability.lifecycle === false;
+            stopButton.disabled = controlsLocked || !data.running || capability.lifecycle === false;
+            backupButton.disabled = controlsLocked || capability.backups === false || capability.backupHistory === 'unsupported';
+            restartButton.disabled = controlsLocked || !data.running || capability.lifecycle === false;
             if (updateButton && !updateButton.classList.contains('hidden')) {
                 if (updateButtonAnimationTimer) {
                     updateButton.disabled = true;
@@ -2952,7 +2955,7 @@ function checkServerStatus() {
                 }
             }
             if (versionButton) {
-                versionButton.disabled = controlsLocked;
+                versionButton.disabled = controlsLocked || capability.updates === false;
             }
 
             if (updateLocked) {
@@ -2961,7 +2964,9 @@ function checkServerStatus() {
         })
         .catch(err => {
             console.error('Error checking server status: ', err);
-        });
+            document.getElementById('server-runtime-status').textContent = 'Status unavailable. Controls will resume after the connection recovers.';
+            ['start-server', 'stop-server', 'restart-server', 'backup-server'].forEach(id => { document.getElementById(id).disabled = true; });
+        }).finally(() => { lifecycleStatusPending = false; });
 }
 function getWebSocketReconnectDelay() {
     const base = Math.min(1000 * (2 ** wsReconnectAttempt), 30000);
@@ -2999,6 +3004,7 @@ async function handleWebSocketPolicyClose() {
             redirectToLogin();
             return;
         }
+        if (response.ok && !await loadSelectedServer()) return;
         wsPolicyCloseCount += 1;
         if (response.ok && wsPolicyCloseCount <= 1) {
             scheduleWebSocketReconnect();
@@ -3063,7 +3069,7 @@ function setupWebSocket() {
         return;
     }
     const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const socket = new WebSocket(wsProtocol + '://' + window.location.host + '/ws');
+    const socket = new WebSocket(wsProtocol + '://' + window.location.host + '/ws?serverId=' + encodeURIComponent(serverContext.id));
     ws = socket;
     let opened = false;
 
@@ -3107,6 +3113,9 @@ function setupWebSocket() {
             window.location.href = '/maintenance.html';
             return;
         }
+
+        if (message.type === 'server-access-revoked') { serverContext.revoke(); return; }
+        if (message.serverId && message.serverId !== serverContext.id) return;
 
         if (window.ServerChat
             && typeof window.ServerChat.handleRealtimeMessage === 'function'
@@ -3199,6 +3208,8 @@ function setupWebSocket() {
 }
 
 window.addEventListener('pagehide', () => {
+    clearInterval(lifecycleStatusTimer);
+    window.ServerChat?.stop();
     if (window.PlayerCenter && typeof window.PlayerCenter.stop === 'function') {
         window.PlayerCenter.stop();
     }
@@ -3289,7 +3300,7 @@ function setBackupState(isBacking) {
         }
     }
 }
-function handleFetchResponse(response) {
+async function handleFetchResponse(response) {
     if (response.status === 428) {
         alert('You must set a new password before continuing.');
         redirectToSetPassword();
@@ -3304,10 +3315,19 @@ function handleFetchResponse(response) {
         alert('A backup has already been performed this hour.');
         return null; // Stop further processing and do not throw a session expired message
     } else if (response.status === 423) {
-        alert('An update is currently in progress. Please wait until it completes.');
+        const detail = await response.clone().json().catch(() => ({}));
+        alert(detail.message || detail.error?.message || 'Another operation is running on this server. Please wait until it completes.');
+        checkServerStatus();
         return null;
     } else if (response.status === 409) {
-        alert('Operation blocked due to update preflight state. Re-check updates and try again.');
+        const detail = await response.clone().json().catch(() => ({}));
+        alert(detail.message || detail.error?.message || 'Operation unavailable. Refresh server status and try again.');
+        checkServerStatus();
+        return null;
+    }
+    if (!response.ok) {
+        const detail = await response.clone().json().catch(() => ({}));
+        alert(detail.message || detail.error?.message || `Server request failed (${response.status}).`);
         return null;
     }
     return response; // Continue processing for other status codes
@@ -3321,7 +3341,7 @@ function handleFetchResponse(response) {
         return;
     }
 
-    fetch('/start', {
+    serverFetch('/start', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token
@@ -3336,11 +3356,13 @@ function handleFetchResponse(response) {
         }
     })
     .catch(err => {
+        if (err.name === 'AbortError') return;
         console.error('Error starting server:', err);
         alert('Error starting server.');
     });
 });
 document.getElementById('stop-server').addEventListener('click', function() {
+    if (!window.confirm(`Stop ${serverContext.serverName}?`)) return;
     const token = localStorage.getItem('token');
     if (!token) {
         alert('You are not authenticated.');
@@ -3348,7 +3370,7 @@ document.getElementById('stop-server').addEventListener('click', function() {
         return;
     }
 
-    fetch('/stop', {
+    serverFetch('/stop', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token
@@ -3363,6 +3385,7 @@ document.getElementById('stop-server').addEventListener('click', function() {
         }
     })
     .catch(err => {
+        if (err.name === 'AbortError') return;
         console.error('Error stopping server:', err);
         alert('Error stopping server.');
     });
@@ -3377,7 +3400,7 @@ document.getElementById('backup-server').addEventListener('click', function() {
     
     setBackupState(true); // Indicate backup is starting
     
-    fetch('/backup', {
+    serverFetch('/backup', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token
@@ -3399,6 +3422,7 @@ document.getElementById('backup-server').addEventListener('click', function() {
         checkServerStatus(); // Check server status to update button states
     })
     .catch(err => {
+        if (err.name === 'AbortError') return;
         console.error('Error performing backup:', err);
         alert('Error performing backup.');
         setBackupState(false); // Ensure state is reset on error
@@ -3406,6 +3430,7 @@ document.getElementById('backup-server').addEventListener('click', function() {
     });
 });
 document.getElementById('restart-server').addEventListener('click', function() {
+    if (!window.confirm(`Restart ${serverContext.serverName}?`)) return;
     const token = localStorage.getItem('token');
     if (!token) {
         alert('You are not authenticated.');
@@ -3419,7 +3444,7 @@ document.getElementById('restart-server').addEventListener('click', function() {
     document.getElementById('backup-server').disabled = true;
     document.getElementById('restart-server').disabled = true;
 
-    fetch('/restart', {
+    serverFetch('/restart', {
         method: 'POST',
         headers: {
             'Authorization': 'Bearer ' + token
@@ -3436,6 +3461,7 @@ document.getElementById('restart-server').addEventListener('click', function() {
         }
     })
     .catch(err => {
+        if (err.name === 'AbortError') return;
         console.error('Error restarting server:', err);
         alert('Error restarting server.');
         setTimeout(() => {
@@ -3444,6 +3470,7 @@ document.getElementById('restart-server').addEventListener('click', function() {
     });
 });
 function logout() {
+    serverContext.clearAll();
     const token = localStorage.getItem('token');
     if (!token) {
         alert('No active session.');

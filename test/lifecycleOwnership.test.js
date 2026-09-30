@@ -43,6 +43,7 @@ test('backup does not restart when a previously queued stop wins the lifecycle m
   const sourcePath = path.join(tempRoot, 'server');
   const backupPath = path.join(tempRoot, 'backups');
   await fs.promises.mkdir(sourcePath, { recursive: true });
+  await fs.promises.mkdir(backupPath);
   await fs.promises.writeFile(path.join(sourcePath, 'level.dat'), 'test');
 
   const previousServerPath = process.env.MINECRAFT_SERVER_PATH;
@@ -106,6 +107,7 @@ test('shutdown cascade suppresses a backup restart already in flight', async t =
   const sourcePath = path.join(tempRoot, 'server');
   const backupPath = path.join(tempRoot, 'backups');
   await fs.promises.mkdir(sourcePath, { recursive: true });
+  await fs.promises.mkdir(backupPath);
   await fs.promises.writeFile(path.join(sourcePath, 'level.dat'), 'test');
 
   const previousServerPath = process.env.MINECRAFT_SERVER_PATH;

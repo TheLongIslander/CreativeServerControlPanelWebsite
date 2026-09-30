@@ -84,9 +84,9 @@ function getEasternTime(date = new Date()) {
   return date.toLocaleString('en-US', { timeZone: 'America/New_York' });
 }
 
-function getFormattedDate(value = new Date()) {
+function getFormattedDate(value = new Date(), timeZone = 'America/New_York') {
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', year: 'numeric', month: 'long', day: 'numeric'
+    timeZone, year: 'numeric', month: 'long', day: 'numeric'
   }).formatToParts(value);
   const day = Number(parts.find(part => part.type === 'day').value);
   const month = parts.find(part => part.type === 'month').value;
