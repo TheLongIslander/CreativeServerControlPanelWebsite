@@ -103,7 +103,6 @@
         const summary = element('div', 'server-tile-summary');
         const badge = element('span', 'server-tile-status');
         const population = element('span', 'server-tile-population');
-        const files = element('span', 'server-tile-files');
         const details = element('div', 'server-tile-details');
         const operation = element('span', 'server-tile-operation');
         const alert = element('span', 'server-tile-operation');
@@ -112,10 +111,10 @@
         infoSensor.append(info);
         visual.append(mark, infoSensor);
         tile.append(visual);
-        return { tile, name, mark, info, summary, badge, population, files, details, operation, alert, backup };
+        return { tile, name, mark, info, summary, badge, population, details, operation, alert, backup };
     }
     function updateTile(entry, server, index) {
-        const { tile, name, mark, info, summary, badge, population, files, details, operation, alert, backup } = entry;
+        const { tile, name, mark, info, summary, badge, population, details, operation, alert, backup } = entry;
         if (entry.index !== index) {
             tile.style.setProperty('--tile-index', index);
             entry.index = index;
@@ -132,8 +131,7 @@
         const players = server.playerCount ?? server.status?.playerCount;
         const showPlayers = Number.isInteger(players) && online;
         updateText(population, showPlayers ? `${players} player${players === 1 ? '' : 's'}` : '');
-        updateText(files, server.sftp?.state === 'available' ? 'Backups connected' : 'Backups not connected');
-        syncChildren(summary, showPlayers ? [badge, population, files] : [badge, files]);
+        syncChildren(summary, showPlayers ? [badge, population] : [badge]);
         updateText(operation, server.operation ? (typeof server.operation === 'string' ? server.operation : server.operation.label || server.operation.type || 'Operation in progress') : '');
         updateText(alert, server.alert ? (typeof server.alert === 'string' ? server.alert : 'Attention needed') : '');
         let backupText = '';
