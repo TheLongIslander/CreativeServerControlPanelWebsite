@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createServerStore } = require('../db/serverStore');
+const { overrideEnabled, readScriptHeap, saveWithScriptHeap } = require('../services/scriptHeap');
 
 const DEFAULT_SERVER_ID = 'default';
 const SAFE_SERVER_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -108,6 +109,7 @@ function createDefaultServerContext({ env = process.env, fsImpl = fs } = {}) {
     rootPath,
     startCommandPath: String(env.START_COMMAND_PATH || '').trim() || null,
     enabled: true,
+    updatePipelineEnabled: true,
     archived: false,
     revision: 1,
     launch: Object.freeze({ javaPath: null, heapMb: null, initialHeapMb: null }),
@@ -237,6 +239,7 @@ function profileFromContext(context) {
     startCommandPath: canonicalExisting(context.startCommandPath), screenSession: context.screenSession,
     backupRoot: canonicalExisting(context.backupRoot), timezone: context.timezone,
     logPath: canonicalExisting(context.logPath), enabled: context.enabled !== false, archived: Boolean(context.archived),
+    updatePipelineEnabled: context.updatePipelineEnabled !== false,
     launch: { javaPath: null, heapMb: null, initialHeapMb: null, ...context.launch },
     sftp: { enabled: false, rootPath: null, ...context.sftp }, revision: context.revision || 1,
     createdAt: context.createdAt || null, updatedAt: context.updatedAt || null
@@ -265,7 +268,7 @@ function contextFromProfile(profile) {
     capabilities: Object.freeze({ ...base.capabilities, sftp: profile.sftp.enabled && profile.sftp.rootPath ? 'configured' : 'disabled' })
   });
 }
-const PROFILE_FIELDS = ['id', 'displayName', 'rootPath', 'startCommandPath', 'screenSession', 'backupRoot', 'timezone', 'enabled', 'launch', 'sftp', 'revision'];
+const PROFILE_FIELDS = ['id', 'displayName', 'rootPath', 'startCommandPath', 'screenSession', 'backupRoot', 'timezone', 'enabled', 'updatePipelineEnabled', 'launch', 'sftp', 'revision', 'scriptRevision'];
 function validateProfileInput(input, current = null) {
   exactObject(input, PROFILE_FIELDS, 'Server profile');
   if (current && Object.hasOwn(input, 'id') && input.id !== current.id) throw invalid('The server ID cannot be changed.');
@@ -282,17 +285,21 @@ function validateProfileInput(input, current = null) {
   if (pathsOverlap(rootPath, backupRoot)) throw invalid('The live server and backup directories must not overlap.');
   const timezone = boundedText(merged.timezone || 'UTC', 'timezone', 100);
   try { new Intl.DateTimeFormat('en', { timeZone: timezone }); } catch (_) { throw invalid('timezone must be a valid IANA timezone.'); }
+  if (Object.hasOwn(input, 'updatePipelineEnabled') && typeof input.updatePipelineEnabled !== 'boolean') throw invalid('updatePipelineEnabled must be boolean.');
   if (merged.enabled != null && typeof merged.enabled !== 'boolean') throw invalid('enabled must be boolean.');
   if (Object.hasOwn(input, 'revision') && (!Number.isSafeInteger(input.revision) || input.revision < 1)) throw invalid('revision must be a positive integer.');
-  if (input.launch !== undefined) exactObject(input.launch, ['javaPath', 'heapMb', 'initialHeapMb'], 'launch');
+  if (input.launch !== undefined) exactObject(input.launch, ['javaPath', 'heapMb', 'initialHeapMb', 'ramOverride'], 'launch');
   const launch = { javaPath: null, heapMb: null, initialHeapMb: null, ...(current && current.launch), ...input.launch };
+  if (launch.ramOverride !== undefined && typeof launch.ramOverride !== 'boolean') throw invalid('ramOverride must be boolean.');
+  if (input.scriptRevision != null && (typeof input.scriptRevision !== 'string' || !/^[a-f0-9]{64}$/.test(input.scriptRevision))) throw invalid('Invalid script revision.');
+  launch.ramOverride = overrideEnabled(launch);
   if (launch.javaPath) launch.javaPath = canonicalPath(launch.javaPath, 'javaPath', { exists: true, file: true });
   for (const key of ['heapMb', 'initialHeapMb']) {
     if (launch[key] != null && (!Number.isSafeInteger(launch[key]) || launch[key] < 128 || launch[key] > 262144)) {
       throw invalid(`${key} must be an integer between 128 and 262144 MiB.`);
     }
   }
-  if (launch.initialHeapMb != null && (launch.heapMb == null || launch.initialHeapMb > launch.heapMb)) throw invalid('initialHeapMb cannot exceed heapMb.');
+  if (launch.initialHeapMb != null && ((launch.ramOverride && launch.heapMb == null) || (launch.heapMb != null && launch.initialHeapMb > launch.heapMb))) throw invalid('initialHeapMb cannot exceed heapMb.');
   if (input.sftp !== undefined) exactObject(input.sftp, ['enabled', 'rootPath'], 'sftp');
   const sftp = { enabled: false, rootPath: null, ...(current && current.sftp), ...input.sftp };
   if (typeof sftp.enabled !== 'boolean') throw invalid('sftp.enabled must be boolean.');
@@ -324,6 +331,7 @@ function validateProfileInput(input, current = null) {
     if (listeners.slice(i + 1).some(other => listenerConflict(listeners[i], other))) throw invalid('Configured server listeners conflict with each other.');
   }
   return { id, displayName, rootPath, startCommandPath, screenSession, backupRoot, timezone, enabled: merged.enabled !== false,
+    updatePipelineEnabled: merged.updatePipelineEnabled !== false,
     archived: Boolean(current && current.archived), launch, sftp, logPath: current && current.rootPath === rootPath ? current.logPath : null };
 }
 
@@ -385,7 +393,7 @@ function createServerRegistry(options = {}) {
           if (profiles.has(input.id)) continue;
           const profile = validateProfileInput(input);
           validateCollisions(profile);
-          install(await store.insertProfile(profile));
+          install(await saveWithScriptHeap(profile, input, value => store.insertProfile(value)));
         }
         return registry;
       })();
@@ -423,7 +431,7 @@ function createServerRegistry(options = {}) {
         const profile = validateProfileInput(input);
         if (profiles.has(profile.id)) throw new ServerRegistryError(409, 'SERVER_ID_EXISTS', 'This server ID already exists and cannot be reused.');
         validateCollisions(profile);
-        install(await store.insertProfile(profile));
+        install(await saveWithScriptHeap(profile, input, value => store.insertProfile(value)));
         return contexts.get(profile.id);
       });
     },
@@ -436,7 +444,7 @@ function createServerRegistry(options = {}) {
         if (input && input.revision !== undefined && input.revision !== current.revision) throw new ServerRegistryError(409, 'SERVER_REVISION_CONFLICT', 'Server configuration changed. Reload and try again.');
         const profile = validateProfileInput(input, current);
         validateCollisions(profile);
-        install(await store.updateProfile({ ...current, ...profile }, current.revision));
+        install(await saveWithScriptHeap({ ...current, ...profile }, input, value => store.updateProfile(value, current.revision)));
         return contexts.get(serverId);
       });
     },
@@ -469,14 +477,17 @@ function publicServerContext(context) {
   return {
     id: context.id, displayName: context.displayName, timezone: context.timezone,
     identityMode: context.identityMode, capabilities: context.capabilities,
+    updatePipelineEnabled: context.updatePipelineEnabled !== false,
     enabled: context.enabled !== false, revision: context.revision || 1
   };
 }
 function adminServerContext(context) {
+  const scriptHeap = readScriptHeap(context.startCommandPath);
+  const ramOverride = overrideEnabled(context.launch);
   return {
     ...publicServerContext(context), rootPath: context.rootPath, backupRoot: context.backupRoot,
     startCommandPath: context.startCommandPath, screenSession: context.screenSession,
-    launch: context.launch, sftp: context.sftp, listeners: context.listeners || [],
+    launch: { ...context.launch, ramOverride, ...(!ramOverride ? { heapMb: scriptHeap.heapMb, initialHeapMb: scriptHeap.initialHeapMb } : {}) }, scriptHeap, sftp: context.sftp, listeners: context.listeners || [],
     archived: Boolean(context.archived), createdAt: context.createdAt, updatedAt: context.updatedAt
   };
 }

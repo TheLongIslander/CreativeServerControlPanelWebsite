@@ -214,3 +214,67 @@ test('a later malformed world configuration degrades one saved profile without h
   assert.equal(reloaded.require('default').capabilities.worldFiles, 'configured');
   assert.throws(() => reloaded.validateForStart('malformed_later'), /world directory/);
 });
+
+test('RAM sync edits source, preserves mode/comments, and reads subsequent file edits without stale launch overrides', async t => {
+  const { registry, initial } = await fixture(t);
+  const { adminServerContext } = require('../backend/config/serverRegistry');
+  const { prepareManagedLaunch } = require('../backend/services/managedLauncher');
+  const source = '#!/bin/sh\r\n# java -Xmx9G -Xms9G\r\nexec java -Xms512M -Xmx1G -jar server.jar nogui # keep me\r\n';
+  fs.writeFileSync(initial.startCommandPath, source, { mode: 0o755 });
+  fs.chmodSync(initial.startCommandPath, 0o755);
+  const before = adminServerContext(registry.require('default'));
+  assert.equal(before.launch.ramOverride, false);
+  assert.equal(before.launch.heapMb, 1024);
+  const context = await registry.update('default', { scriptRevision: before.scriptHeap.revision,
+    launch: { ramOverride: false, heapMb: 2048, initialHeapMb: 1024 } });
+  assert.equal(fs.readFileSync(initial.startCommandPath, 'utf8'), source.replace('-Xms512M -Xmx1G', '-Xms1024M -Xmx2048M'));
+  assert.equal(fs.statSync(initial.startCommandPath).mode & 0o777, 0o755);
+  assert.equal(context.launch.heapMb, null);
+  fs.writeFileSync(initial.startCommandPath, source.replace('-Xmx1G', '-Xmx4G'));
+  assert.equal(adminServerContext(context).launch.heapMb, 4096);
+  const destination = path.join(initial.rootPath, 'managed.sh');
+  await prepareManagedLaunch(context, destination);
+  assert.match(fs.readFileSync(destination, 'utf8'), /-Xmx4G/);
+});
+
+test('RAM override preserves source; turning it off writes RAM and survives reload', async t => {
+  const { registry, initial, env } = await fixture(t);
+  const original = '#!/bin/sh\njava -Xms1G -Xmx1G -jar server.jar\n';
+  fs.writeFileSync(initial.startCommandPath, original);
+  await registry.update('default', { launch: { ramOverride: true, heapMb: 4096, initialHeapMb: 2048 } });
+  assert.equal(fs.readFileSync(initial.startCommandPath, 'utf8'), original);
+  await registry.update('default', { launch: { ramOverride: false, heapMb: 4096, initialHeapMb: 2048 } });
+  assert.match(fs.readFileSync(initial.startCommandPath, 'utf8'), /-Xms2048M -Xmx4096M/);
+  await registry.close();
+  const reopened = createServerRegistry({ env });
+  t.after(() => reopened.close());
+  await reopened.initialize();
+  assert.equal(reopened.require('default').launch.ramOverride, false);
+  assert.equal(reopened.require('default').launch.heapMb, null);
+});
+
+test('RAM sync rejects stale edits and invalid flags without changing profile or file', async t => {
+  const { registry, initial } = await fixture(t);
+  const { adminServerContext } = require('../backend/config/serverRegistry');
+  const before = adminServerContext(registry.require('default'));
+  fs.appendFileSync(initial.startCommandPath, '# external edit\n');
+  const changed = fs.readFileSync(initial.startCommandPath, 'utf8');
+  await assert.rejects(() => registry.update('default', { scriptRevision: before.scriptHeap.revision,
+    launch: { ramOverride: false, heapMb: 2048 } }), error => error.code === 'SERVER_SCRIPT_CONFLICT');
+  assert.equal(fs.readFileSync(initial.startCommandPath, 'utf8'), changed);
+  assert.equal(registry.require('default').revision, before.revision);
+  for (const script of ['java -Xmx1G -Xmx2G\n', 'java -Xmx${RAM} -Xms1G\n', 'java -jar server.jar\n']) {
+    fs.writeFileSync(initial.startCommandPath, script);
+    await assert.rejects(() => registry.update('default', { launch: { ramOverride: false, heapMb: 2048 } }), error => error.code === 'SERVER_SCRIPT_HEAP_INVALID');
+    assert.equal(fs.readFileSync(initial.startCommandPath, 'utf8'), script);
+  }
+});
+
+test('RAM sync restores the script if profile persistence fails', async t => {
+  const { initial } = await fixture(t);
+  const { saveWithScriptHeap } = require('../backend/services/scriptHeap');
+  const original = fs.readFileSync(initial.startCommandPath, 'utf8');
+  await assert.rejects(() => saveWithScriptHeap({ ...initial, launch: { ramOverride: false } },
+    { launch: { heapMb: 2048 } }, async () => { throw new Error('Database unavailable'); }), /Database unavailable/);
+  assert.equal(fs.readFileSync(initial.startCommandPath, 'utf8'), original);
+});

@@ -13,6 +13,13 @@ module.exports = function createUpdateRoutes({ updateService, context = null }) 
     throw new Error('updateService is required for update routes.');
   }
 
+  router.use('/updates', authenticateJWT, requireOnboarded, (req, res, next) => {
+    if (context?.updatePipelineEnabled === false && (req.method !== 'GET' || !/^\/(status|check\/[^/]+)\/?$/.test(req.path))) {
+      return res.status(403).json({ code: 'SERVER_UPDATE_PIPELINE_DISABLED', message: 'The update pipeline is disabled for this server profile.' });
+    }
+    next();
+  });
+
   router.get('/updates/status', authenticateJWT, requireOnboarded, async (req, res) => {
     try {
       const forceRefresh = req.query && (req.query.refresh === '1' || req.query.refresh === 'true');

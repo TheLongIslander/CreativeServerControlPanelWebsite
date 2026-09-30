@@ -103,8 +103,12 @@
                     <label>Maximum heap, MiB (optional)<input id="profile-heap" type="number" min="128" max="262144" step="1" placeholder="12288 for Pogeg"></label>
                     <label>Initial heap, MiB (optional)<input id="profile-initial-heap" type="number" min="128" max="262144" step="1" placeholder="12288 for Pogeg"></label>
                 </div>
+                <label class="profile-enabled"><input id="profile-ram-override" type="checkbox" aria-describedby="profile-ram-help"> Panel RAM override</label>
+                <p id="profile-ram-help" class="profile-help"></p>
+                <label class="profile-enabled"><input id="profile-update-pipeline" type="checkbox" checked aria-describedby="profile-update-pipeline-help"> Enable update pipeline</label>
+                <p id="profile-update-pipeline-help" class="profile-help">Disable for modpacks or servers pinned to specific Minecraft, loader, mod, and configuration versions. Disables update checks, version changes, and update snapshot restores for this server.</p>
                 <label class="profile-enabled"><input id="profile-enabled" type="checkbox" checked> Enabled in the panel</label>
-                <p class="profile-help">SFTP stays disconnected until its directory mappings are supplied. Registering a profile preserves existing server files and does not start it.</p>
+                <p class="profile-help">SFTP stays disconnected until its directory mappings are supplied. Registering a profile does not start the server. RAM edits in script-sync mode update its startup script.</p>
                 <div class="profile-actions"><button type="submit" id="save-server-profile">Save profile</button><button type="button" id="cancel-server-profile">Cancel</button></div>
             </form>
             <section id="server-access-editor" class="hidden" aria-labelledby="server-access-title">

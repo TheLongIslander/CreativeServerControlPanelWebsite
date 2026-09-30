@@ -330,6 +330,16 @@ async function loadUpdateStatus({ forceRefresh = false } = {}) {
         }
         const previousUpdateStatus = latestUpdateStatus;
         latestUpdateStatus = await response.json();
+        const pipelineDisabled = latestUpdateStatus.updatePipelineEnabled === false;
+        const versionButton = document.getElementById('server-version-button');
+        if (versionButton) {
+            versionButton.disabled = pipelineDisabled;
+            versionButton.title = pipelineDisabled ? 'Update pipeline disabled in this server profile.' : '';
+        }
+        if (pipelineDisabled) {
+            closeUpdateAdvancedMenu();
+            closeUpdateAdvancedModal();
+        }
         if (forceRefresh
             || (previousUpdateStatus && previousUpdateStatus.currentVersion !== latestUpdateStatus.currentVersion)
             || (previousUpdateStatus && previousUpdateStatus.latestVersion !== latestUpdateStatus.latestVersion)) {
@@ -1963,6 +1973,7 @@ async function loadAdvancedVersionOptions({ force = false } = {}) {
 }
 
 async function openUpdateAdvancedModal() {
+    if (latestUpdateStatus?.updatePipelineEnabled === false) return;
     closeUpdateAdvancedMenu();
     closeServerManagementDropdown();
     if (isApplyingUpdate || (latestUpdateStatus && latestUpdateStatus.updateInProgress)) {

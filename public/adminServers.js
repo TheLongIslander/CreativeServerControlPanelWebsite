@@ -3,6 +3,7 @@
     let selected = null;
     let accessId = null;
     let accessGeneration = 0;
+    let editGeneration = 0;
     const $ = id => document.getElementById(id);
     function notice(message, isError = false) {
         $('server-admin-notice').textContent = message;
@@ -53,7 +54,7 @@
             const name = document.createElement('strong');
             name.textContent = server.displayName;
             const details = document.createElement('p');
-            details.textContent = `${server.id} · ${server.enabled === false ? 'Disabled' : 'Enabled'} · ${server.status?.state || 'Registered'} · SFTP ${server.sftp?.enabled ? 'configured' : 'not connected'}`;
+            details.textContent = `${server.id} · ${server.enabled === false ? 'Disabled' : 'Enabled'} · ${server.status?.state || 'Registered'} · Updates ${server.updatePipelineEnabled === false ? 'disabled' : 'enabled'} · SFTP ${server.sftp?.enabled ? 'configured' : 'not connected'}`;
             copy.append(name, details);
             const actions = document.createElement('div');
             actions.className = 'profile-actions';
@@ -75,14 +76,22 @@
         $('server-profile-list').replaceChildren(fragment);
     }
     function closeEditors() {
+        editGeneration++;
         $('server-profile-form').classList.add('hidden');
         $('server-access-editor').classList.add('hidden');
         accessId = null;
         accessGeneration++;
         selected = null;
     }
-    function edit(server = null) {
+    async function edit(server = null) {
         closeEditors();
+        const generation = editGeneration;
+        if (server) {
+            const payload = await api();
+            if (generation !== editGeneration) return;
+            server = payload.servers.find(item => item.id === server.id);
+            if (!server || server.archived) throw new Error('This server is no longer available.');
+        }
         selected = server;
         const fields = {
             id: server?.id || '', name: server?.displayName || '', root: server?.rootPath || '',
@@ -93,11 +102,21 @@
         };
         for (const [key, value] of Object.entries(fields)) $(`profile-${key}`).value = value;
         $('profile-id').disabled = Boolean(server);
+        $('profile-update-pipeline').checked = server?.updatePipelineEnabled !== false;
         $('profile-enabled').checked = server?.enabled !== false;
+        $('profile-ram-override').checked = server?.launch?.ramOverride ?? false;
+        ramHelp();
         $('server-profile-form-title').textContent = server ? `Edit ${server.displayName}` : 'Register existing server';
         $('server-profile-form').classList.remove('hidden');
         $('profile-name').focus();
         $('server-profile-form').scrollIntoView({ block: 'nearest' });
+    }
+    function ramHelp() {
+        const override = $('profile-ram-override').checked;
+        $('profile-ram-help').textContent = override
+            ? 'Panel override: RAM applies only to panel starts. The startup script stays unchanged.'
+            : 'Script sync: saving RAM updates the startup script. Blank fields keep the script values. Reopen this editor to read file changes.';
+        if (!override && selected?.scriptHeap?.error) $('profile-ram-help').textContent += ` ${selected.scriptHeap.error}`;
     }
     async function save(event) {
         event.preventDefault();
@@ -107,10 +126,14 @@
             displayName: get('name'), rootPath: get('root'), startCommandPath: get('start'),
             screenSession: get('screen'), backupRoot: get('backup') || null, timezone: get('timezone'),
             enabled: $('profile-enabled').checked,
-            launch: { javaPath: get('java') || null, heapMb: get('heap') ? Number(get('heap')) : null, initialHeapMb: get('initial-heap') ? Number(get('initial-heap')) : null }
+            updatePipelineEnabled: $('profile-update-pipeline').checked,
+            launch: { ramOverride: $('profile-ram-override').checked, javaPath: get('java') || null, heapMb: get('heap') ? Number(get('heap')) : null, initialHeapMb: get('initial-heap') ? Number(get('initial-heap')) : null }
         };
         if (!target) { payload.id = get('id'); payload.sftp = { enabled: false, rootPath: null }; }
-        else payload.revision = target.revision;
+        else {
+            payload.revision = target.revision;
+            if (get('start') === target.startCommandPath) payload.scriptRevision = target.scriptHeap?.revision || null;
+        }
         const saveButton = $('save-server-profile');
         saveButton.disabled = true;
         try {
@@ -158,6 +181,7 @@
     }
     global.AdminServers = Object.freeze({ async init() {
         $('add-server-profile').addEventListener('click', () => edit());
+        $('profile-ram-override').addEventListener('change', ramHelp);
         $('cancel-server-profile').addEventListener('click', closeEditors);
         $('close-server-access').addEventListener('click', closeEditors);
         $('server-profile-form').addEventListener('submit', save);

@@ -44,7 +44,7 @@ async function prepareManagedLaunch(context, destination) {
     }
     transform(line => line.replace(/(\bscreen\s+-S\s+)(?:"[^"]+"|'[^']+'|[\w.-]+)/g, (_, prefix) => `${prefix}${quote(context.screenSession)}`));
   }
-  if (launch.heapMb != null) {
+  if (launch.ramOverride !== false && launch.heapMb != null) {
     const maximum = Number(launch.heapMb), initial = Number(launch.initialHeapMb ?? maximum);
     if (!Number.isSafeInteger(maximum) || maximum < 128 || maximum > 262144 || !Number.isSafeInteger(initial) || initial < 128 || initial > maximum) throw new Error('Invalid configured Java heap.');
     if (!/-Xmx\d+[gGmMkK]?/.test(code()) || !/-Xms\d+[gGmMkK]?/.test(code())) throw new Error('Heap override requires explicit Xms and Xmx launch flags.');
@@ -87,4 +87,4 @@ function createManagedLauncher(context, destination, exec = run) {
   };
 }
 
-module.exports = { createManagedLauncher, prepareManagedLaunch };
+module.exports = { createManagedLauncher, prepareManagedLaunch, scriptParts };

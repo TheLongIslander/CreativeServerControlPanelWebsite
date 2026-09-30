@@ -581,6 +581,10 @@ module.exports = function createUpdateService({
 } = {}) {
   const minecraft = minecraftProcessService || processService || null;
   if (!state) throw new Error('createUpdateService requires shared state');
+  const updatePipelineEnabled = context?.updatePipelineEnabled !== false;
+  function requireUpdatePipeline() {
+    if (!updatePipelineEnabled) throw Object.assign(new Error('The update pipeline is disabled for this server profile.'), { status: 403, code: 'SERVER_UPDATE_PIPELINE_DISABLED' });
+  }
   let refreshTimer = null;
   let stopping = false;
   const pendingRefreshes = new Set();
@@ -770,6 +774,7 @@ module.exports = function createUpdateService({
     excludeVersion,
     operation
   }) {
+    requireUpdatePipeline();
     const normalizedOperation = normalizeUpdateOperation(operation);
     const releaseEntries = getReleaseEntries(manifest);
     return releaseEntries.filter(entry => {
@@ -852,6 +857,7 @@ module.exports = function createUpdateService({
     const manifest = providedManifest || await fetchMinecraftVersionManifest();
     const candidates = buildCandidateEntries({
       manifest,
+      updatePipelineEnabled,
       currentVersion,
       latestVersion,
       excludeVersion,
@@ -1113,6 +1119,12 @@ module.exports = function createUpdateService({
   }
 
   async function getStatus({ forceRefresh = false } = {}) {
+    if (!updatePipelineEnabled) return {
+      updatePipelineEnabled: false, currentVersion: await getCurrentVersion(),
+      latestVersion: null, latestMinecraftVersion: null, latestFabricSupportedVersion: null,
+      updateAvailable: false, lastCheckedAt: null, updateInProgress: Boolean(state.updateLocked),
+      lockOwner: state.updateLockOwner || null, hasRestorableSnapshot: false
+    };
     let latestVersion;
     let latestMinecraftVersion;
     let latestFabricSupportedVersion;
@@ -1166,6 +1178,7 @@ module.exports = function createUpdateService({
   }
 
   async function listAdvancedTargets({ direction = 'update' } = {}) {
+    requireUpdatePipeline();
     const operation = normalizeUpdateOperation(direction);
     const status = await getStatus({ forceRefresh: true });
     const manifest = await fetchMinecraftVersionManifest();
@@ -1877,6 +1890,7 @@ module.exports = function createUpdateService({
     actorUserId,
     acknowledgeDowngradeRisk = false
   }) {
+    requireUpdatePipeline();
     const allowedModes = new Set([
       'server_and_compatible_mods',
       'server_only_move_all_mods'
@@ -2097,13 +2111,14 @@ module.exports = function createUpdateService({
     state.updateLockOwner = lock ? lock.owner : null;
     await getCurrentVersion();
     try {
-      if (refresh) await refreshLatestVersion({ force: true });
+      if (refresh && updatePipelineEnabled) await refreshLatestVersion({ force: true });
     } catch (err) {
       console.warn('Initial latest-version refresh failed:', err.message);
     }
   }
 
   function startStatusRefreshTimer() {
+    if (!updatePipelineEnabled) return;
     if (refreshTimer) {
       clearInterval(refreshTimer);
     }
@@ -2125,6 +2140,7 @@ module.exports = function createUpdateService({
   }
 
   async function restoreLatestSnapshot({ actorUserId } = {}) {
+    requireUpdatePipeline();
     if (context && !context.backupRoot) throw new Error('Local backup storage must be configured before restoring updates.');
     const owner = `restore-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     await acquireUpdateLock(owner);

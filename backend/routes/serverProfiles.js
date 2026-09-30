@@ -1,4 +1,4 @@
-/* Admin profile registration and default-allow access restrictions. No host mutation. */
+/* Admin profile registration and default-allow access restrictions. RAM sync can update the selected startup script. */
 const crypto = require('node:crypto');
 const express = require('express');
 const authenticateJWT = require('../middleware/authenticate');
