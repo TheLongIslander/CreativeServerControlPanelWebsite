@@ -147,6 +147,11 @@ body[data-ui-theme="glass"] .path-input-shell {
     transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
+/* The cursor spotlight is only visible during an active hover, never at its reset position. */
+body[data-ui-theme="glass"] .path-input-shell.is-lit:hover::before {
+    --path-cursor-light: 0.58;
+}
+
 body[data-ui-theme="glass"] .path-input-shell::before,
 body[data-ui-theme="glass"] .path-input-shell::after {
     content: "";
@@ -159,7 +164,7 @@ body[data-ui-theme="glass"] .path-input-shell::after {
 body[data-ui-theme="glass"] .path-input-shell::before {
     z-index: 2;
     background:
-        radial-gradient(150px 88px at var(--mx) var(--my), rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0) 64%),
+        radial-gradient(150px 88px at var(--mx) var(--my), rgba(255, 255, 255, var(--path-cursor-light, 0)), rgba(255, 255, 255, 0) 64%),
         linear-gradient(112deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0) 34%, rgba(173, 255, 213, 0.14) 72%, rgba(255, 255, 255, 0.2));
     mix-blend-mode: screen;
     opacity: calc(0.38 + (0.34 * var(--pop)));
