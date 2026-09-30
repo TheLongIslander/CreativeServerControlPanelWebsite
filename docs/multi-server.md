@@ -10,6 +10,32 @@ The registry persists in `servers.db` (`SERVER_REGISTRY_DB_PATH`). On first star
 
 Users can access all enabled servers by default. Admins can deny a particular user's access to a particular server. The same rule applies to tiles, direct APIs, live events, files, previews, and downloads. Revocation closes affected WebSockets and rejects subsequent requests. Authentication and existing admin-only capabilities remain panel-wide.
 
+### Registering an existing installation
+
+**Admin Management → Register existing server** opens the profile form. **Save profile** sends an authenticated `POST /admin/servers`; the backend validates the profile, writes it to `servers.db`, and initializes the server's status, chat, player, and update services. Registration does not start Minecraft, install a server, or copy the world into the panel directory. Later servers receive their own service databases under `data/servers/<id>`.
+
+Registration requires:
+
+- An unused stable ID of 1–64 lowercase letters, digits, underscores, or hyphens, starting with a letter or digit. The display name is separate and accepts capitals and spaces, up to 100 characters.
+- An absolute path to the existing server folder, containing readable `server.properties`.
+- An absolute path to an existing startup script inside that folder. It can be named `start.command`; the name itself is not mandatory.
+- A unique Screen session name of 1–64 letters, digits, underscores, or hyphens, starting with a letter or digit, and a valid IANA timezone.
+- Nonoverlapping server/backup paths and compatible listener settings across enabled profiles. The `level-name` world path must remain inside the server folder.
+
+The JAR, accepted `eula.txt`, Java installation, world data, and any Fabric/mod dependencies are needed for a successful Minecraft launch but are not all checked by registration. The launcher prepares a private script when starting, sets the server working directory, and manages its Screen session. Leave the optional RAM fields blank to preserve the source script's settings.
+
+The local backup folder is optional. Supplying it connects that destination to backup operations; it does not create a backup or enable SFTP browsing. Before a backup can run, the destination must exist and be writable, including having the external drive mounted. Paths with spaces are supported; enter the path directly without surrounding shell quotes. SFTP requires its own separate remote-root configuration.
+
+For Abhi Hardcore World, the server folder is `/Users/adityarajesh/Pictures/abhihardcoreworld`, the script is that folder's `start.command`, and the backup folder is `/Volumes/WD Elements 2024/WD Elements Drive/VirtualGladiators Server/Java Edition Servers/Abhi Hardcore World`. Its profile uses ID `abhihardcoreworld`, display name `Abhi Hardcore`, Screen session `MinecraftAbhiHardcoreWorld`, and timezone `America/New_York`. Its enabled SFTP mapping is `/Java Edition Servers/Abhi Hardcore World`, verified to list the same backup directory through the shared account.
+
+## Server thumbnails
+
+In **Admin Management → Server Profiles → Edit profile**, choose a PNG, JPEG, or WebP image, review its preview, then click **Upload thumbnail**. New servers must be saved before uploading their image. **Remove thumbnail** restores Creative/Pogeg's built-in artwork or the first-letter tile for other servers.
+
+Thumbnail changes save immediately and work while Minecraft is running; the profile's runtime settings and unsaved form edits are independent. Uploads are limited to 5 MiB and 25 million pixels. Animated images are rejected. The panel applies image orientation, strips metadata, and stores an optimized WebP up to 960 × 960 pixels in the `server_thumbnails` table of `servers.db`. Include that database in panel backups. The overview picks up changes on its next refresh, including its normal polling refresh when enabled.
+
+Only administrators can upload or remove images. Uploaded images are served through authenticated, server-authorized requests and are not published in the static assets directory. The endpoints are `POST`/`DELETE /admin/servers/:id/thumbnail` and `GET /api/servers/:id/thumbnail`; uploads use multipart field `thumbnail`.
+
 ## Runtime limits
 
 Non-admins share two active/starting slots. Administrators can start additional servers; those servers still occupy slots when a non-admin attempts a start. No automatic eviction or start queue exists. Restart and maintenance operations retain a reservation while temporarily stopping a server. Unknown runtime state blocks admission until it can be verified.

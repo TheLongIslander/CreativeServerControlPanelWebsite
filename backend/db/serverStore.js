@@ -46,6 +46,10 @@ function createServerStore({ dbPath = process.env.SERVER_REGISTRY_DB_PATH || pat
         server_id TEXT NOT NULL REFERENCES server_profiles(id), user_id INTEGER NOT NULL,
         permissions_json TEXT NOT NULL, PRIMARY KEY (server_id, user_id)
       )`);
+      await run(`CREATE TABLE IF NOT EXISTS server_thumbnails (
+        server_id TEXT PRIMARY KEY REFERENCES server_profiles(id),
+        version TEXT NOT NULL, image_data BLOB NOT NULL
+      )`);
       await run('INSERT OR IGNORE INTO server_registry_meta (singleton, schema_version) VALUES (1, 1)');
     })();
     return initialized;
@@ -81,6 +85,19 @@ function createServerStore({ dbPath = process.env.SERVER_REGISTRY_DB_PATH || pat
     async listRestrictions() {
       await initialize();
       return all('SELECT server_id AS serverId, user_id AS userId FROM server_access_restrictions');
+    },
+    async listThumbnails() {
+      await initialize();
+      return all('SELECT server_id AS serverId, version, image_data AS data FROM server_thumbnails');
+    },
+    async setThumbnail(serverId, thumbnail) {
+      await initialize();
+      await run('INSERT INTO server_thumbnails (server_id, version, image_data) VALUES (?, ?, ?) ON CONFLICT(server_id) DO UPDATE SET version = excluded.version, image_data = excluded.image_data',
+        [serverId, thumbnail.version, thumbnail.data]);
+    },
+    async removeThumbnail(serverId) {
+      await initialize();
+      await run('DELETE FROM server_thumbnails WHERE server_id = ?', [serverId]);
     },
     async listPermissions() {
       await initialize();

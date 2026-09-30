@@ -2,12 +2,14 @@ const { SERVER_PERMISSIONS } = require('../config/serverPermissions');
 /* Admin profile registration and default-allow access restrictions. RAM sync can update the selected startup script. */
 const crypto = require('node:crypto');
 const express = require('express');
+const busboy = require('busboy');
 const authenticateJWT = require('../middleware/authenticate');
 const requireOnboarded = require('../middleware/requireOnboarded');
 const requireAdmin = require('../middleware/requireAdmin');
 const defaultUsersDb = require('../db/users');
 const { requireAllowedOrigin } = require('../utils/origins');
 const { adminServerContext, ServerRegistryError, SAFE_SERVER_ID } = require('../config/serverRegistry');
+const { normalizeServerThumbnail, MAX_THUMBNAIL_BYTES } = require('../services/serverThumbnail');
 
 function routeError(status, code, message) { return new ServerRegistryError(status, code, message); }
 function sendError(res, error) {
@@ -23,6 +25,59 @@ function checkBody(req) {
   if (Buffer.byteLength(JSON.stringify(req.body)) > 16384) throw routeError(413, 'SERVER_PROFILE_TOO_LARGE', 'Server profile requests must not exceed 16 KiB.');
   return req.body;
 }
+function parseThumbnailUpload(req, res, next) {
+  let parser;
+  try {
+    parser = busboy({ headers: req.headers,
+      limits: { fileSize: MAX_THUMBNAIL_BYTES + 1, files: 1, fields: 0, parts: 2 } });
+  } catch (_) {
+    return sendError(res, routeError(400, 'SERVER_THUMBNAIL_INVALID', 'The image upload could not be read.'));
+  }
+  let settled = false, received = 0, image = null;
+  const invalid = () => routeError(400, 'SERVER_THUMBNAIL_REQUIRED', 'Upload exactly one image in the thumbnail field.');
+  const tooLarge = () => routeError(413, 'SERVER_THUMBNAIL_TOO_LARGE', 'Server thumbnails must not exceed 5 MiB.');
+  function finish(error) {
+    if (settled) return;
+    settled = true;
+    req.removeListener('data', countBytes);
+    req.removeListener('aborted', aborted);
+    req.removeListener('error', aborted);
+    if (error) {
+      req.unpipe(parser);
+      // Destroy after the current parser callback finishes; destroying inside a
+      // Busboy limit event can invalidate its active file stream mid-callback.
+      queueMicrotask(() => parser.destroy());
+      req.resume(); // Drain the sender so a rejected upload cannot stall keepalive.
+      if (!res.destroyed && !res.headersSent) sendError(res, error);
+      return;
+    }
+    req.thumbnailData = image;
+    next();
+  }
+  function countBytes(chunk) {
+    received += chunk.length;
+    if (received > MAX_THUMBNAIL_BYTES + 64 * 1024) finish(tooLarge());
+  }
+  function aborted() { finish(routeError(400, 'SERVER_THUMBNAIL_INVALID', 'The image upload was interrupted.')); }
+  parser.on('file', (field, file, info) => {
+    file.on('error', aborted);
+    if (settled || field !== 'thumbnail' || !info.filename) {
+      file.resume();
+      return finish(invalid());
+    }
+    const chunks = [];
+    file.on('data', chunk => { if (!settled) chunks.push(chunk); });
+    file.on('limit', () => finish(tooLarge()));
+    file.on('end', () => { if (!settled) image = Buffer.concat(chunks); });
+  });
+  for (const event of ['filesLimit', 'fieldsLimit', 'partsLimit']) parser.on(event, () => finish(invalid()));
+  parser.on('error', () => finish(routeError(400, 'SERVER_THUMBNAIL_INVALID', 'The image upload could not be read.')));
+  parser.on('close', () => finish(image && image.length ? null : invalid()));
+  req.on('data', countBytes);
+  req.once('aborted', aborted);
+  req.once('error', aborted);
+  req.pipe(parser);
+}
 function createServerProfileRoutes({
   registry, serverRegistry = registry, usersDb = defaultUsersDb, allowedOrigins,
   canModifyProfile = null, onChanged = async () => {},
@@ -32,6 +87,7 @@ function createServerProfileRoutes({
   if (!serverRegistry) throw new TypeError('createServerProfileRoutes requires a server registry');
   const router = express.Router();
   const origin = requireAllowedOrigin(allowedOrigins);
+  const noStore = (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); };
   router.use('/admin/servers', (req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); }, authenticate, onboarded, admin);
   router.param('id', (req, res, next, id) => {
     if (!SAFE_SERVER_ID.test(id)) return sendError(res, routeError(404, 'SERVER_NOT_FOUND', 'Server was not found.'));
@@ -65,6 +121,52 @@ function createServerProfileRoutes({
       return context;
     });
   }
+  // Parse in memory only after authentication, onboarding, admin and origin checks.
+  async function thumbnailAdmission(req, res, next) {
+    try {
+      if (!req.is('multipart/form-data')) throw routeError(415, 'SERVER_THUMBNAIL_MULTIPART_REQUIRED', 'Upload the thumbnail using multipart/form-data.');
+      const length = Number(req.headers['content-length']);
+      if (Number.isFinite(length) && length > MAX_THUMBNAIL_BYTES + 64 * 1024) {
+        throw routeError(413, 'SERVER_THUMBNAIL_TOO_LARGE', 'Server thumbnails must not exceed 5 MiB.');
+      }
+      await serverRegistry.initialize();
+      const context = serverRegistry.require(req.params.id, { includeDisabled: true });
+      if (context.archived) throw routeError(409, 'SERVER_ARCHIVED', 'Archived server profiles cannot be edited.');
+      parseThumbnailUpload(req, res, next);
+    } catch (error) { return sendError(res, error); }
+  }
+  router.get('/api/servers/:id/thumbnail', noStore, authenticate, onboarded, async (req, res) => {
+    try {
+      await serverRegistry.initialize();
+      const serverId = req.params.id;
+      const context = serverRegistry.require(serverId, { includeDisabled: true });
+      if (context.archived) throw routeError(404, 'SERVER_NOT_FOUND', 'Server was not found.');
+      if (req.user.disabled || (req.user.role !== 'admin' && !serverRegistry.canAccess(req.user, serverId))) {
+        throw routeError(404, 'SERVER_NOT_FOUND', 'Server was not found.');
+      }
+      const thumbnail = serverRegistry.getThumbnail(serverId);
+      if (!thumbnail) throw routeError(404, 'SERVER_THUMBNAIL_NOT_FOUND', 'This server has no uploaded thumbnail.');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.type('image/webp').send(thumbnail.data);
+    } catch (error) { return sendError(res, error); }
+  });
+  router.post('/admin/servers/:id/thumbnail', origin, thumbnailAdmission, async (req, res) => {
+    try {
+      const serverId = req.params.id;
+      const context = await mutation(req, 'thumbnail_upload', { serverId }, async () => {
+        const thumbnail = await normalizeServerThumbnail(req.thumbnailData);
+        return serverRegistry.setThumbnail(serverId, thumbnail);
+      });
+      return res.json({ server: adminServerContext(context) });
+    } catch (error) { return sendError(res, error); }
+  });
+  router.delete('/admin/servers/:id/thumbnail', origin, async (req, res) => {
+    try {
+      const serverId = req.params.id;
+      const context = await mutation(req, 'thumbnail_remove', { serverId }, () => serverRegistry.removeThumbnail(serverId));
+      return res.json({ server: adminServerContext(context) });
+    } catch (error) { return sendError(res, error); }
+  });
   router.get('/admin/servers', async (req, res) => {
     try {
       await serverRegistry.initialize();

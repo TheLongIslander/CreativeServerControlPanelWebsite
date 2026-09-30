@@ -5,6 +5,8 @@
     let lastSuccess = null;
     let visibleIds = new Set();
     let refreshPromise = null;
+    let sharedSlots = {};
+    let openSlotPopup = null;
     const nodes = {};
     const tilesById = new Map();
     const tileImages = Object.freeze({
@@ -84,19 +86,6 @@
         const name = element('h2', '', server.displayName);
         const mark = element('div', 'server-tile-mark');
         mark.setAttribute('aria-hidden', 'true');
-        const imagePath = Object.hasOwn(tileImages, server.id) ? tileImages[server.id] : null;
-        if (imagePath) {
-            const thumbnail = element('img', 'server-tile-thumbnail');
-            thumbnail.alt = '';
-            thumbnail.decoding = 'async';
-            thumbnail.addEventListener('error', () => {
-                mark.classList.remove('has-image');
-                updateText(mark, name.textContent.slice(0, 1).toUpperCase());
-            }, { once: true });
-            thumbnail.src = imagePath;
-            mark.classList.add('has-image');
-            mark.replaceChildren(thumbnail);
-        }
         // Measure this wrapper, so the mini tile's own motion cannot move its sensor.
         const infoSensor = element('div', 'server-tile-info-sensor');
         infoSensor.dataset.pointerSensor = 'surface';
@@ -123,12 +112,70 @@
         infoSensor.append(info);
         visual.append(mark, link, infoSensor);
         tile.append(visual);
-        const entry = { tile, link, name, mark, info, copy, power, feedback, summary, badge, population, details, operation, alert, backup };
+        const entry = { tile, link, name, mark, info, infoSensor, copy, power, feedback, summary, badge, population, details, operation, alert, backup };
         power.addEventListener('click', () => togglePower(entry));
         return entry;
     }
+    function updateThumbnail(entry, server) {
+        const imagePath = server.thumbnailUrl || (Object.hasOwn(tileImages, server.id) ? tileImages[server.id] : null);
+        if (imagePath !== entry.imagePath) {
+            // Only a new URL retries an image: regular status polls preserve both
+            // decoded artwork and the initial fallback after a failed request.
+            entry.imagePath = imagePath;
+            entry.mark.classList.remove('has-image');
+            if (imagePath) {
+                const thumbnail = element('img', 'server-tile-thumbnail');
+                thumbnail.alt = '';
+                thumbnail.decoding = 'async';
+                thumbnail.addEventListener('error', () => {
+                    if (entry.mark.firstElementChild !== thumbnail) return;
+                    entry.mark.classList.remove('has-image');
+                    updateText(entry.mark, entry.name.textContent.slice(0, 1).toUpperCase());
+                }, { once: true });
+                thumbnail.src = imagePath;
+                entry.mark.classList.add('has-image');
+                entry.mark.replaceChildren(thumbnail);
+            }
+        }
+        if (!entry.mark.classList.contains('has-image')) updateText(entry.mark, server.displayName.slice(0, 1).toUpperCase());
+    }
     function lifecycleOperation(server) {
         return typeof server.operation === 'string' ? server.operation : server.operation?.type;
+    }
+    function closeSlotPopup() {
+        if (!openSlotPopup) return;
+        const { entry, popup } = openSlotPopup;
+        const restoreFocus = popup.contains(document.activeElement);
+        popup.remove();
+        entry.power.setAttribute('aria-expanded', 'false');
+        entry.tile.classList.remove('has-slot-popup');
+        openSlotPopup = null;
+        if (restoreFocus) entry.power.focus({ preventScroll: true });
+    }
+    function showSlotMessage(entry, message = `All ${sharedSlots.limit || 2} server slots are occupied. Stop a server before starting another.`) {
+        closeSlotPopup();
+        if (document.body.dataset.uiTheme !== 'glass') {
+            global.alert(message);
+            return;
+        }
+        const popup = element('div', 'server-slot-popup');
+        popup.id = `server-slot-popup-${entry.server.id}`;
+        popup.setAttribute('role', 'status');
+        const text = element('p', 'server-slot-popup-message', message);
+        const close = element('button', 'server-slot-popup-close');
+        const closeIcon = element('span', 'server-slot-popup-close-icon');
+        closeIcon.setAttribute('aria-hidden', 'true');
+        close.append(closeIcon);
+        close.type = 'button';
+        close.setAttribute('aria-label', 'Dismiss server slot message');
+        close.setAttribute('data-no-pointer-lighting', '');
+        close.addEventListener('click', closeSlotPopup);
+        popup.append(text, close);
+        entry.infoSensor.append(popup);
+        entry.power.setAttribute('aria-controls', popup.id);
+        entry.power.setAttribute('aria-expanded', 'true');
+        entry.tile.classList.add('has-slot-popup');
+        openSlotPopup = { entry, popup };
     }
     function updatePower(entry) {
         const { server, power, pending } = entry;
@@ -140,18 +187,31 @@
         power.dataset.action = action;
         power.disabled = Boolean(phase || server.operation || server.status?.updateInProgress
             || !['Online', 'Offline'].includes(description) || nodes.tiles.classList.contains('is-stale'));
+        entry.slotsFull = action === 'start' && !power.disabled
+            && sharedSlots.occupied >= (sharedSlots.limit || 2) && !sharedSlots.canBypass;
+        power.classList.toggle('is-slot-blocked', entry.slotsFull);
+        // Keep the control focusable/clickable so it can explain why starting is unavailable.
+        power.setAttribute('aria-disabled', String(power.disabled || entry.slotsFull));
+        if (!entry.slotsFull && openSlotPopup?.entry === entry) closeSlotPopup();
         power.setAttribute('aria-busy', String(Boolean(phase)));
         const label = phase ? `${phase} ${server.displayName}`
             : `${action === 'start' ? 'Start' : 'Stop'} ${server.displayName}`;
         power.setAttribute('aria-label', label);
-        power.title = power.disabled && !phase ? `${label} — waiting for server availability` : label;
+        power.title = entry.slotsFull ? `${label} — all server slots are occupied`
+            : power.disabled && !phase ? `${label} — waiting for server availability` : label;
         const displayedState = phase || description;
         updateText(entry.badge, displayedState);
         entry.tile.dataset.state = displayedState === 'Online' ? 'online' : displayedState === 'Offline' ? 'offline' : 'busy';
     }
     async function togglePower(entry) {
         if (entry.power.disabled || entry.pending) return;
+        if (entry.slotsFull) {
+            if (openSlotPopup?.entry === entry) closeSlotPopup();
+            else showSlotMessage(entry);
+            return;
+        }
         const action = entry.power.dataset.action;
+        let slotError = null;
         entry.pending = action;
         updateText(entry.feedback, '');
         updatePower(entry);
@@ -165,22 +225,27 @@
             if (!response.ok) {
                 const body = await response.text();
                 let message = body;
-                try { const error = JSON.parse(body); message = error.error?.message || error.message || body; } catch (_) { /* Plain-text lifecycle errors are also supported. */ }
+                try {
+                    const error = JSON.parse(body);
+                    message = error.error?.message || error.message || body;
+                    if (error.error?.code === 'SERVER_SLOTS_FULL' || error.code === 'SERVER_SLOTS_FULL') slotError = message;
+                } catch (_) { /* Plain-text lifecycle errors are also supported. */ }
                 throw new Error(message || `Could not ${action} ${entry.server.displayName}.`);
             }
             updateText(entry.feedback, '');
         } catch (error) {
-            updateText(entry.feedback, error.message || 'Could not connect to the server.');
+            if (!slotError) updateText(entry.feedback, error.message || 'Could not connect to the server.');
         } finally {
             // Finish any older poll, then read the authoritative state after the command.
             if (refreshPromise) await refreshPromise;
             await refresh();
             entry.pending = null;
             updatePower(entry);
+            if (slotError && tilesById.has(entry.server.id)) showSlotMessage(entry, slotError);
         }
     }
     function updateTile(entry, server, index) {
-        const { tile, link, name, mark, copy, summary, badge, population, details, operation, alert, backup } = entry;
+        const { tile, link, name, copy, summary, badge, population, details, operation, alert, backup } = entry;
         entry.server = server;
         updatePower(entry);
         if (entry.index !== index) {
@@ -191,7 +256,7 @@
         updateText(name, server.displayName);
         const label = `${server.displayName} control panel`;
         if (link.getAttribute('aria-label') !== label) link.setAttribute('aria-label', label);
-        if (!mark.classList.contains('has-image')) updateText(mark, server.displayName.slice(0, 1).toUpperCase());
+        updateThumbnail(entry, server);
         const players = server.playerCount ?? server.status?.playerCount;
         const showPlayers = Number.isInteger(players) && online;
         updateText(population, showPlayers ? `${players} player${players === 1 ? '' : 's'}` : '');
@@ -215,7 +280,10 @@
     function renderServers(servers, nextIds) {
         const activeElement = document.activeElement;
         const activeEntry = Array.from(tilesById.values()).find(entry => entry.tile.contains(activeElement));
-        for (const id of tilesById.keys()) if (!nextIds.has(id)) tilesById.delete(id);
+        for (const id of tilesById.keys()) if (!nextIds.has(id)) {
+            if (openSlotPopup?.entry === tilesById.get(id)) closeSlotPopup();
+            tilesById.delete(id);
+        }
         const tiles = servers.map((server, index) => {
             let entry = tilesById.get(server.id);
             if (!entry) {
@@ -227,7 +295,8 @@
         });
         if (tiles.length) syncChildren(nodes.tiles, tiles);
         else showEmpty('No servers are available to your account. An admin can add a server or update your access.');
-        if (activeEntry && tilesById.has(activeEntry.server.id) && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
+        if (activeEntry && tilesById.has(activeEntry.server.id) && activeEntry.tile.contains(activeElement)
+            && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
     }
     function showNotice(message) {
         updateText(nodes.notice, message);
@@ -306,11 +375,11 @@
             }
             visibleIds = nextIds;
             nodes.tiles.classList.remove('is-stale');
+            sharedSlots = payload.slots || {};
             renderServers(servers, nextIds);
-            const slots = payload.slots || {};
+            const slots = sharedSlots;
             updateText(nodes.slots, `${slots.occupied ?? '—'} / ${slots.limit ?? 2} shared slots in use${slots.canBypass ? ' · Admin override available' : ''}`);
-            if (slots.occupied >= (slots.limit || 2) && !slots.canBypass) showNotice('Both server slots are in use. Stop a server before starting another.');
-            else showNotice(new URLSearchParams(location.search).has('unavailable') ? 'That server is no longer available to your account.' : '');
+            showNotice(new URLSearchParams(location.search).has('unavailable') ? 'That server is no longer available to your account.' : '');
             lastSuccess = new Date();
             if (nodes.tiles.classList.contains('is-stale')) nodes.tiles.classList.remove('is-stale');
         } catch (error) {
@@ -353,5 +422,14 @@
         } catch (_) { showNotice('Could not connect to the panel. Reload to try again.'); }
     });
     global.addEventListener('pagehide', () => { controller?.abort(); clearInterval(pollTimer); });
+    document.addEventListener('click', event => {
+        if (openSlotPopup && !openSlotPopup.popup.contains(event.target) && !openSlotPopup.entry.power.contains(event.target)) closeSlotPopup();
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && openSlotPopup) {
+            event.preventDefault();
+            closeSlotPopup();
+        }
+    });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && nodes.tiles) refresh(); });
 })(window);

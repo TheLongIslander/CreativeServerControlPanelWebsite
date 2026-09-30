@@ -218,6 +218,51 @@ test('live fields change in place while the thumbnail and tile remain mounted', 
     assert.ok(tile.querySelector('img') === image, "existing DOM nodes retain their identity");
 });
 
+test('uploaded thumbnails change on polling while the tile, controls, focus and animation stay intact', async () => {
+    const page = await browser(payload([server('default')]));
+    const tile = page.tiles.children[0];
+    const link = tile.querySelector('a');
+    const power = tile.querySelector('button');
+    tile.classList.remove('is-entering');
+    link.focus();
+    page.document.scrollTop = 420;
+    const custom = '/api/servers/default/thumbnail?v=first';
+    await page.refresh(payload([server('default', { thumbnailUrl: custom })]));
+    const image = tile.querySelector('img');
+    assert.equal(image.src, custom);
+    assert.equal(page.tiles.children[0], tile);
+    assert.equal(tile.querySelector('button'), power);
+    assert.equal(page.document.activeElement, link);
+    assert.equal(page.document.scrollTop, 420);
+    assert.equal(tile.classList.contains('is-entering'), false);
+    await page.refresh();
+    assert.equal(tile.querySelector('img'), image, 'unchanged thumbnail URL retains the decoded image');
+    await page.refresh(payload([server('default', { thumbnailUrl: '/api/servers/default/thumbnail?v=second' })]));
+    assert.equal(tile.querySelector('img').src, '/api/servers/default/thumbnail?v=second');
+    await page.refresh(payload([server('default', { thumbnailUrl: null })]));
+    assert.equal(tile.querySelector('img').src, '/assets/server-tiles/creative.png', 'removing custom artwork restores the existing default');
+    assert.equal(page.tiles.children[0], tile);
+});
+
+test('failed thumbnails fall back to initials without repeated requests until their URL changes', async () => {
+    const page = await browser(payload([server('abhi', { displayName: 'Abhi', thumbnailUrl: '/api/servers/abhi/thumbnail?v=broken' })]));
+    const tile = page.tiles.children[0];
+    const image = tile.querySelector('img');
+    await image.fire('error');
+    assert.equal(tile.querySelector('img'), null);
+    assert.equal(tile.querySelector('.server-tile-mark').textContent, 'A');
+    await page.refresh();
+    assert.equal(tile.querySelector('img'), null, 'a failed URL is not retried on every poll');
+    await page.refresh(payload([server('abhi', { displayName: 'Hardcore', thumbnailUrl: '/api/servers/abhi/thumbnail?v=broken' })]));
+    assert.equal(tile.querySelector('.server-tile-mark').textContent, 'H');
+    await page.refresh(payload([server('abhi', { displayName: 'Abhi', thumbnailUrl: '/api/servers/abhi/thumbnail?v=fixed' })]));
+    assert.equal(tile.querySelector('img').src, '/api/servers/abhi/thumbnail?v=fixed');
+    assert.equal(tile.querySelector('.server-tile-mark').classList.contains('has-image'), true);
+    await page.refresh(payload([server('abhi', { displayName: 'Abhi', thumbnailUrl: null })]));
+    assert.equal(tile.querySelector('img'), null);
+    assert.equal(tile.querySelector('.server-tile-mark').textContent, 'A');
+});
+
 test('server additions, reordering and revoked access preserve unaffected tiles and clear only removed server memory', async () => {
     const page = await browser(payload([server('default'), server('pogeg')]));
     const [creative, pogeg] = page.tiles.children;
@@ -407,4 +452,73 @@ test('lifecycle operations from polling show spinner and status without raw oper
     await page.refresh(payload([server('default', { operation: { type: 'backup', label: 'Creating backup' } })]));
     assert.equal(button.getAttribute('aria-busy'), 'false');
     assert.match(visibleText(tile), /Creating backup/);
+});
+
+test('full slots grey out only starts, show a dismissible glass popup, and recover in place', async () => {
+    const servers = [server('default'), server('pogeg', { status: { running: true, ready: true } })];
+    const full = { servers, slots: { occupied: 2, limit: 2, canBypass: false } };
+    const page = await browser(full);
+    page.document.body.dataset.uiTheme = 'glass';
+    const tile = page.tiles.children[0];
+    const button = tile.querySelector('button');
+    assert.equal(visibleText(page.notice), '');
+    assert.equal(button.classList.contains('is-slot-blocked'), true);
+    assert.equal(button.getAttribute('aria-disabled'), 'true');
+    assert.equal(button.disabled, false, 'blocked start remains available to explain the limit');
+    assert.equal(page.tiles.children[1].querySelector('button').getAttribute('aria-disabled'), 'false');
+    const read = page.window.fetch;
+    page.window.fetch = (url, options) => {
+        assert.notEqual(options?.method, 'POST', 'blocked start must not send a lifecycle request');
+        return read(url, options);
+    };
+    await button.click();
+    const popup = tile.querySelector('.server-slot-popup');
+    assert.match(visibleText(popup), /All 2 server slots are occupied. Stop a server before starting another./);
+    assert.equal(tile.querySelector('.server-tile-feedback').textContent, '');
+    await page.refresh();
+    assert.equal(tile.querySelector('.server-slot-popup'), popup, 'unchanged polling preserves the popup');
+    await page.document.fire('keydown', { key: 'Escape' });
+    assert.equal(tile.querySelector('.server-slot-popup'), null);
+    await button.click();
+    await page.document.fire('click', { target: page.document.body });
+    assert.equal(tile.querySelector('.server-slot-popup'), null);
+    await button.click();
+    const close = tile.querySelector('.server-slot-popup-close');
+    close.focus();
+    await close.click();
+    assert.equal(page.document.activeElement, button);
+    await button.click();
+    tile.querySelector('.server-slot-popup-close').focus();
+    await page.refresh({ servers, slots: { occupied: 1, limit: 2, canBypass: false } });
+    assert.equal(tile.querySelector('.server-slot-popup'), null);
+    assert.equal(page.document.activeElement, button, 'automatic dismissal restores focus to the mounted control');
+    assert.equal(button.classList.contains('is-slot-blocked'), false);
+    assert.equal(button.getAttribute('aria-disabled'), 'false');
+    assert.equal(tile.querySelector('button'), button);
+    await page.refresh({ ...full, slots: { ...full.slots, canBypass: true } });
+    assert.equal(button.classList.contains('is-slot-blocked'), false, 'admins retain their override');
+});
+
+test('classic full-slot clicks use a standard popup', async () => {
+    const page = await browser({ servers: [server('default')], slots: { occupied: 3, limit: 3, canBypass: false } });
+    page.document.body.dataset.uiTheme = 'flat';
+    const messages = [];
+    page.window.alert = message => messages.push(message);
+    await page.tiles.children[0].querySelector('button').click();
+    assert.deepEqual(messages, ['All 3 server slots are occupied. Stop a server before starting another.']);
+    assert.equal(page.tiles.querySelector('.server-slot-popup'), null);
+});
+
+test('admission races show the server slot error in a popup instead of expanding the tile', async () => {
+    const page = await browser(payload([server('default')]));
+    page.document.body.dataset.uiTheme = 'glass';
+    const read = page.window.fetch;
+    const message = 'All 2 server slots are occupied. Stop a server before starting another.';
+    page.window.fetch = (url, options) => options?.method === 'POST'
+        ? Promise.resolve({ ok: false, status: 409, text: async () => JSON.stringify({ error: { code: 'SERVER_SLOTS_FULL', message } }) })
+        : read(url, options);
+    const tile = page.tiles.children[0];
+    await tile.querySelector('button').click();
+    assert.equal(tile.querySelector('.server-tile-feedback').textContent, '');
+    assert.equal(tile.querySelector('.server-slot-popup-message').textContent, message);
 });

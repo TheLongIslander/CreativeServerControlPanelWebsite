@@ -108,8 +108,44 @@ async function fixture(t, options = {}) {
     await waitFor(() => messages.length);
     return { ws, messages };
   }
-  return { runtime, request, socket, accounts, profiles, closedServices };
+  return { runtime, request, socket, accounts, profiles, closedServices, base };
 }
+
+test('thumbnail upload and removal reach the composed routes without interrupting a running server', async t => {
+  const { runtime, request, accounts, closedServices, base } = await fixture(t);
+  const server = runtime.servers.get('survival');
+  server.setState('ready');
+  const originalRevision = runtime.registry.require('survival').revision;
+  const source = await require('sharp')({ create: { width: 32, height: 24, channels: 3, background: '#387b83' } }).png().toBuffer();
+  const form = new FormData();
+  form.append('thumbnail', new Blob([source], { type: 'image/png' }), 'world.png');
+  const uploaded = await fetch(`${base}/admin/servers/survival/thumbnail`, { method: 'POST',
+    headers: { Authorization: `Bearer ${accounts.admin.token}`, Origin: ORIGIN }, body: form });
+  assert.equal(uploaded.status, 200, await uploaded.clone().text());
+  const { thumbnailUrl, revision } = (await uploaded.json()).server;
+  assert.equal(revision, originalRevision);
+  assert.equal(runtime.servers.get('survival'), server);
+  assert.equal(server.processService.getSnapshot().running, true);
+  assert.deepEqual(server.calls, []);
+  assert.deepEqual(closedServices, []);
+  const image = await request(thumbnailUrl);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/webp');
+  assert.equal(image.headers.get('cache-control'), 'no-store');
+  assert.equal((await request(thumbnailUrl, { authenticated: false })).status, 401);
+  const listing = await (await request('/api/servers')).json();
+  assert.equal(listing.servers.find(s => s.id === 'survival').thumbnailUrl, thumbnailUrl);
+  await runtime.registry.setUserAccess('survival', accounts.ordinary.user.id, false);
+  assert.equal((await request(thumbnailUrl)).status, 404);
+  assert.equal((await request(thumbnailUrl, { account: 'admin' })).status, 200);
+  const removed = await request('/admin/servers/survival/thumbnail', { method: 'DELETE', account: 'admin' });
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json()).server.thumbnailUrl, null);
+  assert.equal(runtime.servers.get('survival'), server);
+  assert.equal(server.processService.getSnapshot().running, true);
+  assert.deepEqual(server.calls, []);
+  assert.deepEqual(closedServices, []);
+});
 
 test('composed HTTP lifecycle, status, chat and websocket events stay attached to the selected server', async t => {
   const { runtime, request, socket } = await fixture(t);

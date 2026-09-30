@@ -4,16 +4,21 @@
     let accessId = null;
     let accessGeneration = 0;
     let editGeneration = 0;
+    let thumbnailFile = null;
+    let thumbnailPreviewUrl = null;
+    let thumbnailBusy = false;
+    const defaultThumbnails = Object.freeze({ default: '/assets/server-tiles/creative.png', pogeg: '/assets/server-tiles/pogeg-farm.png' });
     const $ = id => document.getElementById(id);
     function notice(message, isError = false) {
         $('server-admin-notice').textContent = message;
         $('server-admin-notice').classList.toggle('profile-error', isError);
     }
     async function api(path = '', options = {}) {
+        const multipart = typeof FormData !== 'undefined' && options.body instanceof FormData;
         const response = await fetch(`/admin/servers${path}`, {
             ...options,
             cache: 'no-store',
-            headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}`, 'Content-Type': 'application/json' }
+            headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}`, ...(multipart ? {} : { 'Content-Type': 'application/json' }) }
         });
         const payload = await response.json().catch(() => ({}));
         if (response.status === 401) { global.ServerContext?.clearAll(); global.location.replace('/'); }
@@ -77,6 +82,8 @@
     }
     function closeEditors() {
         editGeneration++;
+        clearThumbnailFile();
+        thumbnailBusy = false;
         $('server-profile-form').classList.add('hidden');
         $('server-access-editor').classList.add('hidden');
         accessId = null;
@@ -93,6 +100,10 @@
             if (!server || server.archived) throw new Error('This server is no longer available.');
         }
         selected = server;
+        $('profile-thumbnail-editor').classList.toggle('hidden', !server);
+        $('profile-thumbnail-registration-help').classList.toggle('hidden', Boolean(server));
+        thumbnailNotice('');
+        renderThumbnail();
         const fields = {
             id: server?.id || '', name: server?.displayName || '', root: server?.rootPath || '',
             start: server?.startCommandPath || '', screen: server?.screenSession || '',
@@ -111,6 +122,86 @@
         $('profile-name').focus();
         $('server-profile-form').scrollIntoView({ block: 'nearest' });
     }
+    function clearThumbnailFile(resetInput = true) {
+        if (thumbnailPreviewUrl) global.URL.revokeObjectURL(thumbnailPreviewUrl);
+        thumbnailFile = null;
+        thumbnailPreviewUrl = null;
+        if (resetInput) $('profile-thumbnail-file').value = '';
+    }
+    function thumbnailNotice(message, isError = false) {
+        $('profile-thumbnail-notice').textContent = message;
+        $('profile-thumbnail-notice').classList.toggle('profile-error', isError);
+    }
+    function thumbnailControls() {
+        $('profile-thumbnail-file').disabled = thumbnailBusy;
+        $('upload-server-thumbnail').disabled = thumbnailBusy || !thumbnailFile;
+        $('remove-server-thumbnail').disabled = thumbnailBusy || !selected?.thumbnailUrl;
+        $('remove-server-thumbnail').classList.toggle('hidden', !selected?.thumbnailUrl);
+        $('save-server-profile').disabled = thumbnailBusy;
+        $('upload-server-thumbnail').textContent = thumbnailBusy ? 'Saving thumbnail…' : 'Upload thumbnail';
+    }
+    function renderThumbnail() {
+        const preview = $('profile-thumbnail-preview');
+        const initial = (selected?.displayName || '').slice(0, 1).toUpperCase();
+        const url = thumbnailPreviewUrl || selected?.thumbnailUrl || (selected && Object.hasOwn(defaultThumbnails, selected.id) ? defaultThumbnails[selected.id] : null);
+        const generation = editGeneration;
+        preview.textContent = initial;
+        if (url) {
+            const image = document.createElement('img');
+            image.alt = `${selected.displayName} thumbnail preview`;
+            image.addEventListener('error', () => {
+                if (generation === editGeneration && preview.firstElementChild === image) preview.textContent = initial;
+            }, { once: true });
+            image.src = url;
+            preview.replaceChildren(image);
+        }
+        thumbnailControls();
+    }
+    function chooseThumbnail() {
+        const file = $('profile-thumbnail-file').files?.[0];
+        clearThumbnailFile(false);
+        thumbnailNotice('');
+        if (file) {
+            if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+                $('profile-thumbnail-file').value = '';
+                thumbnailNotice('Choose a JPEG, PNG, or WebP image.', true);
+            } else if (!file.size || file.size > 5 * 1024 * 1024) {
+                $('profile-thumbnail-file').value = '';
+                thumbnailNotice('Choose an image no larger than 5 MiB.', true);
+            } else {
+                thumbnailFile = file;
+                thumbnailPreviewUrl = global.URL.createObjectURL(file);
+                thumbnailNotice(`${file.name} selected. Click Upload thumbnail to save it.`);
+            }
+        }
+        renderThumbnail();
+    }
+    async function saveThumbnail(remove = false) {
+        const target = selected;
+        if (!target || thumbnailBusy || (!remove && !thumbnailFile)) return;
+        const generation = editGeneration;
+        const currentEditor = () => generation === editGeneration && selected?.id === target.id;
+        const options = { method: remove ? 'DELETE' : 'POST' };
+        if (!remove) {
+            options.body = new FormData();
+            options.body.append('thumbnail', thumbnailFile);
+        }
+        thumbnailBusy = true;
+        thumbnailControls();
+        thumbnailNotice(remove ? 'Removing thumbnail…' : 'Uploading thumbnail…');
+        try {
+            const payload = await api(`/${encodeURIComponent(target.id)}/thumbnail`, options);
+            if (!currentEditor()) return;
+            selected = { ...selected, thumbnailUrl: payload.server.thumbnailUrl };
+            clearThumbnailFile();
+            renderThumbnail();
+            thumbnailNotice(remove ? 'Thumbnail removed. The server tile uses its default artwork.' : 'Thumbnail saved. Your server tile will update automatically.');
+        } catch (error) {
+            if (currentEditor()) thumbnailNotice(error.message, true);
+        } finally {
+            if (currentEditor()) { thumbnailBusy = false; thumbnailControls(); }
+        }
+    }
     function ramHelp() {
         const override = $('profile-ram-override').checked;
         $('profile-ram-help').textContent = override
@@ -120,6 +211,7 @@
     }
     async function save(event) {
         event.preventDefault();
+        if (thumbnailBusy) return;
         const target = selected;
         const get = name => $(`profile-${name}`).value.trim();
         const payload = {
@@ -212,6 +304,9 @@
     global.AdminServers = Object.freeze({ async init() {
         $('add-server-profile').addEventListener('click', () => edit());
         $('profile-ram-override').addEventListener('change', ramHelp);
+        $('profile-thumbnail-file').addEventListener('change', chooseThumbnail);
+        $('upload-server-thumbnail').addEventListener('click', () => saveThumbnail());
+        $('remove-server-thumbnail').addEventListener('click', () => saveThumbnail(true));
         $('cancel-server-profile').addEventListener('click', closeEditors);
         $('close-server-access').addEventListener('click', closeEditors);
         $('server-profile-form').addEventListener('submit', save);

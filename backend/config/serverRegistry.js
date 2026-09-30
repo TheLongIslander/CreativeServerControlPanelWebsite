@@ -344,6 +344,7 @@ function createServerRegistry(options = {}) {
   const profiles = new Map([[original.id, profileFromContext(original)]]);
   const restrictions = new Map();
   const permissions = new Map();
+  const thumbnails = new Map();
   let store = options.store || null;
   let initialization = null;
   let queue = Promise.resolve();
@@ -354,7 +355,7 @@ function createServerRegistry(options = {}) {
   }
   function install(profile) {
     profiles.set(profile.id, profile);
-    contexts.set(profile.id, contextFromProfile(profile));
+    contexts.set(profile.id, Object.freeze({ ...contextFromProfile(profile), thumbnailVersion: thumbnails.get(profile.id)?.version || null }));
   }
   function validateCollisions(profile) {
     const listeners = readListeners(profile.rootPath, readProperties(profile.rootPath).values);
@@ -386,6 +387,8 @@ function createServerRegistry(options = {}) {
         if (!saved.some(profile => profile.id === original.id)) saved.unshift(await store.insertProfile(profiles.get(original.id)));
         // Environment only seeds the legacy identity once. Stored profiles remain authoritative on restart.
         contexts.clear(); profiles.clear();
+        thumbnails.clear();
+        for (const thumbnail of await store.listThumbnails()) thumbnails.set(thumbnail.serverId, { version: thumbnail.version, data: thumbnail.data });
         for (const profile of saved) install(profile);
         for (const row of await store.listRestrictions()) {
           if (!restrictions.has(row.serverId)) restrictions.set(row.serverId, new Set());
@@ -413,6 +416,36 @@ function createServerRegistry(options = {}) {
     },
     list(options) { return [...contexts.keys()].map(id => registry.get(id, options)).filter(Boolean); },
     listIds(options) { return registry.list(options).map(context => context.id); },
+    getThumbnail(serverId) { return thumbnails.get(serverId) || null; },
+    async setThumbnail(serverId, thumbnail) {
+      await registry.initialize();
+      return serialize(async () => {
+        const context = registry.require(serverId, { includeDisabled: true });
+        if (context.archived) throw new ServerRegistryError(409, 'SERVER_ARCHIVED', 'Archived server profiles cannot be edited.');
+        if (!thumbnail || !/^[a-f0-9]{64}$/.test(thumbnail.version) || !Buffer.isBuffer(thumbnail.data)
+          || !thumbnail.data.length || thumbnail.data.length > 5 * 1024 * 1024) throw invalid('A processed server thumbnail is required.');
+        const saved = { version: thumbnail.version, data: Buffer.from(thumbnail.data) };
+        await store.setThumbnail(serverId, saved);
+        thumbnails.set(serverId, saved);
+        // Artwork is independent of runtime configuration: no revision change,
+        // lifecycle stop, or service rebuild is needed while Minecraft runs.
+        const updated = Object.freeze({ ...context, thumbnailVersion: saved.version });
+        contexts.set(serverId, updated);
+        return updated;
+      });
+    },
+    async removeThumbnail(serverId) {
+      await registry.initialize();
+      return serialize(async () => {
+        const context = registry.require(serverId, { includeDisabled: true });
+        if (context.archived) throw new ServerRegistryError(409, 'SERVER_ARCHIVED', 'Archived server profiles cannot be edited.');
+        await store.removeThumbnail(serverId);
+        thumbnails.delete(serverId);
+        const updated = Object.freeze({ ...context, thumbnailVersion: null });
+        contexts.set(serverId, updated);
+        return updated;
+      });
+    },
     canAccess(user, serverId) {
       if (!user || user.disabled || user.must_reset_password || !registry.get(serverId)) return false;
       return user.role === 'admin' || !(restrictions.get(serverId) || new Set()).has(Number(user.id));
@@ -501,6 +534,7 @@ function publicServerContext(context) {
     id: context.id, displayName: context.displayName, timezone: context.timezone,
     identityMode: context.identityMode, capabilities: context.capabilities,
     updatePipelineEnabled: context.updatePipelineEnabled !== false,
+    thumbnailUrl: context.thumbnailVersion ? `/api/servers/${encodeURIComponent(context.id)}/thumbnail?v=${context.thumbnailVersion}` : null,
     enabled: context.enabled !== false, revision: context.revision || 1
   };
 }

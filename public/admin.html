@@ -6,7 +6,7 @@
     <link id="theme-stylesheet" rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
     <link rel="stylesheet" href="styleAdmin.css">
-    <link rel="stylesheet" href="adminServers.css?v=permissions-1">
+    <link rel="stylesheet" href="adminServers.css?v=20260930-thumbnails-2">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
@@ -91,12 +91,27 @@
             <div id="server-profile-list"></div>
             <form id="server-profile-form" class="hidden">
                 <h3 id="server-profile-form-title">Register existing server</h3>
+                <p class="profile-help">Enter the existing folder containing server.properties and its startup script. The stable ID uses lowercase letters, numbers, hyphens, or underscores; the display name can include capitals and spaces.</p>
+                <p id="profile-thumbnail-registration-help" class="profile-help">To add a server thumbnail, save this profile, then choose Edit profile.</p>
+                <section id="profile-thumbnail-editor" class="profile-thumbnail-editor hidden" aria-labelledby="profile-thumbnail-title">
+                    <h4 id="profile-thumbnail-title">Server thumbnail</h4>
+                    <div class="profile-thumbnail-layout">
+                        <div id="profile-thumbnail-preview" class="profile-thumbnail-preview" aria-label="Current thumbnail preview"></div>
+                        <div class="profile-thumbnail-controls">
+                            <label for="profile-thumbnail-file">Choose image</label>
+                            <input id="profile-thumbnail-file" type="file" accept="image/jpeg,image/png,image/webp" aria-describedby="profile-thumbnail-help">
+                            <p id="profile-thumbnail-help" class="profile-help">JPEG, PNG, or WebP up to 5 MiB. Images fill the tile and may be cropped. Thumbnail changes save immediately, even while the server is running.</p>
+                            <div class="profile-actions"><button type="button" id="upload-server-thumbnail" disabled>Upload thumbnail</button><button type="button" id="remove-server-thumbnail" class="hidden">Remove thumbnail</button></div>
+                            <p id="profile-thumbnail-notice" class="profile-help" role="status"></p>
+                        </div>
+                    </div>
+                </section>
                 <div class="profile-fields">
-                    <label>Stable server ID<input id="profile-id" required pattern="[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}" maxlength="64" placeholder="survival"></label>
-                    <label>Display name<input id="profile-name" required maxlength="120" placeholder="Survival"></label>
+                    <label>Stable server ID<input id="profile-id" required pattern="[a-z0-9][a-z0-9_\-]{0,63}" maxlength="64" title="Start with a lowercase letter or number. Use only lowercase letters, numbers, hyphens, or underscores." placeholder="survival"></label>
+                    <label>Display name<input id="profile-name" required maxlength="100" placeholder="Survival"></label>
                     <label>Existing server folder<input id="profile-root" required placeholder="/absolute/path/to/server"></label>
                     <label>Startup script<input id="profile-start" required placeholder="/absolute/path/to/server/start.command"></label>
-                    <label>Screen session<input id="profile-screen" required placeholder="MinecraftSurvival"></label>
+                    <label>Screen session<input id="profile-screen" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}" maxlength="64" title="Start with a letter or number. Use only letters, numbers, hyphens, or underscores." placeholder="MinecraftSurvival"></label>
                     <label>Local backup folder<input id="profile-backup" placeholder="Not configured yet"></label>
                     <label>Timezone<input id="profile-timezone" required value="America/New_York"></label>
                     <label>Java executable (optional)<input id="profile-java" placeholder="Use startup script setting"></label>
@@ -160,7 +175,7 @@
     <script src="serverContext.js"></script>
     <script src="textEffects.js?v=20260930-1"></script>
     <script src="appearance.js?v=20260930-4"></script>
-    <script src="adminServers.js?v=permissions-1"></script>
+    <script src="adminServers.js?v=20260930-thumbnails-1"></script>
     <script src="admin.js"></script>
 </body>
 </html>

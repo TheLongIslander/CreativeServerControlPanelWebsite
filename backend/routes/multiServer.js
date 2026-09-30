@@ -140,9 +140,9 @@ function createMultiServerRoutes(runtime) {
     res.json({ servers: runtime.registry.list().filter(context => runtime.registry.canAccess(req.user, context.id))
       .map(context => runtime.publicStatus(context, req.user)), slots: runtime.admission.snapshot(req.user) });
   });
-  router.use('/api/servers/:serverId', authenticate, onboarded, select, (req, res, next) => serverRouter(runtime.servers.get(req.serverContext.id))(req, res, next));
   router.use(createServerProfileRoutes({ ...authOptions, registry: runtime.registry, usersDb: runtime.usersDb,
     canModifyProfile: runtime.canModifyProfile, onChanged: runtime.onChanged }));
+  router.use('/api/servers/:serverId', authenticate, onboarded, select, (req, res, next) => serverRouter(runtime.servers.get(req.serverContext.id))(req, res, next));
   // Compatibility URLs are permanently tied to Creative and still authorize it.
   const legacy = /^\/(?:status|server-status|start|stop|restart|backup|chat(?:\/.*)?|admin\/chat(?:\/.*)?|updates(?:\/.*)?|server-info|sftp(?:\/.*)?|upload|download(?:\/.*)?|downloads(?:\/.*)?|download-preview|change-directory|open-directory)\/?$/;
   router.use(legacy, authenticate, onboarded, (req, res, next) => {
