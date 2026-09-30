@@ -42,6 +42,10 @@ function createServerStore({ dbPath = process.env.SERVER_REGISTRY_DB_PATH || pat
         server_id TEXT NOT NULL REFERENCES server_profiles(id), user_id INTEGER NOT NULL,
         created_at TEXT NOT NULL, PRIMARY KEY (server_id, user_id)
       )`);
+      await run(`CREATE TABLE IF NOT EXISTS server_user_permissions (
+        server_id TEXT NOT NULL REFERENCES server_profiles(id), user_id INTEGER NOT NULL,
+        permissions_json TEXT NOT NULL, PRIMARY KEY (server_id, user_id)
+      )`);
       await run('INSERT OR IGNORE INTO server_registry_meta (singleton, schema_version) VALUES (1, 1)');
     })();
     return initialized;
@@ -77,6 +81,15 @@ function createServerStore({ dbPath = process.env.SERVER_REGISTRY_DB_PATH || pat
     async listRestrictions() {
       await initialize();
       return all('SELECT server_id AS serverId, user_id AS userId FROM server_access_restrictions');
+    },
+    async listPermissions() {
+      await initialize();
+      return all('SELECT server_id AS serverId, user_id AS userId, permissions_json AS permissions FROM server_user_permissions');
+    },
+    async setUserPermissions(serverId, userId, permissions) {
+      await initialize();
+      await run('INSERT INTO server_user_permissions (server_id, user_id, permissions_json) VALUES (?, ?, ?) ON CONFLICT(server_id, user_id) DO UPDATE SET permissions_json = excluded.permissions_json',
+        [serverId, userId, JSON.stringify(permissions)]);
     },
     async setUserAccess(serverId, userId, allowed) {
       await initialize();

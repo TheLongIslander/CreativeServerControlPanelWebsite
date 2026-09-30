@@ -18,7 +18,11 @@ Open **Account → Admin Management → Server Profiles** to register an existin
 
 **Edit profile** changes a stopped server's configuration. The stable ID is not editable. Disabling or removing a profile requires the server to be stopped and preserves its files, backups, and history. Backend validation rejects unsafe paths, listener conflicts, and concurrent edits.
 
-**User access** lists the panel accounts for that server. All are allowed initially. Unchecking a non-admin user restricts that server without changing their access to other servers. Administrators always retain access.
+**User access** lists the panel accounts for that server. Expand a user to toggle server access and individual features: start, stop, restart, backup creation, backup browsing, downloads/previews, uploads/folder creation, updates/restores, reading chat, sending chat, player information, and linking their Minecraft account. Changes save immediately and persist across panel restarts. Existing users keep all features until restricted. Administrators always retain every permission. These restrictions supplement existing role checks; enabling a feature never grants admin privileges.
+
+To prevent a user from taking a world copy, turn off **Browse server backups** for that user on the relevant server. This also blocks direct download, preview, and upload URLs. Alternatively, leave browsing enabled and turn off **Download and preview backup files**. Sending chat requires both read and send permissions. Turning off overall server access blocks every feature while preserving the individual settings for later.
+
+Backend checks apply to scoped and legacy URLs and live chat/player events. Connected server pages reload when feature permissions change. Files already downloaded cannot be recalled, and operations already completed are not undone. Settings on one server do not affect other servers.
 
 The **Server Update History** selector loads only the chosen server's runs. Switching the selector closes the previous summary and cancels its pending request; late responses cannot replace the selected server's history.
 

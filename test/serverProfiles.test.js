@@ -297,3 +297,43 @@ test('update pipeline setting defaults on, validates booleans, and persists inde
   await reopened.update('modpack', { updatePipelineEnabled: true });
   assert.equal(reopened.require('modpack').updatePipelineEnabled, true);
 });
+
+test('feature restrictions persist, remain server/user scoped and never restrict admins', async t => {
+  const { registry, profile, env } = await fixture(t);
+  await registry.register(profile('survival', 25562));
+  const user = { id: 2, role: 'user' };
+  assert.equal(registry.canPerform(user, 'survival', 'backupBrowse'), true);
+  await registry.setUserPermissions('survival', 2, { backupBrowse: false });
+  await registry.setUserPermissions('survival', 2, { stop: false });
+  assert.equal(registry.canPerform(user, 'survival', 'backupBrowse'), false);
+  assert.equal(registry.canPerform(user, 'default', 'backupBrowse'), true);
+  assert.equal(registry.canPerform({ id: 3 }, 'survival', 'backupBrowse'), true);
+  assert.equal(registry.canPerform({ ...user, role: 'admin' }, 'survival', 'backupBrowse'), true);
+  assert.equal(registry.canPerform(user, 'survival', 'unknown'), false);
+  await registry.close();
+  const restored = createServerRegistry({ env });
+  t.after(() => restored.close());
+  await restored.initialize();
+  assert.equal(restored.canPerform(user, 'survival', 'backupBrowse'), false);
+  assert.equal(restored.canPerform(user, 'survival', 'stop'), false);
+  await restored.setUserPermissions('survival', 2, { backupBrowse: true });
+  assert.equal(restored.canPerform(user, 'survival', 'backupBrowse'), true);
+});
+
+test('permission API validates changes, protects admins and audits mutations', async t => {
+  const data = await fixture(t);
+  const { request, audits, changes } = await withApp(t, data);
+  const patch = { userId: 2, permissions: { backupBrowse: false } };
+  assert.equal((await request('PATCH', '/default/permissions', patch, { 'x-role': 'user' })).status, 403);
+  assert.equal((await request('PATCH', '/default/permissions', patch, { origin: 'http://evil.test' })).status, 403);
+  for (const permissions of [null, [], {}, { typo: false }, { backupBrowse: 'false' }]) {
+    assert.equal((await request('PATCH', '/default/permissions', { userId: 2, permissions })).status, 400);
+  }
+  assert.equal((await request('PATCH', '/default/permissions', { ...patch, userId: 1 })).status, 400);
+  assert.equal((await request('PATCH', '/default/permissions', patch)).status, 200);
+  const payload = await (await request('GET', '/default/access')).json();
+  assert.equal(payload.users[0].permissions.backupBrowse, true);
+  assert.equal(payload.users[1].permissions.backupBrowse, false);
+  assert.equal(changes.at(-1).operation, 'permissions');
+  assert.equal(audits.at(-1).action, 'server_profile_permissions_completed');
+});

@@ -1,3 +1,4 @@
+const { SERVER_PERMISSIONS } = require('./serverPermissions');
 /*
  * Purpose: Resolve the currently configured Minecraft server through an exact,
  *          server-scoped context without exposing host paths or secrets to HTTP.
@@ -342,6 +343,7 @@ function createServerRegistry(options = {}) {
   const contexts = new Map([[original.id, original]]);
   const profiles = new Map([[original.id, profileFromContext(original)]]);
   const restrictions = new Map();
+  const permissions = new Map();
   let store = options.store || null;
   let initialization = null;
   let queue = Promise.resolve();
@@ -389,6 +391,7 @@ function createServerRegistry(options = {}) {
           if (!restrictions.has(row.serverId)) restrictions.set(row.serverId, new Set());
           restrictions.get(row.serverId).add(Number(row.userId));
         }
+        for (const row of await store.listPermissions()) permissions.set(`${row.serverId}:${row.userId}`, JSON.parse(row.permissions));
         for (const input of options.profiles || []) {
           if (profiles.has(input.id)) continue;
           const profile = validateProfileInput(input);
@@ -413,6 +416,26 @@ function createServerRegistry(options = {}) {
     canAccess(user, serverId) {
       if (!user || user.disabled || user.must_reset_password || !registry.get(serverId)) return false;
       return user.role === 'admin' || !(restrictions.get(serverId) || new Set()).has(Number(user.id));
+    },
+    userPermissions(user, serverId) {
+      const saved = permissions.get(`${serverId}:${Number(user.id)}`) || {};
+      return Object.fromEntries(Object.keys(SERVER_PERMISSIONS).map(key => [key, user.role === 'admin' || saved[key] !== false]));
+    },
+    canPerform(user, serverId, permission) {
+      return Object.hasOwn(SERVER_PERMISSIONS, permission) && registry.canAccess(user, serverId) && registry.userPermissions(user, serverId)[permission];
+    },
+    async setUserPermissions(serverId, userId, patch) {
+      await registry.initialize();
+      return serialize(async () => {
+        registry.require(serverId, { includeDisabled: true });
+        if (!Number.isSafeInteger(userId) || userId < 1 || !patch || typeof patch !== 'object' || Array.isArray(patch)
+          || !Object.keys(patch).length || Object.entries(patch).some(([key, value]) => !Object.hasOwn(SERVER_PERMISSIONS, key) || typeof value !== 'boolean')) throw invalid('Valid permission names and boolean values are required.');
+        const key = `${serverId}:${userId}`;
+        const next = { ...permissions.get(key), ...patch };
+        await store.setUserPermissions(serverId, userId, next);
+        permissions.set(key, next);
+        return { serverId, userId, permissions: registry.userPermissions({ id: userId }, serverId) };
+      });
     },
     validateForStart(serverId) {
       registry.require(serverId);

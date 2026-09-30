@@ -696,8 +696,8 @@ function renderServerInfoOverview(payload) {
     const facts = [
         { label: 'Current Version', value: payload && payload.currentVersion ? payload.currentVersion : 'Unknown' },
         { label: 'Current Mods', value: String(mods.length) },
-        { label: 'Founded', value: payload && payload.startedLabel ? payload.startedLabel : 'April 23, 2020' },
-        { label: 'Start Version', value: payload && payload.startVersion ? payload.startVersion : '1.15.2' }
+        { label: 'Founded', value: payload && payload.startedLabel ? payload.startedLabel : 'Unknown' },
+        { label: 'Start Version', value: payload && payload.startVersion ? payload.startVersion : 'Unknown' }
     ];
 
     facts.forEach(fact => {
@@ -730,6 +730,20 @@ function renderServerInfoTabs() {
     }
     tabs.innerHTML = '';
     const groups = getServerInfoGalleryGroups();
+    if (groups.length <= 1) {
+        tabs.removeAttribute('role');
+        tabs.removeAttribute('aria-label');
+        if (groups.length === 1) {
+            const group = groups[0];
+            const heading = createServerInfoNode('div', 'server-info-era-heading');
+            heading.appendChild(createServerInfoNode('h4', 'server-info-era-title', group.title || 'Screenshots'));
+            heading.appendChild(createServerInfoNode('div', 'server-info-era-meta', `${group.eyebrow || ''}${group.eyebrow ? ' | ' : ''}${group.images.length} image${group.images.length === 1 ? '' : 's'}`));
+            tabs.appendChild(heading);
+        }
+        return;
+    }
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'Screenshot eras');
     groups.forEach((group, index) => {
         const button = document.createElement('button');
         button.type = 'button';
@@ -824,7 +838,7 @@ function renderServerInfoGallery() {
             fullLink.classList.add('hidden');
             fullLink.removeAttribute('href');
         }
-        content.appendChild(createServerInfoNode('p', 'server-info-empty', 'No screenshots were found.'));
+        content.appendChild(createServerInfoNode('p', 'server-info-empty', serverContext.id === 'pogeg' ? 'Pogeg Farm screenshots are coming soon.' : 'No screenshots were found.'));
         return;
     }
 
@@ -1033,6 +1047,12 @@ async function openServerInfoModal() {
     if (kicker) {
         kicker.textContent = serverContext.id === 'default' ? 'El Capital Archive' : serverContext.serverName;
     }
+    const loreTitle = document.getElementById('server-info-lore-title');
+    if (loreTitle) {
+        loreTitle.textContent = serverContext.id === 'default'
+            ? 'History of El Capital'
+            : `History of ${serverContext.serverName}`;
+    }
     if (filter) {
         filter.value = '';
     }
@@ -1044,10 +1064,6 @@ async function openServerInfoModal() {
     modal.setAttribute('aria-hidden', 'false');
     syncModalOpenState();
 
-    if (serverContext.id === 'pogeg') {
-        setServerInfoStatus(`Server info for ${serverContext.serverName} is being created. Check back soon.`);
-        return;
-    }
 
     try {
         const response = await serverFetch('/server-info', {
@@ -2887,10 +2903,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (window.Appearance && typeof window.Appearance.init === 'function') {
         window.Appearance.init({ user });
     }
-    if (window.ServerChat && typeof window.ServerChat.init === 'function') {
+    if (serverContext.can('chatRead') && window.ServerChat && typeof window.ServerChat.init === 'function') {
         window.ServerChat.init({ user });
     }
-    if (window.PlayerCenter && typeof window.PlayerCenter.init === 'function') {
+    if (serverContext.can('players') && window.PlayerCenter && typeof window.PlayerCenter.init === 'function') {
         window.PlayerCenter.init({ user });
     }
     setupProgressBulge();
@@ -2899,16 +2915,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupServerInfoModalHandlers();
     setupUpdateModalHandlers();
     setupWebSocket();
-    if (window.ServerChat && typeof window.ServerChat.start === 'function') {
+    if (serverContext.can('chatRead') && window.ServerChat && typeof window.ServerChat.start === 'function') {
         window.ServerChat.start();
     }
-    if (window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
+    if (serverContext.can('players') && window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
         window.PlayerCenter.start();
     }
-    if (serverContext.profile.capabilities?.updates !== false) setupUpdateStatusPolling();
+    if (serverContext.can('updates') && serverContext.profile.capabilities?.updates !== false) setupUpdateStatusPolling();
     checkServerStatus();
     lifecycleStatusTimer = setInterval(() => { if (!document.hidden) checkServerStatus(); }, 10000);
-    if (serverContext.profile.capabilities?.updates !== false) await loadUpdateStatus();
+    if (serverContext.can('updates') && serverContext.profile.capabilities?.updates !== false) await loadUpdateStatus();
 });
 
 async function loadSelectedServer() {
@@ -3112,10 +3128,10 @@ function setupWebSocket() {
             wsStabilityTimer = null;
         }, 10000);
         console.log('WebSocket connection established');
-        if (window.ServerChat && typeof window.ServerChat.handleSocketOpen === 'function') {
+        if (serverContext.can('chatRead') && window.ServerChat && typeof window.ServerChat.handleSocketOpen === 'function') {
             window.ServerChat.handleSocketOpen();
         }
-        if (window.PlayerCenter && typeof window.PlayerCenter.handleSocketOpen === 'function') {
+        if (serverContext.can('players') && window.PlayerCenter && typeof window.PlayerCenter.handleSocketOpen === 'function') {
             window.PlayerCenter.handleSocketOpen();
         }
     };
@@ -3127,6 +3143,11 @@ function setupWebSocket() {
         let message;
         try {
             message = JSON.parse(event.data);
+            if (message.type === 'server-permissions-changed' && message.serverId === serverContext.id) {
+                serverContext.clearServer();
+                window.location.reload();
+                return;
+            }
         } catch (error) {
             console.error('[ERROR] Failed to parse WebSocket message:', error.message);
             return;
@@ -3201,10 +3222,10 @@ function setupWebSocket() {
             clearTimeout(wsStabilityTimer);
             wsStabilityTimer = null;
         }
-        if (window.ServerChat && typeof window.ServerChat.handleSocketClose === 'function') {
+        if (serverContext.can('chatRead') && window.ServerChat && typeof window.ServerChat.handleSocketClose === 'function') {
             window.ServerChat.handleSocketClose(e);
         }
-        if (window.PlayerCenter && typeof window.PlayerCenter.handleSocketClose === 'function') {
+        if (serverContext.can('players') && window.PlayerCenter && typeof window.PlayerCenter.handleSocketClose === 'function') {
             window.PlayerCenter.handleSocketClose(e);
         }
         if (wsStopped) {
@@ -3233,7 +3254,7 @@ function setupWebSocket() {
 window.addEventListener('pagehide', () => {
     clearInterval(lifecycleStatusTimer);
     window.ServerChat?.stop();
-    if (window.PlayerCenter && typeof window.PlayerCenter.stop === 'function') {
+    if (serverContext.can('players') && window.PlayerCenter && typeof window.PlayerCenter.stop === 'function') {
         window.PlayerCenter.stop();
     }
     wsLifecycleGeneration += 1;
@@ -3258,7 +3279,7 @@ window.addEventListener('pageshow', (event) => {
         wsPolicyCloseCount = 0;
         wsPreOpenFailureCount = 0;
         setupWebSocket();
-        if (window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
+        if (serverContext.can('players') && window.PlayerCenter && typeof window.PlayerCenter.start === 'function') {
             window.PlayerCenter.start();
         }
     }

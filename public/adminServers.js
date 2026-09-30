@@ -162,19 +162,49 @@
             checkbox.checked = user.allowed !== false;
             checkbox.disabled = user.role === 'admin';
             const text = document.createElement('span');
-            text.textContent = `${user.username}${user.role === 'admin' ? ' · Admin (always allowed)' : ''}${user.disabled ? ' · Account disabled' : ''}`;
+            text.textContent = `Server access · ${user.username}${user.role === 'admin' ? ' · Admin (always allowed)' : ''}${user.disabled ? ' · Account disabled' : ''}`;
             checkbox.addEventListener('change', async () => {
                 const allowed = checkbox.checked;
                 checkbox.disabled = true;
+                permissions.disabled = true;
                 try {
                     // Capture the original profile; opening another editor cannot retarget this write.
                     await api(`/${encodeURIComponent(server.id)}/access`, { method: 'PATCH', body: JSON.stringify({ userId: user.id, allowed }) });
                     if (accessId === server.id) notice(`${user.username} ${allowed ? 'can access' : 'is restricted from'} ${server.displayName}.`);
                 } catch (error) { checkbox.checked = !allowed; notice(error.message, true); }
-                finally { checkbox.disabled = false; }
+                finally { checkbox.disabled = false; permissions.disabled = !checkbox.checked; }
             });
             label.append(checkbox, text);
-            fragment.append(label);
+            const row = document.createElement('details');
+            row.className = 'server-permission-user';
+            const summary = document.createElement('summary');
+            summary.textContent = user.username + (user.role === 'admin' ? ' · Admin — full access' : ' · Permissions');
+            row.append(summary, label);
+            const permissions = document.createElement('fieldset');
+            const legend = document.createElement('legend');
+            legend.textContent = 'Allowed features';
+            permissions.append(legend);
+            permissions.disabled = user.role === 'admin' || !checkbox.checked;
+            for (const [key, title] of Object.entries(payload.permissionDefinitions || {})) {
+                const feature = document.createElement('label');
+                feature.className = 'server-access-user';
+                const toggle = document.createElement('input');
+                toggle.type = 'checkbox';
+                toggle.checked = user.permissions?.[key] !== false;
+                toggle.addEventListener('change', async () => {
+                    const allowed = toggle.checked;
+                    toggle.disabled = true;
+                    try {
+                        await api(`/${encodeURIComponent(server.id)}/permissions`, { method: 'PATCH', body: JSON.stringify({ userId: user.id, permissions: { [key]: allowed } }) });
+                        if (accessId === server.id) notice(`${title} ${allowed ? 'enabled' : 'disabled'} for ${user.username} on ${server.displayName}.`);
+                    } catch (error) { toggle.checked = !allowed; notice(error.message, true); }
+                    finally { toggle.disabled = false; }
+                });
+                feature.append(toggle, document.createTextNode(title));
+                permissions.append(feature);
+            }
+            row.append(permissions);
+            fragment.append(row);
         }
         $('server-access-users').replaceChildren(fragment);
         $('server-access-editor').scrollIntoView({ block: 'nearest' });

@@ -1,3 +1,4 @@
+const { SERVER_PERMISSIONS } = require('../config/serverPermissions');
 /* Admin profile registration and default-allow access restrictions. RAM sync can update the selected startup script. */
 const crypto = require('node:crypto');
 const express = require('express');
@@ -99,9 +100,10 @@ function createServerProfileRoutes({
       const serverId = req.params.id;
       const denied = new Set(serverRegistry.restrictedUserIds(serverId));
       const users = await usersDb.listUsers();
-      return res.json({ serverId, users: users.map(user => ({
+      return res.json({ serverId, permissionDefinitions: SERVER_PERMISSIONS, users: users.map(user => ({
         id: user.id, username: user.username, role: user.role, disabled: Boolean(user.disabled),
-        allowed: user.role === 'admin' || !denied.has(Number(user.id))
+        allowed: user.role === 'admin' || !denied.has(Number(user.id)),
+        permissions: serverRegistry.userPermissions(user, serverId)
       })) });
     } catch (error) { return sendError(res, error); }
   });
@@ -120,6 +122,22 @@ function createServerProfileRoutes({
         const access = await serverRegistry.setUserAccess(serverId, input.userId, input.allowed);
         await onChanged({ serverId, operation: 'access', ...input });
         return access;
+      });
+      return res.json(result);
+    } catch (error) { return sendError(res, error); }
+  });
+  router.patch('/admin/servers/:id/permissions', origin, async (req, res) => {
+    try {
+      const input = checkBody(req);
+      if (Object.keys(input).length !== 2 || !Object.hasOwn(input, 'permissions') || !Number.isSafeInteger(input.userId) || input.userId < 1) throw routeError(400, 'SERVER_INVALID_ACCESS', 'Provide userId and permissions.');
+      const user = await usersDb.getUserById(input.userId);
+      if (!user) throw routeError(404, 'SERVER_USER_NOT_FOUND', 'User was not found.');
+      if (user.role === 'admin') throw routeError(400, 'SERVER_ADMIN_ACCESS_REQUIRED', 'Administrators always retain all permissions.');
+      const serverId = req.params.id;
+      const result = await mutation(req, 'permissions', { serverId, ...input }, async () => {
+        const result = await serverRegistry.setUserPermissions(serverId, input.userId, input.permissions);
+        await onChanged({ serverId, operation: 'permissions', userId: input.userId });
+        return result;
       });
       return res.json(result);
     } catch (error) { return sendError(res, error); }

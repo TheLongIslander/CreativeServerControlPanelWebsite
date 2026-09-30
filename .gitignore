@@ -23,3 +23,5 @@ servers.db
 servers.db-wal
 servers.db-shm
 data/servers/
+
+assets/pogeg-server-info/

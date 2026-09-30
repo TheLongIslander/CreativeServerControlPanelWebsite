@@ -1550,6 +1550,17 @@ body.control-panel .server-info-era-tab.active {
     background-color: #2563eb;
 }
 
+.server-info-era-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.server-info-era-heading h4 {
+    margin: 0;
+    font-size: 1rem;
+}
+
 .server-info-era-title {
     font-weight: 900;
     line-height: 1.1;

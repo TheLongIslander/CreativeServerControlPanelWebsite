@@ -154,7 +154,7 @@ test('Player Center cards reuse restrained glass-only surface physics', () => {
   assert.match(css, /\[data-pointer-profile="surface"\]\.is-lit[\s\S]*?translate\(var\(--tx\), var\(--ty\)\)[\s\S]*?scale\(var\(--scale\)\)/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\[data-pointer-profile="surface"\][\s\S]*?transform:\s*none !important;[\s\S]*?filter:\s*none !important;/);
   assert.match(css, /\.player-center-section > \.player-center-state-card\s*\{[\s\S]*?border:\s*0;/);
-  assert.match(html, /script\.js\?v=20260831-8&amp;pc=20260831-17/);
+  assert.match(html, /script\.js\?v=\d{8}-\d+&amp;pc=20260831-17/);
 });
 
 test('player list normalization supports live DTOs and world-file profile fields', () => {

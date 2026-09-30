@@ -70,7 +70,7 @@ function createMultiServerRuntime(options = {}) {
     const chatTailer = createChatLogTailer({ logPath: context.logPath, timeZone: context.timezone,
       loadCursor: id => chatStore.getCursor(id), commitBatch: batch => chatService.ingestBatch(batch) });
     const consoleTransport = createScreenConsoleTransport({ screenSessionName: context.screenSession, maxCommandBytes: config.chatScreenMaxCommandBytes });
-    chatService = createChatService({ serverId: context.id, authorizeServer: (user, id) => registry.canAccess(user, id), store: chatStore, processService,
+    chatService = createChatService({ serverId: context.id, authorizeServer: (user, id) => registry.canPerform(user, id, 'chatRead') && registry.canPerform(user, id, 'chatSend'), store: chatStore, processService,
       consoleTransport, realtimeHub: hub, tailer: chatTailer, sharedState: serverState, usersDb, retentionDays: config.chatRetentionDays });
     const updateStore = createUpdateStore({ dbPath: legacy ? env.UPDATES_DB_PATH || path.join(__dirname, '../../updates.db') : path.join(dir, 'updates.db') });
     const updateService = createUpdateService({ env: scopedEnv, context, updateStore,
@@ -112,7 +112,7 @@ function createMultiServerRuntime(options = {}) {
   function publicStatus(context, user) {
     const runtime = servers.get(context.id);
     const status = runtime?.processService.getSnapshot();
-    return { ...publicServerContext(context), status: {
+    return { ...publicServerContext(context), permissions: registry.userPermissions(user, context.id), status: {
       running: Boolean(status?.running), ready: status?.state === 'ready', state: status?.state || 'unknown',
       updateInProgress: Boolean(runtime?.state.updateLocked) },
       operation: admission.operation(context.id),
@@ -125,6 +125,11 @@ function createMultiServerRuntime(options = {}) {
     async initialize() {
       await registry.initialize();
       realtimeHub.setServerAuthorizer((user, id) => registry.canAccess(user, id));
+      realtimeHub.setEventAuthorizer((user, id, event) => {
+        if (event.type?.startsWith('minecraft-chat')) return registry.canPerform(user, id, 'chatRead');
+        if (event.type?.startsWith('player-center')) return registry.canPerform(user, id, 'players');
+        return true;
+      });
       realtimeHub.setStatusProvider((user, id) => {
         if (statusProviders.has(id)) return { ...statusProviders.get(id)(), serverId: id };
         const target = servers.get(id);
@@ -178,8 +183,12 @@ function createMultiServerRuntime(options = {}) {
         try { return await mutate(); } finally { if (release) await release(); }
       });
     },
-    async onChanged({ serverId, operation, context }) {
+    async onChanged({ serverId, operation, context, userId }) {
       realtimeHub.disconnectUnauthorized();
+      if (operation === 'permissions') {
+        realtimeHub.broadcastUser(userId, { type: 'server-permissions-changed', serverId });
+        return;
+      }
       if (operation === 'access') return;
       const old = servers.get(serverId);
       if (old) { await closeOne(old); servers.delete(serverId); statusProviders.delete(serverId); }

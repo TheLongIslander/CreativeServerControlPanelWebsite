@@ -123,7 +123,21 @@
     });
     global.ServerContext = Object.freeze({
         id, apiPath, fetch: scopedFetch, init, read, write, clearServer, clearAll, revoke,
-        setProfile(value) { if (value && value.id === id) profile = value; },
+        can(permission) { return profile?.permissions?.[permission] !== false; },
+        setProfile(value) {
+            if (!value || value.id !== id) return;
+            profile = value;
+            const controls = {
+                start: ['start-server'], stop: ['stop-server'], restart: ['restart-server'], backup: ['backup-server'],
+                backupBrowse: ['sftp-button'], backupUpload: ['upload-form', 'create-directory-button'],
+                updates: ['update-server', 'server-version-button'], chatRead: ['server-chat-toggle', 'server-chat-shell'],
+                playerLink: ['player-center-link-nav'], chatSend: ['server-chat-form'], players: ['player-center-toggle', 'player-center-shell']
+            };
+            let style = document.getElementById('server-permission-styles');
+            if (!style) { style = document.createElement('style'); style.id = 'server-permission-styles'; document.head.append(style); }
+            const denied = Object.entries(controls).filter(([key]) => value.permissions?.[key] === false).flatMap(([, ids]) => ids.map(id => '#' + id));
+            style.textContent = denied.length ? denied.join(',') + '{display:none !important}' : '';
+        },
         get profile() { return profile; },
         get serverName() { return profile && profile.displayName || id; },
         panelUrl(serverId = id) { return `/servers/${encodeURIComponent(serverId)}`; },

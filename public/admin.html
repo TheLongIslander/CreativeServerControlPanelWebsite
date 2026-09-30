@@ -6,7 +6,7 @@
     <link id="theme-stylesheet" rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
     <link rel="stylesheet" href="styleAdmin.css">
-    <link rel="stylesheet" href="adminServers.css">
+    <link rel="stylesheet" href="adminServers.css?v=permissions-1">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
@@ -113,7 +113,7 @@
             </form>
             <section id="server-access-editor" class="hidden" aria-labelledby="server-access-title">
                 <h3 id="server-access-title">Server access</h3>
-                <p class="profile-help">Uncheck a user to restrict this server. Administrators retain access. Restrictions take effect on active connections too.</p>
+                <p class="profile-help">Expand a user to control individual features. Uncheck server access to block the entire server. Changes save immediately. Administrators always have full access.</p>
                 <div id="server-access-users"></div>
                 <button id="close-server-access" type="button">Done</button>
             </section>
@@ -160,7 +160,7 @@
     <script src="serverContext.js"></script>
     <script src="textEffects.js?v=20260930-1"></script>
     <script src="appearance.js?v=20260930-4"></script>
-    <script src="adminServers.js"></script>
+    <script src="adminServers.js?v=permissions-1"></script>
     <script src="admin.js"></script>
 </body>
 </html>

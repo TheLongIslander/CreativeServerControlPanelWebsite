@@ -1,3 +1,4 @@
+const { requiredPermissions } = require('../config/serverPermissions');
 const express = require('express');
 const path = require('node:path');
 const fileUpload = require('express-fileupload');
@@ -45,7 +46,11 @@ function createMultiServerRoutes(runtime) {
     if (!runtime.registry.canAccess(req.user, id)) return sendError(res, { status: 404, code: 'SERVER_NOT_FOUND', message: 'Server was not found.' });
     if (!runtime.servers.has(id)) return sendError(res, { status: 503, code: 'SERVER_UNAVAILABLE', message: 'This server is unavailable.' });
     req.serverContext = context;
-    req.requireServerAccess = (user, serverId) => runtime.registry.canAccess(user, serverId)
+    const permissions = requiredPermissions(req.path, req.method);
+    if (permissions.some(permission => !runtime.registry.canPerform(req.user, id, permission))) return sendError(res, {
+      status: 403, code: 'SERVER_PERMISSION_DENIED', message: 'You do not have permission to use this server feature.'
+    });
+    req.requireServerAccess = (user, serverId) => permissions.every(permission => runtime.registry.canPerform(user, serverId, permission)) && runtime.registry.canAccess(user, serverId)
       && runtime.registry.get(serverId)?.revision === context.revision;
     res.setHeader('Cache-Control', 'no-store');
     next();
@@ -86,7 +91,7 @@ function createMultiServerRoutes(runtime) {
           await release();
           return sendError(res, { status: 409, code: 'SERVER_PROFILE_CHANGED', message: 'This server profile changed. Reload before trying again.' });
         }
-        if (!runtime.registry.canAccess(req.user, id)) {
+        if (!req.requireServerAccess(req.user, id)) {
           await release();
           return sendError(res, { status: 404, code: 'SERVER_NOT_FOUND', message: 'Server was not found.' });
         }

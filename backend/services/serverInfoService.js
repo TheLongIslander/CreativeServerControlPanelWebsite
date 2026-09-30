@@ -7,6 +7,13 @@ const path = require('path');
 const { readFabricModJsonFromJar } = require('./modResolver');
 
 const SERVER_INFO_ROOT = path.join(process.cwd(), 'assets', 'server-info');
+const POGEG_INFO_ROOT = path.join(process.cwd(), 'assets', 'pogeg-server-info');
+const POGEG_GALLERY_GROUPS = [{
+  id: 'current',
+  title: 'The Forever World',
+  eyebrow: 'September 2026',
+  description: 'Pogeg Farm on September 30, 2026.'
+}];
 const GENERATED_DIR_NAME = '_generated';
 const IMAGE_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp']);
 const SERVER_STARTED_DATE = '2020-04-23';
@@ -88,6 +95,45 @@ const LORE_SECTIONS = [
     eyebrow: 'Present',
     title: 'Active Build Era',
     body: 'El Capital remains active today, carrying forward years of player history, technical upgrades, and increasingly ambitious builds.'
+  }
+];
+
+const POGEG_LORE_SECTIONS = [
+  {
+    "id": "founding",
+    "eyebrow": "September 20, 2025",
+    "title": "From Pickleball to Minecraft",
+    "body": "During a game of pickleball between TheLongIslander, PogegFX, BangladeshiJew, and Windsauga, TheLongIslander and BangladeshiJew wanted to resume their Baldur’s Gate 3 campaign. PogegFX had something else in mind: a chill Minecraft survival server. He eventually convinced TheLongIslander, and that night, Pogeg Farm’s world began on vanilla Minecraft 1.21.8, before it even had a name."
+  },
+  {
+    "id": "name",
+    "eyebrow": "The First Day",
+    "title": "The Birth of Pogeg Farm",
+    "body": "TheLongIslander, PogegFX, and AbhiTheLegend1 set up a base together and discussed how to make it look more aesthetic. TheLongIslander proposed turning the entire hillside into one giant farm. Even if everyone became busy in the future, they could always return to build up the farm and enjoy a chill, relaxing Minecraft experience. The name ‘Pogeg Farm’ grew out of that idea and became the server’s identity."
+  },
+  {
+    "id": "early-days",
+    "eyebrow": "September–October 2025",
+    "title": "A Busy First Month",
+    "body": "Many players joined during the server’s first month. After the first few days on pure vanilla, a long building session exposed an autosave problem, prompting a switch to Fabric. Ambitious builds soon appeared, including TheLongIslander’s giant quartz lilypad base in the ocean and PogegFX’s huge Reverse Flash statue."
+  },
+  {
+    "id": "departure",
+    "eyebrow": "October 6, 2025",
+    "title": "The First Departure",
+    "body": "After getting high with BangladeshiJew and Leafsfan2003, AggravatedCow became the first player to quit. He needed a break from an addiction to the server after quitting his job and becoming unemployed. At the time, he attributed his departure to an unacceptable prank by TheLongIslander and AbhiTheLegend1, particularly TheLongIslander’s use of an alternate account, AdityaRajesh, as a god-like character on the server."
+  },
+  {
+    "id": "forever",
+    "eyebrow": "October–November 2025",
+    "title": "Beyond the Two-Week Minecraft Phase",
+    "body": "The server’s activity outlasted the familiar two-week Minecraft phase, and AbhiTheLegend1 proposed making it a forever world. Activity began declining steeply toward the end of October, with the last major period of activity in November."
+  },
+  {
+    "id": "present",
+    "eyebrow": "Present",
+    "title": "Keeping the Forever World Alive",
+    "body": "TheLongIslander has continued playing on and off, honoring the forever-world idea with massive projects: an Egyptian pyramid, a black hole, and an Ender Dragon monument in the End. Pogeg Farm remains the latest iteration of the mainstream vanilla survival server within the USE."
   }
 ];
 
@@ -195,9 +241,9 @@ function toAssetUrl(filePath) {
   return `/${relative.map(part => encodeURIComponent(part)).join('/')}`;
 }
 
-function buildGeneratedAssetPath(groupId, type, originalFileName) {
+function buildGeneratedAssetPath(groupId, type, originalFileName, root = SERVER_INFO_ROOT) {
   const parsed = path.parse(originalFileName);
-  return path.join(SERVER_INFO_ROOT, GENERATED_DIR_NAME, type, groupId, `${parsed.name}.webp`);
+  return path.join(root, GENERATED_DIR_NAME, type, groupId, `${parsed.name}.webp`);
 }
 
 function formatDateLabel(date) {
@@ -215,7 +261,7 @@ function formatDateLabel(date) {
 
 function parseImageDateLabel(fileName) {
   const name = String(fileName || '');
-  let match = name.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})\.(\d{2})\.(\d{2})/);
+  let match = name.match(/^(?:huge_)?(\d{4})-(\d{2})-(\d{2})_(\d{2})\.(\d{2})\.(\d{2})/);
   if (match) {
     return formatDateLabel(new Date(
       Number(match[1]),
@@ -309,18 +355,18 @@ async function getGalleryGroupsToScan() {
   return [...GALLERY_GROUPS, ...extraGroups];
 }
 
-async function buildGalleryImagesForGroup(group) {
+async function buildGalleryImagesForGroup(group, root = SERVER_INFO_ROOT) {
   const groupDir = group.rootLevel
-    ? SERVER_INFO_ROOT
-    : path.join(SERVER_INFO_ROOT, group.id);
+    ? root
+    : path.join(root, group.id);
   const entries = await readDirectoryEntries(groupDir);
   const images = [];
   const imageEntries = getImageEntries(entries);
 
   for (const entry of imageEntries) {
     const originalPath = path.join(groupDir, entry.name);
-    const displayPath = buildGeneratedAssetPath(group.id, 'display', entry.name);
-    const thumbPath = buildGeneratedAssetPath(group.id, 'thumbs', entry.name);
+    const displayPath = buildGeneratedAssetPath(group.id, 'display', entry.name, root);
+    const thumbPath = buildGeneratedAssetPath(group.id, 'thumbs', entry.name, root);
     // eslint-disable-next-line no-await-in-loop
     const hasDisplay = await fileExists(displayPath);
     // eslint-disable-next-line no-await-in-loop
@@ -338,12 +384,12 @@ async function buildGalleryImagesForGroup(group) {
   return images;
 }
 
-async function listGalleryImages() {
+async function listGalleryImages(root = SERVER_INFO_ROOT, configuredGroups = null) {
   const groups = [];
-  const groupsToScan = await getGalleryGroupsToScan();
+  const groupsToScan = configuredGroups || await getGalleryGroupsToScan();
   for (const group of groupsToScan) {
     // eslint-disable-next-line no-await-in-loop
-    const images = await buildGalleryImagesForGroup(group);
+    const images = await buildGalleryImagesForGroup(group, root);
     const { rootLevel, ...publicGroup } = group;
     groups.push({
       ...publicGroup,
@@ -356,26 +402,27 @@ async function listGalleryImages() {
 
 async function getServerInfo({ updateService, context = null } = {}) {
   const creative = !context || context.id === 'default';
+  const pogeg = context && context.id === 'pogeg';
   const [versionResult, modsResult, galleryResult] = await Promise.allSettled([
     updateService && typeof updateService.getCurrentVersion === 'function'
       ? updateService.getCurrentVersion()
       : Promise.resolve(null),
     listInstalledMods(context),
-    creative ? listGalleryImages() : Promise.resolve([])
+    creative ? listGalleryImages() : (pogeg ? listGalleryImages(POGEG_INFO_ROOT, POGEG_GALLERY_GROUPS) : Promise.resolve([]))
   ]);
 
   return {
     serverId: context ? context.id : 'default',
     name: context ? context.displayName : 'El Capital',
     currentVersion: versionResult.status === 'fulfilled' ? versionResult.value : null,
-    startedDate: creative ? SERVER_STARTED_DATE : null,
-    startedLabel: creative ? SERVER_STARTED_LABEL : null,
-    startVersion: creative ? SERVER_START_VERSION : null,
+    startedDate: creative ? SERVER_STARTED_DATE : (pogeg ? '2025-09-20' : null),
+    startedLabel: creative ? SERVER_STARTED_LABEL : (pogeg ? 'September 20, 2025' : null),
+    startVersion: creative ? SERVER_START_VERSION : (pogeg ? '1.21.8' : null),
     mods: modsResult.status === 'fulfilled' ? modsResult.value : [],
     modsError: modsResult.status === 'rejected' ? 'Unable to load installed mods.' : null,
     gallery: galleryResult.status === 'fulfilled' ? galleryResult.value : [],
     galleryError: galleryResult.status === 'rejected' ? 'Unable to load server screenshots.' : null,
-    loreSections: creative ? LORE_SECTIONS : []
+    loreSections: creative ? LORE_SECTIONS : (pogeg ? POGEG_LORE_SECTIONS : [])
   };
 }
 

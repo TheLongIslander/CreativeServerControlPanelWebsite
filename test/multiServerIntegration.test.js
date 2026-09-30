@@ -288,3 +288,41 @@ test('real rsync backups copy each server only into its own configured destinati
   }
   await assert.rejects(() => fs.stat(profiles.find(profile => profile.id === 'third').backupRoot), error => error.code === 'ENOENT');
 });
+
+test('feature restrictions block scoped and legacy APIs, preserve other servers and filter live events', async t => {
+  const { runtime, request, accounts, socket } = await fixture(t);
+  const connection = await socket('default');
+  const permissions = Object.fromEntries(Object.keys(require('../backend/config/serverPermissions').SERVER_PERMISSIONS).map(key => [key, false]));
+  const changed = await request('/admin/servers/default/permissions', { method: 'PATCH', account: 'admin', body: { userId: accounts.ordinary.user.id, permissions } });
+  assert.equal(changed.status, 200);
+  const paths = [
+    ['POST', '/start'], ['POST', '/stop'], ['POST', '/restart'], ['POST', '/backup'],
+    ['GET', '/sftp/list'], ['POST', '/change-directory'], ['POST', '/open-directory'],
+    ['POST', '/sftp/create-directory'], ['POST', '/upload'], ['POST', '/download'],
+    ['GET', '/downloads/example'], ['GET', '/download-preview'], ['GET', '/updates/status'],
+    ['POST', '/updates/apply'], ['GET', '/chat/messages'], ['POST', '/chat/messages'],
+    ['GET', '/players'], ['GET', '/player-links/me']
+  ];
+  for (const [method, path] of paths) {
+    const response = await request(`/api/servers/default${path}`, { method });
+    assert.equal(response.status, 403, path);
+    assert.equal((await response.json()).error.code, 'SERVER_PERMISSION_DENIED');
+    if (!path.startsWith('/players') && !path.startsWith('/player-links')) assert.equal((await request(path, { method })).status, 403, `legacy ${path}`);
+  }
+  assert.equal((await request('/api/servers/default/status')).status, 200);
+  assert.equal((await request('/api/servers/survival/chat/messages')).status, 200);
+  assert.equal((await request('/api/servers/default/chat/messages', { account: 'admin' })).status, 200);
+  assert.deepEqual(runtime.servers.get('default').calls, []);
+  const profile = (await (await request('/api/servers')).json()).servers.find(item => item.id === 'default');
+  assert.equal(profile.permissions.backupBrowse, false);
+  runtime.realtimeHub.broadcastServer('default', { type: 'minecraft-chat-message', secret: true });
+  runtime.realtimeHub.broadcastServer('default', { type: 'player-center-invalidation', secret: true });
+  runtime.realtimeHub.broadcastServer('default', { type: 'permission-test-marker' });
+  await waitFor(() => connection.messages.some(event => event.type === 'permission-test-marker'));
+  assert.equal(connection.messages.some(event => event.secret), false);
+  await runtime.registry.setUserPermissions('default', accounts.ordinary.user.id, { backupBrowse: true });
+  assert.equal((await request('/api/servers/default/download-preview')).status, 403);
+  await runtime.registry.setUserPermissions('default', accounts.ordinary.user.id, { chatRead: true });
+  assert.equal((await request('/api/servers/default/chat/messages')).status, 200);
+  assert.equal((await request('/api/servers/default/chat/messages', { method: 'POST' })).status, 403);
+});

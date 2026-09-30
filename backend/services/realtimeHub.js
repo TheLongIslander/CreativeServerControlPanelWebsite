@@ -38,6 +38,7 @@ function createRealtimeHub({
   let statusProvider = getStatusSnapshot;
   let serverAuthorizer = typeof authorizeServer === 'function' ? authorizeServer : null;
   const clients = new Set();
+  let eventAuthorizer = null;
   const inFlightOperations = new Set();
   const pendingUserUpgrades = new Map();
   let pendingUpgrades = 0;
@@ -100,6 +101,10 @@ function createRealtimeHub({
 
   function sendSerialized(client, data) {
     if (client.readyState !== WebSocket.OPEN || !authorizedClient(client)) return false;
+    if (eventAuthorizer && client.meta?.scope === 'authenticated') {
+      try { if (!eventAuthorizer(client.meta.user, client.meta.serverId, JSON.parse(data))) return false; }
+      catch (_) { return false; }
+    }
     if (client.bufferedAmount > maxBufferedBytes) {
       closeForSync(client);
       return false;
@@ -518,6 +523,7 @@ function createRealtimeHub({
     getMetrics,
     handleUpgrade,
     setStatusProvider,
+    setEventAuthorizer(authorizer) { eventAuthorizer = authorizer; },
     setServerAuthorizer,
     wss
   };

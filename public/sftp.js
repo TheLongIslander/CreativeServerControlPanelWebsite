@@ -726,6 +726,11 @@ function setupWebSocket() {
         let message;
         try {
             message = JSON.parse(event.data);
+            if (message.type === 'server-permissions-changed' && message.serverId === serverContext.id) {
+                serverContext.clearServer();
+                window.location.reload();
+                return;
+            }
         } catch (error) {
             console.error('[ERROR] Failed to parse WebSocket message:', error.message);
             return;
@@ -884,6 +889,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const profile = (Array.isArray(payload) ? payload : payload.servers || []).find(server => server.id === serverContext.id);
         if (!profile) { serverContext.revoke(); return; }
         serverContext.setProfile(profile);
+        if (!serverContext.can('backupBrowse')) { window.location.replace(serverContext.panelUrl()); return; }
     } catch (error) { showSftpState('Unable to load this server. Return to All servers and try again.'); return; }
     document.title = `${serverContext.serverName} · Backup Files`;
     document.querySelector('.content h1').textContent = `${serverContext.serverName} Backup Files`;
@@ -1083,11 +1089,11 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
                         const fileName = document.createElement('span');
                         fileName.textContent = file.name;
 
-                        if (isImage(file.name)) {
+                        if (serverContext.can('backupDownload') && isImage(file.name)) {
                             fileIcon = createImagePreview(file, path);
-                        } else if (isVideo(file.name)) {
+                        } else if (serverContext.can('backupDownload') && isVideo(file.name)) {
                             fileIcon = createVideoPreview(file, path);
-                        } else if (file.name.endsWith('.pdf')) {
+                        } else if (serverContext.can('backupDownload') && file.name.endsWith('.pdf')) {
                             fileIcon = createPDFPreview(file, path);
                         } else if (file.name.endsWith('.jar')) {
                             fileIcon = document.createElement('img');
@@ -1194,7 +1200,7 @@ function fetchFiles(path, shouldPushState = true, forceUpdate = false) {
                     downloadForm.appendChild(pathInput);
                     downloadForm.appendChild(downloadButton);
 
-                    fileItem.appendChild(downloadForm);
+                    if (serverContext.can('backupDownload')) fileItem.appendChild(downloadForm);
                     fileList.appendChild(fileItem);
                 } else {
                     delete existingFileMap[file.name];
