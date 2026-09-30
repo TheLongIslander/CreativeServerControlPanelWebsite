@@ -1436,7 +1436,38 @@ function openUpdateModal(check) {
     if (title) {
         title.textContent = `${serverContext.serverName} — ${operation === 'downgrade' ? 'Server Downgrade' : 'Server Update'}`;
     }
-    summary.textContent = `Current: ${formatVersionWithRelease(currentInfo, check.currentVersion)} | Target: ${formatVersionWithRelease(targetInfo, check.targetVersion)}.`;
+    summary.replaceChildren();
+    const versions = document.createElement('div');
+    versions.className = 'update-version-details';
+    for (const [label, info, fallback] of [
+        ['Current version', currentInfo, check.currentVersion],
+        ['Target version', targetInfo, check.targetVersion]
+    ]) {
+        const row = document.createElement('div');
+        row.className = 'update-version-row';
+        const name = document.createElement('span');
+        name.className = 'update-version-label';
+        name.textContent = label;
+        const value = document.createElement('strong');
+        value.textContent = info.version || fallback || 'Unknown';
+        const date = document.createElement('span');
+        date.className = 'update-version-date';
+        const release = formatReleaseDateLabel(info.releaseTime, info.releaseDate);
+        date.textContent = release ? `Released ${release}` : '';
+        row.append(name, value, date);
+        versions.appendChild(row);
+    }
+    summary.appendChild(versions);
+    modal.classList.toggle('update-ready', !hasConflicts && canApply);
+    if (!hasConflicts && canApply) {
+        const hasMods = Boolean(check.mods && Array.isArray(check.mods.mods) && check.mods.mods.length);
+        const message = document.createElement('p');
+        message.className = 'update-compatibility-message';
+        message.textContent = hasMods
+            ? `All mods have compatible versions for Minecraft ${check.targetVersion}.`
+            : 'No mod compatibility issues detected.';
+        summary.appendChild(message);
+    }
 
     if (downgradeWarning) {
         if (operation === 'downgrade') {
@@ -1496,7 +1527,9 @@ function openUpdateModal(check) {
         compatibleVersionOptions.innerHTML = '';
         compatibleVersionOptions.classList.add('hidden');
     }
-    compatibleBtn.textContent = `${getOperationVerb(operation)} Server and Only Compatible Mods`;
+    compatibleBtn.textContent = hasConflicts
+        ? `${getOperationVerb(operation)} Server and Only Compatible Mods`
+        : `Confirm ${getOperationVerb(operation)}`;
     serverOnlyBtn.textContent = `${getOperationVerb(operation)} Server Only and Move All Mods`;
     cancelBtn.disabled = false;
     serverOnlyBtn.disabled = !canApply;
@@ -1608,31 +1641,7 @@ async function runUpdatePreflightForTarget(targetVersion, options = {}) {
             return null;
         }
 
-        const hasConflicts = getConflictMods(check).length > 0;
         applySeverityFromCheck(check);
-
-        if (!hasConflicts && check.canApply) {
-            activeUpdateCheck = {
-                ...check,
-                downgradeRiskAcknowledged: acknowledgeDowngradeRisk
-            };
-            const targetReleaseLabel = formatReleaseDateLabel(
-                check && check.versionInfo && check.versionInfo.target
-                    ? check.versionInfo.target.releaseTime
-                    : null,
-                check && check.versionInfo && check.versionInfo.target
-                    ? check.versionInfo.target.releaseDate
-                    : null
-            );
-            const operation = getCheckOperation(check);
-            if (targetReleaseLabel) {
-                setUpdateStatusMessage(`No compatibility issues detected. Starting ${getOperationVerb(operation, true)} to ${check.targetVersion} (released ${targetReleaseLabel})...`);
-            } else {
-                setUpdateStatusMessage(`No compatibility issues detected. Starting ${getOperationVerb(operation, true)} to ${check.targetVersion}...`);
-            }
-            await applyUpdateMode('server_and_compatible_mods');
-            return check;
-        }
 
         if (advanced) {
             check.downgradeRiskAcknowledged = acknowledgeDowngradeRisk;
@@ -2942,7 +2951,7 @@ function checkServerStatus() {
             const slotsFull = data.slots && !data.slots.canBypass && data.slots.occupied >= data.slots.limit;
             const capability = serverContext.profile?.capabilities || {};
             const status = document.getElementById('server-runtime-status');
-            const stateLabel = ({ ready: 'Online', offline: 'Stopped', starting: 'Starting', stopping: 'Stopping', unknown: 'Status unavailable' })[data.state] || data.state || (data.running ? 'Running' : 'Stopped');
+            const stateLabel = ({ ready: 'Online', offline: 'Offline', starting: 'Starting', stopping: 'Stopping', unknown: 'Status unavailable' })[data.state] || data.state || (data.running ? 'Running' : 'Offline');
             const operationLabel = data.operation ? ` · ${data.operation.type || 'Operation'} in progress` : '';
             status.textContent = `${serverContext.serverName} · ${stateLabel}${operationLabel}${slotsFull && !data.running ? ' · Both shared server slots are in use. Stop a server to free a slot.' : ''}`;
 

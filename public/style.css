@@ -817,6 +817,62 @@ button:active {
     width: 100%;
 }
 
+
+.update-version-details {
+    display: grid;
+    gap: 12px;
+    margin: 4px 0 20px;
+}
+
+.update-version-row {
+    display: grid;
+    grid-template-columns: 130px 65px 1fr;
+    gap: 12px;
+    align-items: baseline;
+    line-height: 1.5;
+}
+
+.update-version-label,
+.update-version-date {
+    font-size: 0.9rem;
+    opacity: 0.8;
+}
+
+.update-compatibility-message {
+    margin: 0;
+    line-height: 1.5;
+}
+
+.update-ready .update-modal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
+.update-ready #update-cancel-btn,
+.update-ready #update-compatible-btn {
+    width: auto;
+    min-width: 150px;
+}
+
+@media (max-width: 520px) {
+    .update-version-row {
+        grid-template-columns: 1fr auto;
+        gap: 2px 12px;
+    }
+
+    .update-version-date {
+        grid-column: 1 / -1;
+    }
+
+    .update-ready #update-cancel-btn,
+    .update-ready #update-compatible-btn {
+        flex: 1;
+        min-width: 120px;
+    }
+}
+
 .update-summary-modal-content {
     width: min(760px, 94vw);
     max-height: min(86vh, 760px);
