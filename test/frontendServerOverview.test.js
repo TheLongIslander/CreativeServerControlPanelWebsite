@@ -169,10 +169,10 @@ async function browser(initialPayload) {
 test('unchanged automatic refresh preserves the mounted tiles, images, focus and scroll position', async () => {
     const page = await browser(payload([server('default'), server('pogeg')]));
     const [creative, pogeg] = page.tiles.children;
-    assert.equal(creative.href, '/servers/default');
+    assert.equal(creative.querySelector('a').href, '/servers/default');
     assert.equal(pogeg.querySelector('img').src, '/assets/server-tiles/pogeg-farm.png');
     const mounted = descendants(page.tiles);
-    creative.focus();
+    creative.querySelector('a').focus();
     page.document.scrollTop = 420;
     page.document.writes.length = 0;
 
@@ -180,7 +180,7 @@ test('unchanged automatic refresh preserves the mounted tiles, images, focus and
 
     assertSameNodes(descendants(page.tiles), mounted, 'polling must retain all tile descendants, including decoded images');
     assert.equal(page.document.writes.some(node => node === page.tiles || mounted.includes(node)), false, 'identical data must not rewrite the tile tree and replay entrance animations');
-    assert.ok(page.document.activeElement === creative, "existing DOM nodes retain their identity");
+    assert.ok(page.document.activeElement === creative.querySelector('a'), "existing DOM nodes retain their identity");
     assert.equal(page.document.scrollTop, 420, 'polling must not scroll a focused tile back into view');
 });
 
@@ -201,7 +201,6 @@ test('live fields change in place while the thumbnail and tile remain mounted', 
     assert.equal(tile.querySelector('.server-tile-status').textContent, 'Online');
     assert.equal(tile.dataset.state, 'online');
     assert.match(visibleText(tile), /1 player\b/);
-    assert.match(visibleText(tile), /Backups not connected/);
     assert.match(visibleText(tile), /Creating backup/);
     assert.match(visibleText(tile), /Storage almost full/);
     assert.ok(visibleText(tile).includes(`Last backup ${new Date(backupAt).toLocaleDateString()}`));
@@ -213,7 +212,7 @@ test('live fields change in place while the thumbnail and tile remain mounted', 
     assert.doesNotMatch(visibleText(tile), /Creating backup|Storage almost full|Last backup|Backups not connected/);
 
     await page.refresh(payload([server('default')]));
-    assert.equal(tile.querySelector('.server-tile-status').textContent, 'Stopped');
+    assert.equal(tile.querySelector('.server-tile-status').textContent, 'Offline');
     assert.equal(tile.dataset.state, 'offline');
     assert.doesNotMatch(visibleText(tile), /\d players?/);
     assert.ok(tile.querySelector('img') === image, "existing DOM nodes retain their identity");
@@ -222,7 +221,7 @@ test('live fields change in place while the thumbnail and tile remain mounted', 
 test('server additions, reordering and revoked access preserve unaffected tiles and clear only removed server memory', async () => {
     const page = await browser(payload([server('default'), server('pogeg')]));
     const [creative, pogeg] = page.tiles.children;
-    pogeg.focus();
+    pogeg.querySelector('button').focus();
     page.document.scrollTop = 420;
     page.window.sessionStorage.setItem('server-tab:v1:7:default:chat', 'keep');
     page.window.sessionStorage.setItem('server-chat:unread:v1:7:default:session', 'keep');
@@ -234,7 +233,7 @@ test('server additions, reordering and revoked access preserve unaffected tiles 
     assert.deepEqual(page.tiles.children.map(tile => tile.dataset.serverId), ['pogeg', 'new', 'default']);
     assert.ok(page.tiles.children[0] === pogeg, "existing DOM nodes retain their identity");
     assert.ok(page.tiles.children[2] === creative, "existing DOM nodes retain their identity");
-    assert.ok(page.document.activeElement === pogeg, 'moving the focused tile restores focus');
+    assert.ok(page.document.activeElement === pogeg.querySelector('button'), 'moving the focused tile restores button focus');
     assert.equal(page.document.scrollTop, 420);
 
     await page.refresh(payload([server('default')]));
@@ -272,4 +271,140 @@ test('failed polling retains the last tiles, marks them stale, and recovers with
     assert.equal(page.tiles.classList.contains('is-stale'), false);
     assert.equal(visibleText(page.notice), '');
     assert.equal(mounted[1].querySelector('.server-tile-status').textContent, 'Online');
+});
+
+test('quick power targets its own server, suppresses duplicate requests, and follows refreshed state', async () => {
+    const page = await browser(payload([server('default'), server('pogeg')]));
+    const tile = page.tiles.children[1];
+    const button = tile.querySelector('button');
+    assert.equal(button.getAttribute('aria-label'), 'Start Pogeg Farm');
+    assert.equal(tile.querySelector('a').contains(button), false, 'power is not nested in a navigation link');
+    const read = page.window.fetch;
+    const requests = [];
+    let finish;
+    page.window.localStorage.setItem('token', 'test-token');
+    page.window.fetch = async (url, options) => {
+        if (options?.method !== 'POST') return read(url, options);
+        requests.push({ url, options });
+        return new Promise(resolve => { finish = resolve; });
+    };
+    const starting = button.click();
+    assert.equal(button.disabled, true);
+    assert.equal(button.getAttribute('aria-busy'), 'true');
+    await button.click();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, '/api/servers/pogeg/start');
+    assert.equal(requests[0].options.headers.Authorization, 'Bearer test-token');
+    await page.refresh(payload([server('default'), server('pogeg', { status: { running: true, ready: true } })]));
+    assert.equal(button.disabled, true, 'polling cannot unlock a pending request');
+    finish({ ok: true, status: 200 });
+    await starting;
+    assert.equal(button.disabled, false);
+    assert.equal(button.dataset.action, 'stop');
+    assert.equal(button.getAttribute('aria-label'), 'Stop Pogeg Farm');
+    const stopping = button.click();
+    assert.equal(requests[1].url, '/api/servers/pogeg/stop');
+    await page.refresh(payload([server('default'), server('pogeg')]));
+    finish({ ok: true, status: 200 });
+    await stopping;
+    assert.equal(button.dataset.action, 'start');
+    assert.equal(tile.querySelector('button'), button);
+});
+
+test('quick power disables unavailable, transitioning, locked and stale states', async () => {
+    const page = await browser(payload([server('default')]));
+    const button = page.tiles.children[0].querySelector('button');
+    for (const changes of [
+        { status: { running: true, ready: false, state: 'starting' } },
+        { status: { running: true, state: 'stopping' } },
+        { status: { state: 'unknown' } },
+        { status: { state: 'unavailable' } },
+        { operation: { type: 'backup' } },
+        { status: { running: false, state: 'offline', updateInProgress: true } }
+    ]) {
+        await page.refresh(payload([server('default', changes)]));
+        assert.equal(button.disabled, true);
+    }
+    await page.refresh(payload([server('default')]));
+    assert.equal(button.disabled, false);
+    await page.refresh(new Error('Offline'));
+    assert.equal(button.disabled, true);
+    await page.refresh(payload([server('default')]));
+    assert.equal(button.disabled, false);
+});
+
+test('quick power shows structured admission errors and plain-text failures without losing the tile', async () => {
+    const page = await browser(payload([server('default')]));
+    const tile = page.tiles.children[0];
+    const button = tile.querySelector('button');
+    const read = page.window.fetch;
+    for (const [body, message] of [
+        [JSON.stringify({ error: { message: 'Both slots are in use.' } }), 'Both slots are in use.'],
+        ['Failed to start the server', 'Failed to start the server']
+    ]) {
+        page.window.fetch = (url, options) => options?.method === 'POST'
+            ? Promise.resolve({ ok: false, status: 409, text: async () => body }) : read(url, options);
+        await button.click();
+        assert.equal(tile.querySelector('.server-tile-feedback').textContent, message);
+        assert.equal(button.disabled, false);
+        assert.equal(button.dataset.action, 'start');
+        assert.equal(page.tiles.children[0], tile);
+    }
+});
+
+test('power spinner lasts beyond request acceptance until startup and shutdown actually finish', async () => {
+    const page = await browser(payload([server('default')]));
+    const tile = page.tiles.children[0];
+    const button = tile.querySelector('button');
+    const badge = tile.querySelector('.server-tile-status');
+    const feedback = tile.querySelector('.server-tile-feedback');
+    const read = page.window.fetch;
+    let finish;
+    page.window.fetch = (url, options) => options?.method === 'POST'
+        ? new Promise(resolve => { finish = resolve; }) : read(url, options);
+    const starting = button.click();
+    assert.equal(button.getAttribute('aria-busy'), 'true');
+    assert.equal(badge.textContent, 'Starting');
+    assert.equal(feedback.textContent, '', 'pending state does not add a second text row');
+    await page.refresh(payload([server('default', { status: { running: true, ready: false, state: 'starting' } })]));
+    finish({ ok: true, status: 200 });
+    await starting;
+    assert.equal(button.getAttribute('aria-busy'), 'true', 'accepted start still needs a spinner until ready');
+    assert.equal(button.disabled, true);
+    assert.equal(button.getAttribute('aria-label'), 'Starting Creative');
+    await page.refresh(payload([server('default', { status: { running: true, ready: true, state: 'ready' } })]));
+    assert.equal(button.getAttribute('aria-busy'), 'false');
+    assert.equal(button.disabled, false);
+    assert.equal(button.dataset.action, 'stop');
+    const stopping = button.click();
+    assert.equal(button.getAttribute('aria-busy'), 'true');
+    assert.equal(badge.textContent, 'Stopping');
+    assert.equal(feedback.textContent, '');
+    await page.refresh(payload([server('default', { status: { running: true, state: 'stopping' } })]));
+    finish({ ok: true, status: 200 });
+    await stopping;
+    assert.equal(button.getAttribute('aria-busy'), 'true');
+    await page.refresh(payload([server('default')]));
+    assert.equal(button.getAttribute('aria-busy'), 'false');
+    assert.equal(button.dataset.action, 'start');
+    assert.equal(badge.textContent, 'Offline');
+    assert.equal(tile.dataset.state, 'offline');
+});
+
+test('lifecycle operations from polling show spinner and status without raw operation text', async () => {
+    const page = await browser(payload([server('default')]));
+    const tile = page.tiles.children[0];
+    const button = tile.querySelector('button');
+    for (const [type, label] of [['start', 'Starting'], ['stop', 'Stopping'], ['restart', 'Restarting']]) {
+        for (const operation of [type, { type, label: type }]) {
+            await page.refresh(payload([server('default', { operation })]));
+            assert.equal(button.getAttribute('aria-busy'), 'true');
+            assert.equal(button.disabled, true);
+            assert.equal(tile.querySelector('.server-tile-status').textContent, label);
+            assert.equal(tile.querySelector('.server-tile-details'), null, 'no extra lifecycle operation row');
+        }
+    }
+    await page.refresh(payload([server('default', { operation: { type: 'backup', label: 'Creating backup' } })]));
+    assert.equal(button.getAttribute('aria-busy'), 'false');
+    assert.match(visibleText(tile), /Creating backup/);
 });

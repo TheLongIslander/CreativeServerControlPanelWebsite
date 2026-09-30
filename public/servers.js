@@ -4,6 +4,7 @@
     let pollTimer = null;
     let lastSuccess = null;
     let visibleIds = new Set();
+    let refreshPromise = null;
     const nodes = {};
     const tilesById = new Map();
     const tileImages = Object.freeze({
@@ -50,7 +51,7 @@
         if (status.state && !['ready', 'running', 'stopped', 'offline'].includes(status.state)) {
             return status.state[0].toUpperCase() + status.state.slice(1);
         }
-        return status.running ? (status.ready === false ? 'Starting' : 'Online') : 'Stopped';
+        return status.running ? (status.ready === false ? 'Starting' : 'Online') : 'Offline';
     }
     function updateText(node, text) {
         if (node.textContent !== text) node.textContent = text;
@@ -69,8 +70,9 @@
         });
     }
     function createTile(server) {
-        const tile = element('a', 'server-tile');
-        tile.href = global.ServerContext.panelUrl(server.id);
+        const tile = element('div', 'server-tile');
+        const link = element('a', 'server-tile-link');
+        link.href = global.ServerContext.panelUrl(server.id);
         tile.dataset.serverId = server.id;
         tile.dataset.pointerProfile = 'anchored';
         // Keep the link's hitbox steady while its glass surface follows the pointer.
@@ -100,6 +102,15 @@
         infoSensor.dataset.pointerSensor = 'surface';
         const info = element('div', 'server-tile-info');
         info.setAttribute('data-pointer-visual', '');
+        const copy = element('div', 'server-tile-copy');
+        const power = element('button', 'server-tile-power');
+        power.type = 'button';
+        power.dataset.pointerProfile = 'surface';
+        const icon = element('span', 'server-tile-power-icon');
+        icon.setAttribute('aria-hidden', 'true');
+        power.append(icon);
+        const feedback = element('span', 'server-tile-feedback');
+        feedback.setAttribute('role', 'status');
         const summary = element('div', 'server-tile-summary');
         const badge = element('span', 'server-tile-status');
         const population = element('span', 'server-tile-population');
@@ -107,32 +118,86 @@
         const operation = element('span', 'server-tile-operation');
         const alert = element('span', 'server-tile-operation');
         const backup = element('span', '');
-        info.append(name, summary);
+        copy.append(name, summary);
+        info.append(copy, power, feedback);
         infoSensor.append(info);
-        visual.append(mark, infoSensor);
+        visual.append(mark, link, infoSensor);
         tile.append(visual);
-        return { tile, name, mark, info, summary, badge, population, details, operation, alert, backup };
+        const entry = { tile, link, name, mark, info, copy, power, feedback, summary, badge, population, details, operation, alert, backup };
+        power.addEventListener('click', () => togglePower(entry));
+        return entry;
+    }
+    function lifecycleOperation(server) {
+        return typeof server.operation === 'string' ? server.operation : server.operation?.type;
+    }
+    function updatePower(entry) {
+        const { server, power, pending } = entry;
+        const description = describeState(server);
+        const phases = { start: 'Starting', stop: 'Stopping', restart: 'Restarting' };
+        const phase = phases[pending] || (['Starting', 'Stopping', 'Restarting'].includes(description) ? description : '')
+            || phases[lifecycleOperation(server)] || '';
+        const action = phase === 'Starting' ? 'start' : phase ? 'stop' : server.status?.running ? 'stop' : 'start';
+        power.dataset.action = action;
+        power.disabled = Boolean(phase || server.operation || server.status?.updateInProgress
+            || !['Online', 'Offline'].includes(description) || nodes.tiles.classList.contains('is-stale'));
+        power.setAttribute('aria-busy', String(Boolean(phase)));
+        const label = phase ? `${phase} ${server.displayName}`
+            : `${action === 'start' ? 'Start' : 'Stop'} ${server.displayName}`;
+        power.setAttribute('aria-label', label);
+        power.title = power.disabled && !phase ? `${label} — waiting for server availability` : label;
+        const displayedState = phase || description;
+        updateText(entry.badge, displayedState);
+        entry.tile.dataset.state = displayedState === 'Online' ? 'online' : displayedState === 'Offline' ? 'offline' : 'busy';
+    }
+    async function togglePower(entry) {
+        if (entry.power.disabled || entry.pending) return;
+        const action = entry.power.dataset.action;
+        entry.pending = action;
+        updateText(entry.feedback, '');
+        updatePower(entry);
+        try {
+            const response = await fetch(`/api/servers/${encodeURIComponent(entry.server.id)}/${action}`, {
+                method: 'POST', credentials: 'same-origin',
+                headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }
+            });
+            if (response.status === 401) { global.ServerContext.clearAll(); global.location.replace('/'); return; }
+            if (response.status === 428) { global.location.replace('/set-password.html'); return; }
+            if (!response.ok) {
+                const body = await response.text();
+                let message = body;
+                try { const error = JSON.parse(body); message = error.error?.message || error.message || body; } catch (_) { /* Plain-text lifecycle errors are also supported. */ }
+                throw new Error(message || `Could not ${action} ${entry.server.displayName}.`);
+            }
+            updateText(entry.feedback, '');
+        } catch (error) {
+            updateText(entry.feedback, error.message || 'Could not connect to the server.');
+        } finally {
+            // Finish any older poll, then read the authoritative state after the command.
+            if (refreshPromise) await refreshPromise;
+            await refresh();
+            entry.pending = null;
+            updatePower(entry);
+        }
     }
     function updateTile(entry, server, index) {
-        const { tile, name, mark, info, summary, badge, population, details, operation, alert, backup } = entry;
+        const { tile, link, name, mark, copy, summary, badge, population, details, operation, alert, backup } = entry;
+        entry.server = server;
+        updatePower(entry);
         if (entry.index !== index) {
             tile.style.setProperty('--tile-index', index);
             entry.index = index;
         }
         const online = Boolean(server.status?.running);
-        const description = describeState(server);
-        const state = description === 'Online' ? 'online' : description === 'Stopped' ? 'offline' : 'busy';
-        if (tile.dataset.state !== state) tile.dataset.state = state;
         updateText(name, server.displayName);
         const label = `${server.displayName} control panel`;
-        if (tile.getAttribute('aria-label') !== label) tile.setAttribute('aria-label', label);
+        if (link.getAttribute('aria-label') !== label) link.setAttribute('aria-label', label);
         if (!mark.classList.contains('has-image')) updateText(mark, server.displayName.slice(0, 1).toUpperCase());
-        updateText(badge, description);
         const players = server.playerCount ?? server.status?.playerCount;
         const showPlayers = Number.isInteger(players) && online;
         updateText(population, showPlayers ? `${players} player${players === 1 ? '' : 's'}` : '');
         syncChildren(summary, showPlayers ? [badge, population] : [badge]);
-        updateText(operation, server.operation ? (typeof server.operation === 'string' ? server.operation : server.operation.label || server.operation.type || 'Operation in progress') : '');
+        const isLifecycle = ['start', 'stop', 'restart'].includes(lifecycleOperation(server));
+        updateText(operation, server.operation && !isLifecycle ? (typeof server.operation === 'string' ? server.operation : server.operation.label || server.operation.type || 'Operation in progress') : '');
         updateText(alert, server.alert ? (typeof server.alert === 'string' ? server.alert : 'Attention needed') : '');
         let backupText = '';
         if (server.lastBackupAt) {
@@ -141,14 +206,15 @@
         }
         updateText(backup, backupText);
         syncChildren(details, [operation, alert, backup].filter(node => node.textContent));
-        syncChildren(info, details.childElementCount ? [name, summary, details] : [name, summary]);
+        syncChildren(copy, details.childElementCount ? [name, summary, details] : [name, summary]);
     }
     function showEmpty(message) {
         updateText(nodes.empty, message);
         syncChildren(nodes.tiles, [nodes.empty]);
     }
     function renderServers(servers, nextIds) {
-        const activeId = document.activeElement?.dataset.serverId;
+        const activeElement = document.activeElement;
+        const activeEntry = Array.from(tilesById.values()).find(entry => entry.tile.contains(activeElement));
         for (const id of tilesById.keys()) if (!nextIds.has(id)) tilesById.delete(id);
         const tiles = servers.map((server, index) => {
             let entry = tilesById.get(server.id);
@@ -161,8 +227,7 @@
         });
         if (tiles.length) syncChildren(nodes.tiles, tiles);
         else showEmpty('No servers are available to your account. An admin can add a server or update your access.');
-        const activeTile = tilesById.get(activeId)?.tile;
-        if (activeTile && document.activeElement !== activeTile) activeTile.focus({ preventScroll: true });
+        if (activeEntry && tilesById.has(activeEntry.server.id) && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
     }
     function showNotice(message) {
         updateText(nodes.notice, message);
@@ -215,8 +280,11 @@
             }
         });
     }
-    async function refresh({ manual = false } = {}) {
-        if (controller) return;
+    function refresh(options = {}) {
+        if (!refreshPromise) refreshPromise = fetchServers(options).finally(() => { refreshPromise = null; });
+        return refreshPromise;
+    }
+    async function fetchServers({ manual = false } = {}) {
         controller = new AbortController();
         if (manual) nodes.refresh.disabled = true;
         try {
@@ -237,6 +305,7 @@
                 if ((key.startsWith('server-tab:v1:') && !nextIds.has(parts[3])) || (key.startsWith('server-chat:') && !nextIds.has(parts[4]))) sessionStorage.removeItem(key);
             }
             visibleIds = nextIds;
+            nodes.tiles.classList.remove('is-stale');
             renderServers(servers, nextIds);
             const slots = payload.slots || {};
             updateText(nodes.slots, `${slots.occupied ?? '—'} / ${slots.limit ?? 2} shared slots in use${slots.canBypass ? ' · Admin override available' : ''}`);
@@ -248,6 +317,7 @@
             if (error.name !== 'AbortError') {
                 showNotice(lastSuccess ? 'Connection interrupted. Server details below may be out of date.' : error.message);
                 if (!nodes.tiles.classList.contains('is-stale')) nodes.tiles.classList.add('is-stale');
+                tilesById.forEach(updatePower);
                 if (!lastSuccess) showEmpty('Your servers could not be loaded. Retrying automatically…');
             }
         } finally {

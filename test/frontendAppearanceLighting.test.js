@@ -427,3 +427,83 @@ test('nested surfaces stay idle in unavailable contexts and reset independently 
     assertReset(card);
   }
 });
+
+function tileWithPower() {
+  const card = target('anchored');
+  const { sensor, visual } = nestedSurface(card);
+  const power = target('surface');
+  power.rect = { left: 105, top: 95, width: 30, height: 30 };
+  power.parentElement = { closest: () => card };
+  visual.children.push(power);
+  return { card, sensor, visual, power };
+}
+
+function pointerState(node) {
+  return Object.keys(neutral).map(name => node.style.getPropertyValue(name));
+}
+
+test('nested power hover keeps both tiles moving gently without losing hover expansion', () => {
+  const h = harness();
+  const { card, visual, power } = tileWithPower();
+  let previousCard;
+  let previousMini;
+  for (const point of [{ clientX: 115, clientY: 108 }, { clientX: 125, clientY: 115 }]) {
+    h.move(card, point);
+    const normal = [card, visual].map(node => ({
+      tx: parseFloat(node.style.getPropertyValue('--tx')),
+      ty: parseFloat(node.style.getPropertyValue('--ty')),
+      tilt: parseFloat(node.style.getPropertyValue('--skx')),
+      scale: node.style.getPropertyValue('--scale'),
+      pop: node.style.getPropertyValue('--pop')
+    }));
+    h.move(power, point);
+    [card, visual].forEach((node, index) => {
+      assert.equal(node.classList.contains('is-lit'), true);
+      assert.equal(node.style.getPropertyValue('--scale'), normal[index].scale, 'hovering the control must not shrink its parent');
+      assert.equal(node.style.getPropertyValue('--pop'), normal[index].pop, 'lighting keeps following the pointer');
+      for (const [property, key] of [['--tx', 'tx'], ['--ty', 'ty'], ['--skx', 'tilt']]) {
+        assert.ok(Math.abs(parseFloat(node.style.getPropertyValue(property)) - normal[index][key] * .4) < .01,
+          `${property} uses gentler parent motion`);
+      }
+    });
+    assert.equal(power.classList.contains('is-lit'), true);
+    if (previousCard) {
+      assert.notDeepEqual(pointerState(card), previousCard, 'main tile continues responding over the button');
+      assert.notDeepEqual(pointerState(visual), previousMini, 'mini tile continues responding over the button');
+    }
+    previousCard = pointerState(card);
+    previousMini = pointerState(visual);
+  }
+  h.move(power, { clientX: 125, clientY: 115, buttons: 1 });
+  assertReset(power);
+  assert.deepEqual(pointerState(card), previousCard);
+  assert.deepEqual(pointerState(visual), previousMini);
+  h.move(power, { clientX: 125, clientY: 115 });
+  power.disabled = true;
+  h.mutation([{ target: power, attributeName: 'disabled' }]);
+  assertReset(power);
+  assert.deepEqual(pointerState(card), previousCard);
+  assert.deepEqual(pointerState(visual), previousMini);
+  h.move(card, { clientX: 125, clientY: 115 });
+  assert.notDeepEqual(pointerState(card), previousCard, 'full movement returns outside the control');
+  assert.notDeepEqual(pointerState(visual), previousMini);
+  h.move(null);
+  assertReset(card);
+  assertReset(visual);
+});
+
+test('entering directly over a power control lights all layers and exit resets all layers', () => {
+  for (const exit of [
+    h => h.move(null),
+    h => h.window.emit('blur'),
+    h => h.document.emit('scroll'),
+    h => { h.body.dataset.uiTheme = 'flat'; h.mutation([{ target: h.body, attributeName: 'data-ui-theme' }]); }
+  ]) {
+    const h = harness();
+    const { card, visual, power } = tileWithPower();
+    h.move(power, { clientX: 120, clientY: 110 });
+    for (const node of [card, visual, power]) assert.equal(node.classList.contains('is-lit'), true);
+    exit(h);
+    for (const node of [card, visual, power]) assertReset(node);
+  }
+});

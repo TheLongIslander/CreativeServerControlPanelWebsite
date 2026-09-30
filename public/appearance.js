@@ -369,6 +369,7 @@
         };
 
         let currentTarget = null;
+        let currentControl = null;
         const activeNestedVisuals = new Map();
 
         const clearNestedVisuals = () => {
@@ -377,6 +378,8 @@
         };
 
         const clearTarget = () => {
+            resetTarget(currentControl);
+            currentControl = null;
             clearNestedVisuals();
             if (currentTarget) {
                 resetTarget(currentTarget);
@@ -384,7 +387,8 @@
             }
         };
 
-        const applyPointerLighting = (target, event, rect, profile, width = rect.width, height = rect.height, falloffRadius = null) => {
+        const controlParentMotion = 0.4;
+        const applyPointerLighting = (target, event, rect, profile, width = rect.width, height = rect.height, falloffRadius = null, motionStrength = 1) => {
             // A nested sensor moves with its parent, but its visual must use local
             // coordinates and must never feed its own transform back into measurement.
             const x = (event.clientX - rect.left) * width / rect.width;
@@ -396,9 +400,9 @@
                 ? (1 - dist) * (1 - dist) * (1 + 2 * dist)
                 : Math.max(0, 1 - dist);
             const pop = lightPop * profile.light;
-            const translateMax = profile.translate;
+            const translateMax = profile.translate * motionStrength;
             const shadowMax = profile.shadow;
-            const skewMax = profile.skew;
+            const skewMax = profile.skew * motionStrength;
             const scaleMax = profile.scale;
             const tx = nx * translateMax * pop;
             const ty = ny * translateMax * pop;
@@ -421,14 +425,16 @@
             target.classList.add('is-lit');
         };
 
-        const updateNestedVisuals = (target, event) => {
+        const updateNestedVisuals = (target, event, control = null) => {
             const nextVisuals = new Map();
-            if (event.buttons === 0) {
+            if (event.buttons === 0 || control) {
                 target.querySelectorAll('[data-pointer-sensor="surface"], [data-pointer-sensor="letter"]').forEach((sensor) => {
                     const isLetter = sensor.dataset.pointerSensor === 'letter';
                     const decorativeWithin = isLetter ? target : null;
                     const visual = sensor.querySelector('[data-pointer-visual]');
                     if (!visual || !isAvailable(sensor, decorativeWithin) || !isAvailable(visual, decorativeWithin)) return;
+                    // Keep following the pointer, with gentler travel around a child control.
+                    const containsControl = control && sensor.contains(control);
                     const rect = sensor.getBoundingClientRect();
                     if (!rect.width || !rect.height) return;
                     const width = sensor.clientWidth || rect.width;
@@ -438,10 +444,10 @@
                         const dx = (event.clientX - rect.left) * width / rect.width - width / 2;
                         const dy = (event.clientY - rect.top) * height / rect.height - height / 2;
                         if (Math.hypot(dx, dy) >= radius) return;
-                    } else if (event.clientX < rect.left || event.clientX > rect.left + rect.width
-                        || event.clientY < rect.top || event.clientY > rect.top + rect.height) return;
+                    } else if (!containsControl && (event.clientX < rect.left || event.clientX > rect.left + rect.width
+                        || event.clientY < rect.top || event.clientY > rect.top + rect.height)) return;
                     applyPointerLighting(visual, event, rect, isLetter ? profiles.letter : profiles.surface,
-                        width, height, radius);
+                        width, height, radius, containsControl ? controlParentMotion : 1);
                     nextVisuals.set(sensor, visual);
                 });
             }
@@ -458,7 +464,10 @@
                 return;
             }
             const el = document.elementFromPoint(event.clientX, event.clientY);
-            const target = el ? el.closest(pointerTargetSelector) : null;
+            const hitTarget = el ? el.closest(pointerTargetSelector) : null;
+            const anchoredParent = hitTarget?.parentElement?.closest('[data-pointer-profile="anchored"]');
+            const control = anchoredParent ? hitTarget : null;
+            const target = anchoredParent || hitTarget;
 
             if (currentTarget && currentTarget !== target) {
                 clearTarget();
@@ -482,9 +491,21 @@
                 clearTarget();
                 return;
             }
-            applyPointerLighting(target, event, rect, profile);
+            // Preserve hover expansion and lighting; only soften parent travel and tilt.
+            applyPointerLighting(target, event, rect, profile, rect.width, rect.height, null,
+                control ? controlParentMotion : 1);
             currentTarget = target;
-            updateNestedVisuals(target, event);
+            updateNestedVisuals(target, event, control);
+            if (currentControl !== control) resetTarget(currentControl);
+            currentControl = control;
+            if (control) {
+                if (isAvailable(control) && event.buttons === 0) {
+                    const controlRect = control.getBoundingClientRect();
+                    if (controlRect.width && controlRect.height) {
+                        applyPointerLighting(control, event, controlRect, profiles[control.dataset.pointerProfile] || profiles.button);
+                    }
+                } else resetTarget(control);
+            }
         };
 
         document.addEventListener('pointermove', updateTarget);
@@ -521,6 +542,10 @@
             if (themeChanged || !pointerEffectsEnabled() || !isAvailable(currentTarget)) {
                 clearTarget();
                 return;
+            }
+            if (currentControl && (!currentTarget.contains(currentControl) || !isAvailable(currentControl))) {
+                resetTarget(currentControl);
+                currentControl = null;
             }
             activeNestedVisuals.forEach((visual, sensor) => {
                 const decorativeWithin = sensor.dataset.pointerSensor === 'letter' ? currentTarget : null;
