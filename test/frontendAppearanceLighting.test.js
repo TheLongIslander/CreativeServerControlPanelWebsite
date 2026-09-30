@@ -24,9 +24,25 @@ function events() {
   };
 }
 
+function styleDeclaration() {
+  const properties = new Map();
+  return {
+    setProperty: (name, value) => properties.set(name, value),
+    getPropertyValue: (name) => properties.get(name) || '',
+    removeProperty: (name) => properties.delete(name),
+    get cssText() { return [...properties].map(([name, value]) => `${name}: ${value};`).join(' '); },
+    set cssText(value) {
+      properties.clear();
+      for (const declaration of value.split(';')) {
+        const separator = declaration.indexOf(':');
+        if (separator !== -1) properties.set(declaration.slice(0, separator).trim(), declaration.slice(separator + 1).trim());
+      }
+    }
+  };
+}
+
 function target(profile) {
   const classes = new Set();
-  const properties = new Map();
   const node = {
     dataset: profile ? { pointerProfile: profile } : {},
     isConnected: true,
@@ -42,9 +58,11 @@ function target(profile) {
       remove: (name) => classes.delete(name),
       contains: (name) => classes.has(name)
     },
-    style: {
-      setProperty: (name, value) => properties.set(name, value),
-      getPropertyValue: (name) => properties.get(name) || ''
+    style: styleDeclaration(),
+    getAttribute(name) {
+      if (name === 'class') return [...classes].join(' ');
+      if (name === 'style') return this.style.cssText;
+      return null;
     },
     setAttribute(name, value) {
       if (name === 'data-ui-theme') this.dataset.uiTheme = value;
@@ -63,7 +81,7 @@ function target(profile) {
     ]),
     querySelector: () => node.children.find((child) => child.dataset.pointerVisual !== undefined) || null,
     contains: (child) => node === child || node.children.some((entry) => entry.contains(child)),
-    getClientRects: () => node.isConnected && !node.hiddenAncestor ? [node.rect] : [],
+    getClientRects: () => node.isConnected && !node.hiddenAncestor && node.style.getPropertyValue('display') !== 'none' ? [node.rect] : [],
     getBoundingClientRect: () => node.rect
   };
   return node;
@@ -85,6 +103,7 @@ function harness({ theme = 'glass', fine = true, reduced = false, controlPanel =
   if (controlPanel) body.classList.add('control-panel');
   const document = {
     ...events(), body, hidden: false,
+    createElement: () => target(),
     getElementById: (id) => id === 'theme-stylesheet'
       ? { getAttribute: () => '', setAttribute() {} } : null,
     querySelectorAll: () => [],
@@ -92,10 +111,26 @@ function harness({ theme = 'glass', fine = true, reduced = false, controlPanel =
   };
   const fineQuery = { ...events(), matches: fine };
   const reducedQuery = { ...events(), matches: reduced };
+  const frames = new Map();
+  let nextFrame = 0;
+  const metrics = { styleReads: 0 };
+  const flushFrame = () => {
+    const callbacks = [...frames.values()];
+    frames.clear();
+    callbacks.forEach(callback => callback(16));
+  };
   const window = {
     ...events(), document,
     matchMedia: (query) => query.includes('prefers-reduced-motion') ? reducedQuery : fineQuery,
-    getComputedStyle: (node) => ({ visibility: node.visibility, fontSize: node.fontSize })
+    getComputedStyle: (node) => {
+      metrics.styleReads++;
+      return { visibility: node.style.getPropertyValue('visibility') || node.visibility, fontSize: node.fontSize };
+    },
+    requestAnimationFrame: (callback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    },
+    cancelAnimationFrame: (id) => frames.delete(id)
   };
   let notifyMutation = () => {};
   vm.runInNewContext(source, {
@@ -107,10 +142,15 @@ function harness({ theme = 'glass', fine = true, reduced = false, controlPanel =
   });
   window.Appearance.init({ user: { uiTheme: theme } });
   return {
-    document, window, body, fineQuery, reducedQuery,
-    move(node, overrides = {}) {
+    document, window, body, fineQuery, reducedQuery, metrics, flushFrame,
+    get pendingFrames() { return frames.size; },
+    queueMove(node, overrides = {}) {
       document.hit = node;
-      document.emit('pointermove', { pointerType: 'mouse', buttons: 0, clientX: 120, clientY: 90, ...overrides });
+      document.emit('pointermove', { target: node, pointerType: 'mouse', buttons: 0, clientX: 120, clientY: 90, ...overrides });
+    },
+    move(node, overrides = {}) {
+      this.queueMove(node, overrides);
+      flushFrame();
     },
     mutation(records = []) { notifyMutation(records); }
   };
@@ -122,6 +162,122 @@ function assertReset(node) {
     assert.equal(node.style.getPropertyValue(name), value, name);
   }
 }
+
+test('pointer moves use only the latest sample once per frame and pointerdown stays immediate', () => {
+  const h = harness();
+  const card = target('anchored');
+  h.queueMove(card, { clientX: 170 });
+  h.queueMove(card, { clientX: 120 });
+  assert.equal(h.pendingFrames, 1);
+  assert.equal(h.metrics.styleReads, 0, 'queued samples do not force style reads');
+  assert.equal(card.classList.contains('is-lit'), false);
+  h.flushFrame();
+  assert.equal(card.style.getPropertyValue('--pop'), '0.780', 'only the final sample is applied');
+  assert.equal(h.pendingFrames, 0);
+
+  h.queueMove(card, { clientX: 170 });
+  h.document.emit('pointerdown', { target: card, pointerType: 'mouse', buttons: 1, clientX: 120, clientY: 90 });
+  assert.equal(h.pendingFrames, 0, 'press cancels the older queued move');
+  assert.equal(card.style.getPropertyValue('--pop'), '0.780');
+  h.flushFrame();
+  assert.equal(card.style.getPropertyValue('--pop'), '0.780');
+});
+
+test('queued moves cannot relight tiles after a context exit', () => {
+  const exits = [
+    h => h.document.emit('scroll'),
+    h => h.window.emit('blur'),
+    h => h.window.emit('pagehide'),
+    h => h.document.emit('pointerleave'),
+    h => h.document.emit('pointercancel'),
+    h => h.document.emit('ui-pointer-lighting-reset'),
+    h => h.document.emit('pointerup', { pointerType: 'touch' }),
+    h => { h.document.hidden = true; h.document.emit('visibilitychange'); },
+    h => { h.fineQuery.matches = false; h.fineQuery.emit('change'); },
+    h => { h.reducedQuery.matches = true; h.reducedQuery.emit('change'); },
+    h => { h.body.dataset.uiTheme = 'flat'; h.mutation([{ target: h.body, attributeName: 'data-ui-theme' }]); },
+    (h, card) => { card.isConnected = false; h.mutation([{ target: card, type: 'childList' }]); }
+  ];
+  for (const exit of exits) {
+    const h = harness();
+    const { card, visual, power } = tileWithPower();
+    h.move(power, { clientX: 120, clientY: 110 });
+    h.queueMove(power, { clientX: 125, clientY: 115 });
+    exit(h, card);
+    assert.equal(h.pendingFrames, 0);
+    h.flushFrame();
+    for (const node of [card, visual, power]) assertReset(node);
+  }
+});
+
+test('a removed or hidden initial pointer target cannot light a replacement from stale coordinates', () => {
+  for (const notify of [false, true]) {
+    const h = harness();
+    const card = target('anchored');
+    const replacement = target('anchored');
+    h.queueMove(card);
+    card.isConnected = false;
+    h.document.hit = replacement;
+    if (notify) h.mutation([{ target: card, type: 'childList' }]);
+    h.flushFrame();
+    assert.equal(card.classList.contains('is-lit'), false);
+    assert.equal(replacement.classList.contains('is-lit'), false);
+  }
+  const h = harness();
+  const card = target('anchored');
+  h.queueMove(card);
+  card.style.setProperty('visibility', 'hidden');
+  h.mutation([{ target: card, type: 'attributes', attributeName: 'style', oldValue: '' }]);
+  assert.equal(h.pendingFrames, 0);
+  h.flushFrame();
+  assert.equal(card.classList.contains('is-lit'), false);
+});
+
+test('lighting mutations avoid availability reads while external styles and classes still reset hidden surfaces', () => {
+  for (const external of ['visibility', 'display', 'class']) {
+    const h = harness();
+    const card = target('anchored');
+    const beforeStyle = card.getAttribute('style');
+    const beforeClass = card.getAttribute('class');
+    h.move(card);
+    const reads = h.metrics.styleReads;
+    const lightingRecords = [
+      { target: card, type: 'attributes', attributeName: 'style', oldValue: beforeStyle },
+      { target: card, type: 'attributes', attributeName: 'class', oldValue: beforeClass }
+    ];
+    h.mutation(lightingRecords);
+    assert.equal(h.metrics.styleReads, reads, 'self-generated mutations do not flush computed styles');
+    assert.equal(card.classList.contains('is-lit'), true);
+    const attributeName = external === 'class' ? 'class' : 'style';
+    const oldValue = card.getAttribute(attributeName);
+    if (external === 'class') {
+      card.classList.add('hidden');
+      card.hiddenAncestor = true;
+    } else card.style.setProperty(external, external === 'display' ? 'none' : 'hidden');
+    // Include earlier self mutations in the same delivery: an external change
+    // must still be detected when it shares an element/attribute with them.
+    h.mutation([...lightingRecords, { target: card, type: 'attributes', attributeName, oldValue }]);
+    assertReset(card);
+  }
+});
+
+test('parent, nested sensor and power geometry are read before any lighting style writes', () => {
+  const h = harness();
+  const { card, sensor, visual, power } = tileWithPower();
+  let writes = 0;
+  for (const node of [card, sensor, visual, power]) {
+    const measure = node.getBoundingClientRect;
+    node.getBoundingClientRect = () => {
+      assert.equal(writes, 0, 'geometry must precede style writes');
+      return measure();
+    };
+    const setProperty = node.style.setProperty;
+    node.style.setProperty = (...args) => { writes++; return setProperty(...args); };
+  }
+  h.move(power, { clientX: 120, clientY: 110 });
+  assert.ok(writes > 0);
+  for (const node of [card, visual, power]) assert.equal(node.classList.contains('is-lit'), true);
+});
 
 test('shared lighting gives anchored and surface cards restrained depth while preserving button feedback', () => {
   const h = harness();

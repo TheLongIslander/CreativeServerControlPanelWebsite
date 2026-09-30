@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 334 510" preserveAspectRatio="none">
+  <defs>
+    <filter id="feather" x="0" y="0" width="334" height="510" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="11"/>
+      <!-- Static fallback: remove the faint outer tail before the image bounds. -->
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="1.025" intercept="-0.0125"/>
+      </feComponentTransfer>
+    </filter>
+  </defs>
+  <!-- A soft static silhouette until the live contour renderer is ready. -->
+  <path fill="white" filter="url(#feather)" d="
+    M 82 45
+    C 106 35, 126 49, 151 44
+    C 177 36, 193 40, 212 45
+    C 238 37, 259 49, 268 71
+    C 284 89, 279 109, 272 133
+    C 262 160, 286 180, 280 205
+    C 275 229, 266 245, 274 268
+    C 283 293, 279 309, 271 332
+    C 259 357, 274 378, 273 401
+    C 271 423, 259 443, 236 443
+    C 213 440, 200 456, 177 448
+    C 153 439, 137 454, 111 448
+    C 83 443, 64 454, 52 430
+    C 38 407, 56 383, 49 361
+    C 40 338, 39 323, 47 301
+    C 60 272, 41 251, 42 228
+    C 41 199, 56 184, 49 159
+    C 37 134, 53 118, 48 97
+    C 40 69, 57 54, 82 45
+    Z"/>
+</svg>

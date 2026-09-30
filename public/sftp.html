@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <base href="/">
     <title>Server Backup Files</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260930-1">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
     <link rel="stylesheet" href="styleSFTP.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
@@ -49,6 +49,17 @@
                             <input type="radio" name="appearance-color" value="dark">
                             Dark
                         </label>
+                        <fieldset id="appearance-server-tile-controls" class="appearance-group" hidden>
+                            <legend class="appearance-label">Server Tile</legend>
+                            <label class="appearance-option">
+                                <input type="radio" name="appearance-server-tile" value="dynamic">
+                                Dynamic
+                            </label>
+                            <label class="appearance-option">
+                                <input type="radio" name="appearance-server-tile" value="still">
+                                Still
+                            </label>
+                        </fieldset>
                     </div>
                     <button id="logout-button">Logout</button>
                 </div>
@@ -72,7 +83,7 @@
     </div>
     <div id="loading-spinner" class="spinner" style="display:none;"></div>
     <script src="textEffects.js?v=20260930-1"></script>
-    <script src="appearance.js?v=20260930-4"></script>
+    <script src="appearance.js?v=20260930-8"></script>
     <script src="serverContext.js?v=permissions-1"></script>
     <script src="sftp.js?v=permissions-1"></script>
 </body>

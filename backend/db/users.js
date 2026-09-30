@@ -154,6 +154,7 @@ async function initUsersDb() {
   await addColumn('updated_at', 'TEXT');
   await addColumn('ui_theme', 'TEXT', "'glass'");
   await addColumn('color_scheme', 'TEXT', "'system'");
+  await addColumn('server_tile_style', 'TEXT', "'dynamic'");
 
   await run(`
     UPDATE users
@@ -216,6 +217,12 @@ async function initUsersDb() {
     UPDATE users
     SET color_scheme = 'system'
     WHERE color_scheme IS NULL OR color_scheme = ''
+  `);
+
+  await run(`
+    UPDATE users
+    SET server_tile_style = 'dynamic'
+    WHERE server_tile_style IS NULL OR server_tile_style NOT IN ('dynamic', 'still')
   `);
 
   try {
@@ -306,15 +313,16 @@ async function getUserByUsernameNormalized(usernameNormalized) {
   return get('SELECT * FROM users WHERE username_normalized = ?', [usernameNormalized]);
 }
 
-async function setUserAppearance({ userId, uiTheme, colorScheme }) {
+async function setUserAppearance({ userId, uiTheme, colorScheme, serverTileStyle }) {
   const now = new Date().toISOString();
   await run(`
     UPDATE users
     SET ui_theme = ?,
         color_scheme = ?,
+        server_tile_style = COALESCE(?, server_tile_style, 'dynamic'),
         updated_at = ?
     WHERE id = ?
-  `, [uiTheme, colorScheme, now, userId]);
+  `, [uiTheme, colorScheme, serverTileStyle ?? null, now, userId]);
 }
 
 async function listUsers() {

@@ -5,9 +5,9 @@
     <base href="/">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>USE Servers Control Hub</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260930-1">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
-    <link rel="stylesheet" href="servers.css?v=20260930-22">
+    <link rel="stylesheet" href="servers.css?v=20260930-28">
     <link rel="icon" type="image/x-icon" href="/assets/favicon.ico">
 </head>
 <body class="server-overview">
@@ -44,6 +44,17 @@
                             <input type="radio" name="appearance-color" value="dark">
                             Dark
                         </label>
+                        <fieldset id="appearance-server-tile-controls" class="appearance-group" hidden>
+                            <legend class="appearance-label">Server Tile</legend>
+                            <label class="appearance-option">
+                                <input type="radio" name="appearance-server-tile" value="dynamic">
+                                Dynamic
+                            </label>
+                            <label class="appearance-option">
+                                <input type="radio" name="appearance-server-tile" value="still">
+                                Still
+                            </label>
+                        </fieldset>
                     </div>
                     <div id="overview-advanced" class="overview-advanced hidden">
                         <button id="overview-advanced-button" type="button" aria-expanded="false" aria-controls="overview-advanced-panel">Advanced</button>
@@ -74,7 +85,9 @@
     </main>
     <script src="serverContext.js"></script>
     <script src="textEffects.js?v=20260930-1"></script>
-    <script src="appearance.js?v=20260930-6"></script>
-    <script src="servers.js?v=20260930-slots-2"></script>
+    <script src="appearance.js?v=20260930-8"></script>
+    <script src="serverTileContour.js?v=20260930-4"></script>
+    <script src="serverTileAura.js?v=20260930-6"></script>
+    <script src="servers.js?v=20260930-aura-3"></script>
 </body>
 </html>

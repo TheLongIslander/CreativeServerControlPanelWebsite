@@ -1,9 +1,10 @@
 (function() {
-    const STYLE_VERSION = '20260505-10';
+    const STYLE_VERSION = '20260930-1';
 
     let appearanceState = {
         uiTheme: 'glass',
-        colorScheme: 'system'
+        colorScheme: 'system',
+        serverTileStyle: 'dynamic'
     };
 
     function setThemeStylesheet(uiTheme) {
@@ -50,10 +51,18 @@
     function applyAppearanceSettings(settings, { persist = false } = {}) {
         appearanceState = {
             uiTheme: settings.uiTheme || 'glass',
-            colorScheme: settings.colorScheme || 'system'
+            colorScheme: settings.colorScheme || 'system',
+            serverTileStyle: settings.serverTileStyle === 'still' ? 'still' : 'dynamic'
         };
         setThemeStylesheet(appearanceState.uiTheme);
         applyColorScheme(appearanceState.colorScheme);
+        document.body.setAttribute('data-server-tile-style', appearanceState.serverTileStyle);
+
+        const tileControls = document.getElementById('appearance-server-tile-controls');
+        if (tileControls) tileControls.hidden = appearanceState.uiTheme !== 'glass';
+        document.querySelectorAll('input[name="appearance-server-tile"]').forEach(radio => {
+            radio.checked = radio.value === appearanceState.serverTileStyle;
+        });
 
         const classicToggle = document.getElementById('appearance-classic-toggle');
         if (classicToggle) {
@@ -80,6 +89,7 @@
         const appearancePanel = document.getElementById('appearance-panel');
         const classicToggle = document.getElementById('appearance-classic-toggle');
         const colorRadios = document.querySelectorAll('input[name="appearance-color"]');
+        const tileRadios = document.querySelectorAll('input[name="appearance-server-tile"]');
 
         let suppressAppearanceChange = false;
 
@@ -101,8 +111,8 @@
                     switchEl.style.setProperty('--drag', classicToggle.checked ? '1' : '0');
                 }
                 applyAppearanceSettings({
-                    uiTheme,
-                    colorScheme: appearanceState.colorScheme
+                    ...appearanceState,
+                    uiTheme
                 }, { persist: true });
             });
         }
@@ -164,8 +174,8 @@
                         switchEl.style.setProperty('--drag', classicToggle.checked ? '1' : '0');
                     }
                     applyAppearanceSettings({
-                        uiTheme: classicToggle.checked ? 'flat' : 'glass',
-                        colorScheme: appearanceState.colorScheme
+                        ...appearanceState,
+                        uiTheme: classicToggle.checked ? 'flat' : 'glass'
                     }, { persist: true });
                     setTimeout(() => {
                         suppressAppearanceChange = false;
@@ -189,8 +199,17 @@
                     return;
                 }
                 applyAppearanceSettings({
-                    uiTheme: appearanceState.uiTheme,
+                    ...appearanceState,
                     colorScheme: radio.value
+                }, { persist: true });
+            });
+        });
+        tileRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (!radio.checked) return;
+                applyAppearanceSettings({
+                    ...appearanceState,
+                    serverTileStyle: radio.value
                 }, { persist: true });
             });
         });
@@ -370,7 +389,15 @@
 
         let currentTarget = null;
         let currentControl = null;
+        let pointerFrame = null;
+        let pendingPointer = null;
         const activeNestedVisuals = new Map();
+
+        const cancelPendingPointer = () => {
+            if (pointerFrame !== null) window.cancelAnimationFrame(pointerFrame);
+            pointerFrame = null;
+            pendingPointer = null;
+        };
 
         const clearNestedVisuals = () => {
             activeNestedVisuals.forEach(resetTarget);
@@ -378,6 +405,7 @@
         };
 
         const clearTarget = () => {
+            cancelPendingPointer();
             resetTarget(currentControl);
             currentControl = null;
             clearNestedVisuals();
@@ -425,7 +453,7 @@
             target.classList.add('is-lit');
         };
 
-        const updateNestedVisuals = (target, event, control = null) => {
+        const measureNestedVisuals = (target, event, control = null) => {
             const nextVisuals = new Map();
             if (event.buttons === 0 || control) {
                 target.querySelectorAll('[data-pointer-sensor="surface"], [data-pointer-sensor="letter"]').forEach((sensor) => {
@@ -446,16 +474,25 @@
                         if (Math.hypot(dx, dy) >= radius) return;
                     } else if (!containsControl && (event.clientX < rect.left || event.clientX > rect.left + rect.width
                         || event.clientY < rect.top || event.clientY > rect.top + rect.height)) return;
-                    applyPointerLighting(visual, event, rect, isLetter ? profiles.letter : profiles.surface,
-                        width, height, radius, containsControl ? controlParentMotion : 1);
-                    nextVisuals.set(sensor, visual);
+                    nextVisuals.set(sensor, {
+                        visual,
+                        args: [visual, event, rect, isLetter ? profiles.letter : profiles.surface,
+                            width, height, radius, containsControl ? controlParentMotion : 1]
+                    });
                 });
             }
+            return nextVisuals;
+        };
+
+        const updateNestedVisuals = (nextVisuals) => {
             activeNestedVisuals.forEach((visual, sensor) => {
-                if (nextVisuals.get(sensor) !== visual) resetTarget(visual);
+                if (nextVisuals.get(sensor)?.visual !== visual) resetTarget(visual);
             });
             activeNestedVisuals.clear();
-            nextVisuals.forEach((visual, sensor) => activeNestedVisuals.set(sensor, visual));
+            nextVisuals.forEach(({ visual, args }, sensor) => {
+                applyPointerLighting(...args);
+                activeNestedVisuals.set(sensor, visual);
+            });
         };
 
         const updateTarget = (event) => {
@@ -468,10 +505,6 @@
             const anchoredParent = hitTarget?.parentElement?.closest('[data-pointer-profile="anchored"]');
             const control = anchoredParent ? hitTarget : null;
             const target = anchoredParent || hitTarget;
-
-            if (currentTarget && currentTarget !== target) {
-                clearTarget();
-            }
 
             if (!target || !isAvailable(target)) {
                 clearTarget();
@@ -491,26 +524,53 @@
                 clearTarget();
                 return;
             }
+            // Measure stationary sensors before changing any lighting styles. This
+            // avoids making nested geometry reads flush the parent's new styles.
+            const nestedVisuals = measureNestedVisuals(target, event, control);
+            const controlRect = control && event.buttons === 0 && isAvailable(control)
+                ? control.getBoundingClientRect() : null;
+            if (currentTarget && currentTarget !== target) clearTarget();
             // Preserve hover expansion and lighting; only soften parent travel and tilt.
             applyPointerLighting(target, event, rect, profile, rect.width, rect.height, null,
                 control ? controlParentMotion : 1);
             currentTarget = target;
-            updateNestedVisuals(target, event, control);
+            updateNestedVisuals(nestedVisuals);
             if (currentControl !== control) resetTarget(currentControl);
             currentControl = control;
             if (control) {
-                if (isAvailable(control) && event.buttons === 0) {
-                    const controlRect = control.getBoundingClientRect();
-                    if (controlRect.width && controlRect.height) {
-                        applyPointerLighting(control, event, controlRect, profiles[control.dataset.pointerProfile] || profiles.button);
-                    }
+                if (controlRect?.width && controlRect.height) {
+                    applyPointerLighting(control, event, controlRect, profiles[control.dataset.pointerProfile] || profiles.button);
                 } else resetTarget(control);
             }
         };
 
-        document.addEventListener('pointermove', updateTarget);
-        document.addEventListener('pointerdown', updateTarget);
+        document.addEventListener('pointermove', (event) => {
+            if (!pointerEffectsEnabled() || document.hidden || event.pointerType !== 'mouse') {
+                clearTarget();
+                return;
+            }
+            const hitOrigin = event.target?.closest?.(pointerTargetSelector);
+            const origin = hitOrigin?.parentElement?.closest('[data-pointer-profile="anchored"]') || hitOrigin;
+            pendingPointer = { event, origin };
+            if (pointerFrame !== null) return;
+            pointerFrame = window.requestAnimationFrame(() => {
+                const pending = pendingPointer;
+                pointerFrame = null;
+                pendingPointer = null;
+                if (!pending) return;
+                if (pending.origin && !isAvailable(pending.origin)) {
+                    clearTarget();
+                    return;
+                }
+                updateTarget(pending.event);
+            });
+        });
+        document.addEventListener('pointerdown', (event) => {
+            cancelPendingPointer();
+            updateTarget(event);
+        });
         document.addEventListener('pointerup', (event) => {
+            cancelPendingPointer();
             if (event.pointerType !== 'mouse') {
                 clearTarget();
             }
@@ -534,15 +594,43 @@
 
         // Menus and cards can disappear without a pointer event. Only reset an active
         // target when its context changes; ordinary live text updates keep it steady.
+        const lightingProperties = ['--mx', '--my', '--pop', '--tx', '--ty', '--sx', '--sy', '--skx', '--sky', '--scale'];
+        const contextStyle = document.createElement('span').style;
+        const withoutLightingStyle = (value) => {
+            contextStyle.cssText = value || '';
+            lightingProperties.forEach((property) => contextStyle.removeProperty(property));
+            return contextStyle.cssText;
+        };
+        const withoutLightingClass = (value) => (value || '').split(/\s+/)
+            .filter((name) => name && name !== 'is-lit').sort().join(' ');
+        const hasContextChange = (records) => {
+            const checked = new Map();
+            for (const record of records) {
+                if (record.type !== 'attributes' || !['style', 'class'].includes(record.attributeName)) return true;
+                let attributes = checked.get(record.target);
+                if (!attributes) checked.set(record.target, attributes = new Set());
+                if (attributes.has(record.attributeName)) continue;
+                attributes.add(record.attributeName);
+                // Compare the first old value with the final state once per element.
+                // Ignore only our lighting variables/class, retaining external changes
+                // such as display, visibility, or a newly hidden ancestor.
+                const normalize = record.attributeName === 'style' ? withoutLightingStyle : withoutLightingClass;
+                if (normalize(record.oldValue) !== normalize(record.target.getAttribute(record.attributeName))) return true;
+            }
+            return false;
+        };
         const contextObserver = new MutationObserver((records) => {
-            if (!currentTarget) return;
+            if (!currentTarget && !pendingPointer) return;
+            if (records.length && !hasContextChange(records)) return;
             const themeChanged = records.some((record) => (
                 record.target === document.body && record.attributeName === 'data-ui-theme'
             ));
-            if (themeChanged || !pointerEffectsEnabled() || !isAvailable(currentTarget)) {
+            if (themeChanged || !pointerEffectsEnabled() || document.hidden || (currentTarget && !isAvailable(currentTarget))) {
                 clearTarget();
                 return;
             }
+            if (pendingPointer?.origin && !isAvailable(pendingPointer.origin)) cancelPendingPointer();
+            if (!currentTarget) return;
             if (currentControl && (!currentTarget.contains(currentControl) || !isAvailable(currentControl))) {
                 resetTarget(currentControl);
                 currentControl = null;
@@ -560,6 +648,7 @@
             subtree: true,
             childList: true,
             attributes: true,
+            attributeOldValue: true,
             attributeFilter: ['data-ui-theme', 'class', 'style', 'hidden', 'inert', 'aria-hidden', 'disabled', 'aria-disabled']
         });
 
@@ -569,7 +658,8 @@
     function init({ user, options } = {}) {
         applyAppearanceSettings({
             uiTheme: user && user.uiTheme ? user.uiTheme : 'glass',
-            colorScheme: user && user.colorScheme ? user.colorScheme : 'system'
+            colorScheme: user && user.colorScheme ? user.colorScheme : 'system',
+            serverTileStyle: user && user.serverTileStyle ? user.serverTileStyle : 'dynamic'
         });
         setupAccountMenu(user, options);
         setupButtonLighting();

@@ -112,7 +112,9 @@
         infoSensor.append(info);
         visual.append(mark, link, infoSensor);
         tile.append(visual);
-        const entry = { tile, link, name, mark, info, infoSensor, copy, power, feedback, summary, badge, population, details, operation, alert, backup };
+        const aura = global.ServerTileAura?.create(visual, server.id === 'abhihardcoreworld'
+            ? { imageFit: 'contain', imageBackground: '#2c0805' } : undefined);
+        const entry = { tile, link, name, mark, info, infoSensor, copy, power, feedback, summary, badge, population, details, operation, alert, backup, aura };
         power.addEventListener('click', () => togglePower(entry));
         return entry;
     }
@@ -129,6 +131,7 @@
                 thumbnail.decoding = 'async';
                 thumbnail.addEventListener('error', () => {
                     if (entry.mark.firstElementChild !== thumbnail) return;
+                    entry.aura?.setArtwork(null, entry.name.textContent);
                     entry.mark.classList.remove('has-image');
                     updateText(entry.mark, entry.name.textContent.slice(0, 1).toUpperCase());
                 }, { once: true });
@@ -138,6 +141,7 @@
             }
         }
         if (!entry.mark.classList.contains('has-image')) updateText(entry.mark, server.displayName.slice(0, 1).toUpperCase());
+        entry.aura?.setArtwork(entry.mark.classList.contains('has-image') ? imagePath : null, server.displayName);
     }
     function lifecycleOperation(server) {
         return typeof server.operation === 'string' ? server.operation : server.operation?.type;
@@ -282,6 +286,7 @@
         const activeEntry = Array.from(tilesById.values()).find(entry => entry.tile.contains(activeElement));
         for (const id of tilesById.keys()) if (!nextIds.has(id)) {
             if (openSlotPopup?.entry === tilesById.get(id)) closeSlotPopup();
+            tilesById.get(id).aura?.destroy();
             tilesById.delete(id);
         }
         const tiles = servers.map((server, index) => {

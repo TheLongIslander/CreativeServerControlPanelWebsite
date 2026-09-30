@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Admin Management</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260930-1">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
     <link rel="stylesheet" href="styleAdmin.css">
     <link rel="stylesheet" href="adminServers.css?v=20260930-thumbnails-2">
@@ -40,6 +40,17 @@
                         <input type="radio" name="appearance-color" value="dark">
                         Dark
                     </label>
+                    <fieldset id="appearance-server-tile-controls" class="appearance-group" hidden>
+                        <legend class="appearance-label">Server Tile</legend>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-server-tile" value="dynamic">
+                            Dynamic
+                        </label>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-server-tile" value="still">
+                            Still
+                        </label>
+                    </fieldset>
                 </div>
                 <button id="logout-button">Logout</button>
             </div>
@@ -174,7 +185,7 @@
 
     <script src="serverContext.js"></script>
     <script src="textEffects.js?v=20260930-1"></script>
-    <script src="appearance.js?v=20260930-4"></script>
+    <script src="appearance.js?v=20260930-8"></script>
     <script src="adminServers.js?v=20260930-thumbnails-1"></script>
     <script src="admin.js"></script>
 </body>

@@ -190,6 +190,22 @@ body.control-panel main {
     color: #6b7280;
 }
 
+.appearance-group {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.appearance-group > .appearance-label {
+    padding: 0;
+    margin-bottom: 10px;
+}
+
+.appearance-group > .appearance-option + .appearance-option {
+    margin-top: 10px;
+}
+
 .appearance-option {
     display: flex;
     align-items: center;

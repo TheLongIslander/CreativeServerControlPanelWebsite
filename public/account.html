@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Manage Account</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260930-1">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
     <link rel="stylesheet" href="styleAdmin.css">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
@@ -39,6 +39,17 @@
                         <input type="radio" name="appearance-color" value="dark">
                         Dark
                     </label>
+                    <fieldset id="appearance-server-tile-controls" class="appearance-group" hidden>
+                        <legend class="appearance-label">Server Tile</legend>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-server-tile" value="dynamic">
+                            Dynamic
+                        </label>
+                        <label class="appearance-option">
+                            <input type="radio" name="appearance-server-tile" value="still">
+                            Still
+                        </label>
+                    </fieldset>
                 </div>
                 <button id="logout-button">Logout</button>
             </div>
@@ -86,7 +97,7 @@
 
     <script src="webauthn.js"></script>
     <script src="textEffects.js?v=20260930-1"></script>
-    <script src="appearance.js?v=20260930-4"></script>
+    <script src="appearance.js?v=20260930-8"></script>
     <script src="account.js"></script>
 </body>
 </html>

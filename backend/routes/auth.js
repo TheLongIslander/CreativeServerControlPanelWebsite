@@ -149,37 +149,44 @@ module.exports = function createAuthRoutes({
       disabled: Boolean(req.user.disabled),
       lastLoginAt: req.user.last_login_at,
       uiTheme: req.user.ui_theme || 'glass',
-      colorScheme: req.user.color_scheme || 'system'
+      colorScheme: req.user.color_scheme || 'system',
+      serverTileStyle: req.user.server_tile_style === 'still' ? 'still' : 'dynamic'
     });
   });
 
   router.post('/appearance', authenticateJWT, async (req, res) => {
-    const { uiTheme, colorScheme } = req.body || {};
+    const { uiTheme, colorScheme, serverTileStyle: requestedTileStyle } = req.body || {};
     const allowedThemes = new Set(['glass', 'flat']);
     const allowedSchemes = new Set(['system', 'light', 'dark']);
+    const allowedTileStyles = new Set(['dynamic', 'still']);
 
-    if (!allowedThemes.has(uiTheme) || !allowedSchemes.has(colorScheme)) {
+    if (!allowedThemes.has(uiTheme) || !allowedSchemes.has(colorScheme)
+        || (requestedTileStyle !== undefined && !allowedTileStyles.has(requestedTileStyle))) {
       return res.status(400).json({ message: 'Invalid appearance settings.' });
     }
+    // Older clients only submit theme and color, so retain their saved tile style.
+    const serverTileStyle = requestedTileStyle
+      ?? (req.user.server_tile_style === 'still' ? 'still' : 'dynamic');
 
     try {
       await usersDb.setUserAppearance({
         userId: req.user.id,
         uiTheme,
-        colorScheme
+        colorScheme,
+        serverTileStyle
       });
       try {
         await usersDb.logAuditEvent({
           actorUserId: req.user.id,
           targetUserId: req.user.id,
           action: 'user.appearance.updated',
-          metadata: { uiTheme, colorScheme },
+          metadata: { uiTheme, colorScheme, serverTileStyle },
           ipAddress: req.ip || req.socket.remoteAddress || null
         });
       } catch (logErr) {
         console.warn('Failed to log appearance update:', logErr.message);
       }
-      return res.json({ uiTheme, colorScheme });
+      return res.json({ uiTheme, colorScheme, serverTileStyle });
     } catch (err) {
       console.error('Appearance update error:', err);
       return res.status(500).json({ message: 'Failed to update appearance.' });
