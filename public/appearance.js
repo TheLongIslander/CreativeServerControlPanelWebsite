@@ -315,6 +315,36 @@
             return;
         }
 
+        const pointerTargetSelector = [
+            'button:not([data-no-pointer-lighting])',
+            '.path-input-shell',
+            '[data-pointer-profile="compact"]',
+            '[data-pointer-profile="surface"]',
+            '[data-pointer-profile="input-shell"]',
+            '[data-pointer-profile="anchored"]'
+        ].join(', ');
+        const finePointerQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
+        const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const pointerEffectsEnabled = () => (
+            document.body.dataset.uiTheme === 'glass'
+            && finePointerQuery.matches
+            && !reducedMotionQuery.matches
+        );
+        const profiles = {
+            button: { light: 1, translate: 14, shadow: 20, skew: 3, scale: 1.03 },
+            compact: { light: 1, translate: 7, shadow: 11, skew: 1.75, scale: 1.018 },
+            surface: { light: 0.72, translate: 3.5, shadow: 8, skew: 0.65, scale: 1.008 },
+            'input-shell': { light: 0.55, translate: 2, shadow: 5, skew: 0, scale: 1.012 },
+            anchored: { light: 0.78, translate: 3.5, shadow: 8, skew: 0.65, scale: 1.008 }
+        };
+        const isAvailable = (target) => (
+            target.isConnected
+            && !target.matches(':disabled, [aria-disabled="true"]')
+            && !target.closest('[data-no-pointer-lighting], .hidden, [hidden], [inert], [aria-hidden="true"]')
+            && target.getClientRects().length > 0
+            && window.getComputedStyle(target).visibility === 'visible'
+        );
+
         const resetTarget = (target) => {
             if (!target) {
                 return;
@@ -333,35 +363,35 @@
         };
 
         let currentTarget = null;
+        const activeNestedVisuals = new Map();
 
-        const updateTarget = (event) => {
-            const el = document.elementFromPoint(event.clientX, event.clientY);
-            const target = el ? el.closest('button, .path-input-shell') : null;
+        const clearNestedVisuals = () => {
+            activeNestedVisuals.forEach(resetTarget);
+            activeNestedVisuals.clear();
+        };
 
-            if (currentTarget && currentTarget !== target) {
+        const clearTarget = () => {
+            clearNestedVisuals();
+            if (currentTarget) {
                 resetTarget(currentTarget);
-            }
-
-            if (!target) {
                 currentTarget = null;
-                return;
             }
+        };
 
-            const rect = target.getBoundingClientRect();
-            if (!rect.width || !rect.height) {
-                return;
-            }
-            const x = event.clientX - rect.left;
-            const y = event.clientY - rect.top;
-            const nx = (x - rect.width / 2) / (rect.width / 2);
-            const ny = (y - rect.height / 2) / (rect.height / 2);
+        const applyPointerLighting = (target, event, rect, profile, width = rect.width, height = rect.height) => {
+            // A nested sensor moves with its parent, but its visual must use local
+            // coordinates and must never feed its own transform back into measurement.
+            const x = (event.clientX - rect.left) * width / rect.width;
+            const y = (event.clientY - rect.top) * height / rect.height;
+            const nx = (x - width / 2) / (width / 2);
+            const ny = (y - height / 2) / (height / 2);
             const dist = Math.min(Math.sqrt(nx * nx + ny * ny), 1);
             const lightPop = Math.max(0, 1 - dist);
-            const pop = lightPop;
-            const translateMax = 14;
-            const shadowMax = 20;
-            const skewMax = 3;
-            const scaleMax = 1.03;
+            const pop = lightPop * profile.light;
+            const translateMax = profile.translate;
+            const shadowMax = profile.shadow;
+            const skewMax = profile.skew;
+            const scaleMax = profile.scale;
             const tx = nx * translateMax * pop;
             const ty = ny * translateMax * pop;
             const sx = -nx * shadowMax * pop;
@@ -381,14 +411,63 @@
             target.style.setProperty('--sky', `${sky}deg`);
             target.style.setProperty('--scale', scale);
             target.classList.add('is-lit');
-            currentTarget = target;
         };
 
-        const clearTarget = () => {
-            if (currentTarget) {
-                resetTarget(currentTarget);
-                currentTarget = null;
+        const updateNestedVisuals = (target, event) => {
+            const nextVisuals = new Map();
+            if (event.buttons === 0) {
+                target.querySelectorAll('[data-pointer-sensor="surface"]').forEach((sensor) => {
+                    const visual = sensor.querySelector('[data-pointer-visual]');
+                    if (!visual || !isAvailable(sensor) || !isAvailable(visual)) return;
+                    const rect = sensor.getBoundingClientRect();
+                    if (!rect.width || !rect.height
+                        || event.clientX < rect.left || event.clientX > rect.left + rect.width
+                        || event.clientY < rect.top || event.clientY > rect.top + rect.height) return;
+                    applyPointerLighting(visual, event, rect, profiles.surface,
+                        sensor.clientWidth || rect.width, sensor.clientHeight || rect.height);
+                    nextVisuals.set(sensor, visual);
+                });
             }
+            activeNestedVisuals.forEach((visual, sensor) => {
+                if (nextVisuals.get(sensor) !== visual) resetTarget(visual);
+            });
+            activeNestedVisuals.clear();
+            nextVisuals.forEach((visual, sensor) => activeNestedVisuals.set(sensor, visual));
+        };
+
+        const updateTarget = (event) => {
+            if (!pointerEffectsEnabled() || document.hidden || event.pointerType !== 'mouse') {
+                clearTarget();
+                return;
+            }
+            const el = document.elementFromPoint(event.clientX, event.clientY);
+            const target = el ? el.closest(pointerTargetSelector) : null;
+
+            if (currentTarget && currentTarget !== target) {
+                clearTarget();
+            }
+
+            if (!target || !isAvailable(target)) {
+                clearTarget();
+                return;
+            }
+
+            const profileName = target.dataset.pointerProfile
+                || (target.classList.contains('path-input-shell') ? 'input-shell' : 'button');
+            if ((profileName === 'surface' || profileName === 'input-shell') && event.buttons !== 0) {
+                clearTarget();
+                return;
+            }
+            const profile = profiles[profileName] || profiles.button;
+
+            const rect = target.getBoundingClientRect();
+            if (!rect.width || !rect.height) {
+                clearTarget();
+                return;
+            }
+            applyPointerLighting(target, event, rect, profile);
+            currentTarget = target;
+            updateNestedVisuals(target, event);
         };
 
         document.addEventListener('pointermove', updateTarget);
@@ -400,6 +479,46 @@
         });
         document.addEventListener('pointercancel', clearTarget);
         document.addEventListener('pointerleave', clearTarget);
+        document.addEventListener('ui-pointer-lighting-reset', clearTarget);
+        document.addEventListener('scroll', clearTarget, { capture: true, passive: true });
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) clearTarget();
+        });
+        window.addEventListener('blur', clearTarget);
+        window.addEventListener('pagehide', clearTarget);
+        [finePointerQuery, reducedMotionQuery].forEach((query) => {
+            if (typeof query.addEventListener === 'function') {
+                query.addEventListener('change', clearTarget);
+            } else {
+                query.addListener(clearTarget);
+            }
+        });
+
+        // Menus and cards can disappear without a pointer event. Only reset an active
+        // target when its context changes; ordinary live text updates keep it steady.
+        const contextObserver = new MutationObserver((records) => {
+            if (!currentTarget) return;
+            const themeChanged = records.some((record) => (
+                record.target === document.body && record.attributeName === 'data-ui-theme'
+            ));
+            if (themeChanged || !pointerEffectsEnabled() || !isAvailable(currentTarget)) {
+                clearTarget();
+                return;
+            }
+            activeNestedVisuals.forEach((visual, sensor) => {
+                if (!currentTarget.contains(sensor) || !sensor.contains(visual)
+                    || !isAvailable(sensor) || !isAvailable(visual)) {
+                    resetTarget(visual);
+                    activeNestedVisuals.delete(sensor);
+                }
+            });
+        });
+        contextObserver.observe(document.body, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['data-ui-theme', 'class', 'style', 'hidden', 'inert', 'aria-hidden', 'disabled', 'aria-disabled']
+        });
 
         lightingInitialized = true;
     }

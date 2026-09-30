@@ -5,6 +5,11 @@
     let lastSuccess = null;
     let visibleIds = new Set();
     const nodes = {};
+    const tilesById = new Map();
+    const tileImages = Object.freeze({
+        default: '/assets/server-tiles/creative.png',
+        pogeg: '/assets/server-tiles/pogeg-farm.png'
+    });
     function element(tag, className, text) {
         const node = document.createElement(tag);
         node.className = className;
@@ -19,42 +24,175 @@
         }
         return status.running ? (status.ready === false ? 'Starting' : 'Online') : 'Stopped';
     }
-    function renderTile(server, index) {
+    function updateText(node, text) {
+        if (node.textContent !== text) node.textContent = text;
+    }
+    function syncChildren(parent, children) {
+        const wanted = new Set(children);
+        for (const child of Array.from(parent.children)) {
+            if (!wanted.has(child)) child.remove();
+        }
+        children.forEach((child, index) => {
+            if (parent.children[index] !== child) {
+                // Moving an existing tile must not replay its entrance animation.
+                if (child.parentNode === parent && child.classList.contains('is-entering')) child.classList.remove('is-entering');
+                parent.insertBefore(child, parent.children[index] || null);
+            }
+        });
+    }
+    function createTile(server) {
         const tile = element('a', 'server-tile');
         tile.href = global.ServerContext.panelUrl(server.id);
-        tile.style.setProperty('--tile-index', index);
         tile.dataset.serverId = server.id;
+        tile.dataset.pointerProfile = 'anchored';
+        // Keep the link's hitbox steady while its glass surface follows the pointer.
+        const visual = element('div', 'server-tile-visual');
+        tile.classList.add('is-entering');
+        tile.addEventListener('animationend', event => {
+            if (event.target === visual && event.animationName === 'tile-arrive') tile.classList.remove('is-entering');
+        });
+        const name = element('h2', '', server.displayName);
+        const mark = element('div', 'server-tile-mark');
+        mark.setAttribute('aria-hidden', 'true');
+        const imagePath = Object.hasOwn(tileImages, server.id) ? tileImages[server.id] : null;
+        if (imagePath) {
+            const thumbnail = element('img', 'server-tile-thumbnail');
+            thumbnail.alt = '';
+            thumbnail.decoding = 'async';
+            thumbnail.addEventListener('error', () => {
+                mark.classList.remove('has-image');
+                updateText(mark, name.textContent.slice(0, 1).toUpperCase());
+            }, { once: true });
+            thumbnail.src = imagePath;
+            mark.classList.add('has-image');
+            mark.replaceChildren(thumbnail);
+        }
+        // Measure this wrapper, so the mini tile's own motion cannot move its sensor.
+        const infoSensor = element('div', 'server-tile-info-sensor');
+        infoSensor.dataset.pointerSensor = 'surface';
+        const info = element('div', 'server-tile-info');
+        info.setAttribute('data-pointer-visual', '');
+        const summary = element('div', 'server-tile-summary');
+        const badge = element('span', 'server-tile-status');
+        const population = element('span', 'server-tile-population');
+        const files = element('span', 'server-tile-files');
+        const details = element('div', 'server-tile-details');
+        const operation = element('span', 'server-tile-operation');
+        const alert = element('span', 'server-tile-operation');
+        const backup = element('span', '');
+        info.append(name, summary);
+        infoSensor.append(info);
+        visual.append(mark, infoSensor);
+        tile.append(visual);
+        return { tile, name, mark, info, summary, badge, population, files, details, operation, alert, backup };
+    }
+    function updateTile(entry, server, index) {
+        const { tile, name, mark, info, summary, badge, population, files, details, operation, alert, backup } = entry;
+        if (entry.index !== index) {
+            tile.style.setProperty('--tile-index', index);
+            entry.index = index;
+        }
         const online = Boolean(server.status?.running);
         const description = describeState(server);
-        tile.dataset.state = description === 'Online' ? 'online' : description === 'Stopped' ? 'offline' : 'busy';
-        const top = element('div', 'server-tile-top');
-        const mark = element('div', 'server-tile-mark', server.displayName.slice(0, 1).toUpperCase());
-        mark.setAttribute('aria-hidden', 'true');
-        const badge = element('span', 'server-tile-status', description);
-        top.append(mark, badge);
-        tile.append(top, element('h2', '', server.displayName));
-        const details = element('div', 'server-tile-details');
+        const state = description === 'Online' ? 'online' : description === 'Stopped' ? 'offline' : 'busy';
+        if (tile.dataset.state !== state) tile.dataset.state = state;
+        updateText(name, server.displayName);
+        const label = `${server.displayName} control panel`;
+        if (tile.getAttribute('aria-label') !== label) tile.setAttribute('aria-label', label);
+        if (!mark.classList.contains('has-image')) updateText(mark, server.displayName.slice(0, 1).toUpperCase());
+        updateText(badge, description);
         const players = server.playerCount ?? server.status?.playerCount;
-        details.append(element('span', '', Number.isInteger(players) && online ? `${players} player${players === 1 ? '' : 's'} online` : online ? 'Ready for your next session' : 'Your world is waiting'));
-        const operation = server.operation;
-        if (operation) details.append(element('span', 'server-tile-operation', typeof operation === 'string' ? operation : operation.label || operation.type || 'Operation in progress'));
-        if (server.alert) details.append(element('span', 'server-tile-operation', typeof server.alert === 'string' ? server.alert : 'Attention needed'));
+        const showPlayers = Number.isInteger(players) && online;
+        updateText(population, showPlayers ? `${players} player${players === 1 ? '' : 's'}` : '');
+        updateText(files, server.sftp?.state === 'available' ? 'Backups connected' : 'Backups not connected');
+        syncChildren(summary, showPlayers ? [badge, population, files] : [badge, files]);
+        updateText(operation, server.operation ? (typeof server.operation === 'string' ? server.operation : server.operation.label || server.operation.type || 'Operation in progress') : '');
+        updateText(alert, server.alert ? (typeof server.alert === 'string' ? server.alert : 'Attention needed') : '');
+        let backupText = '';
         if (server.lastBackupAt) {
-            const backup = new Date(server.lastBackupAt);
-            if (Number.isFinite(backup.getTime())) details.append(element('span', '', `Last backup ${backup.toLocaleDateString()}`));
+            const date = new Date(server.lastBackupAt);
+            if (Number.isFinite(date.getTime())) backupText = `Last backup ${date.toLocaleDateString()}`;
         }
-        details.append(element('span', 'server-tile-files', server.sftp?.state === 'available' ? 'Backup browser connected' : 'Backup browser not connected'));
-        tile.append(details, element('span', 'server-tile-open', 'Open control panel  ↗'));
-        return tile;
+        updateText(backup, backupText);
+        syncChildren(details, [operation, alert, backup].filter(node => node.textContent));
+        syncChildren(info, details.childElementCount ? [name, summary, details] : [name, summary]);
+    }
+    function showEmpty(message) {
+        updateText(nodes.empty, message);
+        syncChildren(nodes.tiles, [nodes.empty]);
+    }
+    function renderServers(servers, nextIds) {
+        const activeId = document.activeElement?.dataset.serverId;
+        for (const id of tilesById.keys()) if (!nextIds.has(id)) tilesById.delete(id);
+        const tiles = servers.map((server, index) => {
+            let entry = tilesById.get(server.id);
+            if (!entry) {
+                entry = createTile(server);
+                tilesById.set(server.id, entry);
+            }
+            updateTile(entry, server, index);
+            return entry.tile;
+        });
+        if (tiles.length) syncChildren(nodes.tiles, tiles);
+        else showEmpty('No servers are available to your account. An admin can add a server or update your access.');
+        const activeTile = tilesById.get(activeId)?.tile;
+        if (activeTile && document.activeElement !== activeTile) activeTile.focus({ preventScroll: true });
     }
     function showNotice(message) {
-        nodes.notice.textContent = message;
+        updateText(nodes.notice, message);
         nodes.notice.classList.toggle('hidden', !message);
     }
-    async function refresh() {
+    function setupManualRefresh(user) {
+        const preferenceKey = `server-overview:manual-refresh:${user.id}`;
+        const toggle = document.getElementById('manual-refresh-toggle');
+        const advanced = document.getElementById('overview-advanced');
+        const advancedButton = document.getElementById('overview-advanced-button');
+        const advancedPanel = document.getElementById('overview-advanced-panel');
+        const accountButton = document.getElementById('account-button');
+        const dropdown = document.getElementById('account-dropdown');
+        let enabled = user.role === 'admin';
+        try {
+            const saved = localStorage.getItem(preferenceKey);
+            if (saved === 'true' || saved === 'false') enabled = saved === 'true';
+        } catch (_) { /* Use the role default when preference storage is unavailable. */ }
+        function apply(value) {
+            toggle.checked = value;
+            nodes.refresh.classList.toggle('hidden', !value);
+        }
+        apply(enabled);
+        advanced.classList.remove('hidden');
+        toggle.addEventListener('change', () => {
+            apply(toggle.checked);
+            try { localStorage.setItem(preferenceKey, String(toggle.checked)); } catch (_) { /* Keep the preference for this page. */ }
+        });
+        function setAdvancedOpen(open) {
+            advancedPanel.classList.toggle('hidden', !open);
+            advancedButton.setAttribute('aria-expanded', String(open));
+        }
+        advancedButton.addEventListener('click', () => {
+            setAdvancedOpen(advancedPanel.classList.contains('hidden'));
+        });
+        function resetAdvancedWhenClosed() {
+            if (dropdown.classList.contains('hidden')) setAdvancedOpen(false);
+        }
+        accountButton.addEventListener('click', resetAdvancedWhenClosed);
+        document.addEventListener('click', resetAdvancedWhenClosed);
+        document.addEventListener('keydown', event => {
+            if (event.key !== 'Escape' || dropdown.classList.contains('hidden')) return;
+            event.preventDefault();
+            if (!advancedPanel.classList.contains('hidden')) {
+                setAdvancedOpen(false);
+                advancedButton.focus();
+            } else {
+                accountButton.click();
+                accountButton.focus();
+            }
+        });
+    }
+    async function refresh({ manual = false } = {}) {
         if (controller) return;
         controller = new AbortController();
-        nodes.refresh.disabled = true;
+        if (manual) nodes.refresh.disabled = true;
         try {
             const response = await fetch('/api/servers', {
                 headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
@@ -73,28 +211,23 @@
                 if ((key.startsWith('server-tab:v1:') && !nextIds.has(parts[3])) || (key.startsWith('server-chat:') && !nextIds.has(parts[4]))) sessionStorage.removeItem(key);
             }
             visibleIds = nextIds;
-            const activeId = document.activeElement?.dataset.serverId;
-            nodes.tiles.replaceChildren(...servers.map(renderTile));
-            if (activeId) Array.from(nodes.tiles.children).find(tile => tile.dataset.serverId === activeId)?.focus();
-            if (!servers.length) nodes.tiles.append(element('p', 'overview-empty', 'No servers are available to your account. An admin can add a server or update your access.'));
-            nodes.tiles.setAttribute('aria-busy', 'false');
+            renderServers(servers, nextIds);
             const slots = payload.slots || {};
-            nodes.slots.textContent = `${slots.occupied ?? '—'} / ${slots.limit ?? 2} shared slots in use${slots.canBypass ? ' · Admin override available' : ''}`;
+            updateText(nodes.slots, `${slots.occupied ?? '—'} / ${slots.limit ?? 2} shared slots in use${slots.canBypass ? ' · Admin override available' : ''}`);
             if (slots.occupied >= (slots.limit || 2) && !slots.canBypass) showNotice('Both server slots are in use. Stop a server before starting another.');
             else showNotice(new URLSearchParams(location.search).has('unavailable') ? 'That server is no longer available to your account.' : '');
             lastSuccess = new Date();
-            nodes.updated.textContent = `Updated ${lastSuccess.toLocaleTimeString()}`;
-            nodes.tiles.classList.remove('is-stale');
+            if (nodes.tiles.classList.contains('is-stale')) nodes.tiles.classList.remove('is-stale');
         } catch (error) {
             if (error.name !== 'AbortError') {
                 showNotice(lastSuccess ? 'Connection interrupted. Server details below may be out of date.' : error.message);
-                nodes.tiles.classList.add('is-stale');
-                if (!lastSuccess) nodes.tiles.replaceChildren(element('p', 'overview-empty', 'Your servers could not be loaded. Use Refresh to try again.'));
+                if (!nodes.tiles.classList.contains('is-stale')) nodes.tiles.classList.add('is-stale');
+                if (!lastSuccess) showEmpty('Your servers could not be loaded. Retrying automatically…');
             }
         } finally {
             controller = null;
-            nodes.refresh.disabled = false;
-            nodes.tiles.setAttribute('aria-busy', 'false');
+            if (manual) nodes.refresh.disabled = false;
+            if (nodes.tiles.getAttribute('aria-busy') !== 'false') nodes.tiles.setAttribute('aria-busy', 'false');
         }
     }
     global.logout = async function logout() {
@@ -105,11 +238,11 @@
     };
     document.addEventListener('DOMContentLoaded', async () => {
         nodes.tiles = document.getElementById('server-tiles');
+        nodes.empty = nodes.tiles.querySelector('.overview-empty') || element('p', 'overview-empty');
         nodes.slots = document.getElementById('server-slots');
         nodes.notice = document.getElementById('overview-notice');
-        nodes.updated = document.getElementById('overview-updated');
         nodes.refresh = document.getElementById('refresh-servers');
-        nodes.refresh.addEventListener('click', refresh);
+        nodes.refresh.addEventListener('click', () => refresh({ manual: true }));
         try {
             const response = await fetch('/me', { headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }, cache: 'no-store' });
             if (!response.ok) { global.ServerContext.clearAll(); global.location.replace('/'); return; }
@@ -117,6 +250,7 @@
             if (user.mustResetPassword) { global.location.replace('/set-password.html'); return; }
             global.ServerContext.init(user);
             global.Appearance?.init({ user });
+            setupManualRefresh(user);
             await refresh();
             pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 10000);
         } catch (_) { showNotice('Could not connect to the panel. Reload to try again.'); }
