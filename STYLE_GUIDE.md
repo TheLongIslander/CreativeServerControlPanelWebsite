@@ -9,7 +9,8 @@ It is written for future people to implement new pages without guessing.
 - Color scheme is a separate axis:
 `system`, `light`, `dark`.
 - Theme switching must never break layout, interaction, or readability.
-- Shared UI behavior lives in one place (`public/appearance.js`), not duplicated per page.
+- Shared UI behavior is initialized through `public/appearance.js` and its shared modules,
+  not duplicated per page.
 - Page-level CSS can specialize visuals, but must keep shared contracts (IDs, classes, state vars).
 
 ## Scope
@@ -21,6 +22,8 @@ It is written for future people to implement new pages without guessing.
 - Global glass/base theme: `public/style.css`
 - Global flat theme: `public/style.flat.css`
 - Shared appearance state + account menu wiring: `public/appearance.js`
+- Shared non-button Glass text treatment: `public/textEffects.css` and `public/textEffects.js`
+  (initialized by `Appearance.init`, including on the control panel)
 - Control panel behavior + glass backup progress engine: `public/script.js`
 - Server chat behavior and reconciliation: `public/serverChat.js`
 - Server chat flat/glass component layer: `public/chat.css` (loaded after the active global theme)
@@ -205,6 +208,43 @@ body[data-ui-theme="glass"] .switch .slider::after {
 `body[data-ui-theme="glass"]:not([data-color-scheme])` under light media query.
 
 ## Component Standards
+
+### Non-button text — Glass only
+
+- In **Glassy mode only**, display text outside buttons uses a subtle raised finish,
+  similar to the text on Glass buttons: a fine upper highlight, shallow lower edge,
+  and soft shadow. Use font-relative depths so small status labels stay crisp.
+  Headings, brand names, labels, server status, notices, file names, and read-only
+  table/chat text all share this treatment. Support dark, light, and system colors.
+- Nearby letters gently expand, lift, and glow as a fine mouse pointer passes them.
+  Use smooth proximity falloff, up to about 7% growth at the pointer, and restrained
+  directional shadow movement. This is local text feedback; do not add a page-wide glow.
+- **Classic keeps its existing typography and receives no new text effects.**
+  In Glass, coarse/touch input and reduced motion keep the static raised finish but
+  receive no cursor-follow glow, expansion, or movement.
+- Buttons and all their descendants, including elements with `role="button"`, retain
+  their existing button treatment. Inputs, textareas, selects, editable content,
+  SVG/canvas, and explicit `data-no-text-effects` or `data-no-pointer-lighting` regions
+  stay outside this text animation. Selection and dragging suspend the effects.
+- Keep the real text, semantic elements, accessible names, copying, word wrapping,
+  and live-update comparisons intact. Do not split every message or table cell into
+  permanent letter nodes, or append a second copy of its text. The shared engine uses
+  native text ranges plus a pointer-transparent, `aria-hidden` decorative layer whose
+  glyphs come from CSS-generated content. Animate only a bounded set of nearby glyphs.
+  An inline source wrapper may retain a direct flex text node for browser compatibility;
+  its original node and concatenated `textContent` must remain unchanged.
+- Use grapheme boundaries, preserving accents and emoji. Text requiring contextual
+  shaping and browsers lacking the necessary range/highlight support keep the static
+  finish instead of distorting characters. Existing explicit heading letter sensors
+  may remain, but the shared engine must skip them to avoid applying effects twice.
+- Clear temporary highlights and overlays on pointer exit, press/selection, scrolling,
+  resize, blur, visibility loss, theme/capability changes, and source replacement,
+  removal, or hiding. Follow moving surfaces without moving their hitboxes. Clip
+  decorative glyphs to the visible source region; never paint through menus or dialogs.
+- New themed pages load `textEffects.css` and `textEffects.js` alongside the shared
+  appearance code. Keep this behavior shared, including on pages with a separate
+  button physics engine. Verify Classic, dark/light Glass, reduced motion, touch,
+  copying/accessibility, dynamic text, and unchanged refreshes.
 
 ### Account dropdown + appearance panel
 - Required selectors:

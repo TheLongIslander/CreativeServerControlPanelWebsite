@@ -334,13 +334,19 @@
             button: { light: 1, translate: 14, shadow: 20, skew: 3, scale: 1.03 },
             compact: { light: 1, translate: 7, shadow: 11, skew: 1.75, scale: 1.018 },
             surface: { light: 0.72, translate: 3.5, shadow: 8, skew: 0.65, scale: 1.008 },
+            letter: { light: 1, translate: 3, shadow: 4, skew: 1, scale: 1.07 },
             'input-shell': { light: 0.55, translate: 2, shadow: 5, skew: 0, scale: 1.012 },
             anchored: { light: 0.78, translate: 3.5, shadow: 8, skew: 0.65, scale: 1.008 }
         };
-        const isAvailable = (target) => (
+        const isAvailable = (target, decorativeWithin = null) => (
             target.isConnected
             && !target.matches(':disabled, [aria-disabled="true"]')
-            && !target.closest('[data-no-pointer-lighting], .hidden, [hidden], [inert], [aria-hidden="true"]')
+            && !target.closest('[data-no-pointer-lighting], .hidden, [hidden], [inert]')
+            // Decorative glyphs share one accessible heading label. Their local
+            // aria-hidden wrapper is intentional; hidden panes still block effects.
+            && (!target.closest('[aria-hidden="true"]') || (
+                decorativeWithin && decorativeWithin.contains(target.closest('[aria-hidden="true"]'))
+            ))
             && target.getClientRects().length > 0
             && window.getComputedStyle(target).visibility === 'visible'
         );
@@ -378,15 +384,17 @@
             }
         };
 
-        const applyPointerLighting = (target, event, rect, profile, width = rect.width, height = rect.height) => {
+        const applyPointerLighting = (target, event, rect, profile, width = rect.width, height = rect.height, falloffRadius = null) => {
             // A nested sensor moves with its parent, but its visual must use local
             // coordinates and must never feed its own transform back into measurement.
             const x = (event.clientX - rect.left) * width / rect.width;
             const y = (event.clientY - rect.top) * height / rect.height;
-            const nx = (x - width / 2) / (width / 2);
-            const ny = (y - height / 2) / (height / 2);
+            const nx = (x - width / 2) / (falloffRadius || width / 2);
+            const ny = (y - height / 2) / (falloffRadius || height / 2);
             const dist = Math.min(Math.sqrt(nx * nx + ny * ny), 1);
-            const lightPop = Math.max(0, 1 - dist);
+            const lightPop = falloffRadius
+                ? (1 - dist) * (1 - dist) * (1 + 2 * dist)
+                : Math.max(0, 1 - dist);
             const pop = lightPop * profile.light;
             const translateMax = profile.translate;
             const shadowMax = profile.shadow;
@@ -416,15 +424,24 @@
         const updateNestedVisuals = (target, event) => {
             const nextVisuals = new Map();
             if (event.buttons === 0) {
-                target.querySelectorAll('[data-pointer-sensor="surface"]').forEach((sensor) => {
+                target.querySelectorAll('[data-pointer-sensor="surface"], [data-pointer-sensor="letter"]').forEach((sensor) => {
+                    const isLetter = sensor.dataset.pointerSensor === 'letter';
+                    const decorativeWithin = isLetter ? target : null;
                     const visual = sensor.querySelector('[data-pointer-visual]');
-                    if (!visual || !isAvailable(sensor) || !isAvailable(visual)) return;
+                    if (!visual || !isAvailable(sensor, decorativeWithin) || !isAvailable(visual, decorativeWithin)) return;
                     const rect = sensor.getBoundingClientRect();
-                    if (!rect.width || !rect.height
-                        || event.clientX < rect.left || event.clientX > rect.left + rect.width
+                    if (!rect.width || !rect.height) return;
+                    const width = sensor.clientWidth || rect.width;
+                    const height = sensor.clientHeight || rect.height;
+                    const radius = isLetter ? parseFloat(window.getComputedStyle(sensor).fontSize) || height : null;
+                    if (isLetter) {
+                        const dx = (event.clientX - rect.left) * width / rect.width - width / 2;
+                        const dy = (event.clientY - rect.top) * height / rect.height - height / 2;
+                        if (Math.hypot(dx, dy) >= radius) return;
+                    } else if (event.clientX < rect.left || event.clientX > rect.left + rect.width
                         || event.clientY < rect.top || event.clientY > rect.top + rect.height) return;
-                    applyPointerLighting(visual, event, rect, profiles.surface,
-                        sensor.clientWidth || rect.width, sensor.clientHeight || rect.height);
+                    applyPointerLighting(visual, event, rect, isLetter ? profiles.letter : profiles.surface,
+                        width, height, radius);
                     nextVisuals.set(sensor, visual);
                 });
             }
@@ -506,8 +523,9 @@
                 return;
             }
             activeNestedVisuals.forEach((visual, sensor) => {
+                const decorativeWithin = sensor.dataset.pointerSensor === 'letter' ? currentTarget : null;
                 if (!currentTarget.contains(sensor) || !sensor.contains(visual)
-                    || !isAvailable(sensor) || !isAvailable(visual)) {
+                    || !isAvailable(sensor, decorativeWithin) || !isAvailable(visual, decorativeWithin)) {
                     resetTarget(visual);
                     activeNestedVisuals.delete(sensor);
                 }
@@ -530,6 +548,9 @@
         });
         setupAccountMenu(user, options);
         setupButtonLighting();
+        // Text shares one lazy engine on every page, including the control panel
+        // whose buttons and progress bars have their own pointer handler.
+        window.TextEffects?.init();
     }
 
     window.Appearance = {

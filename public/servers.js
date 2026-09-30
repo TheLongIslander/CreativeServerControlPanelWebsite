@@ -16,6 +16,34 @@
         if (text !== undefined) node.textContent = text;
         return node;
     }
+    function setupTitleLetters() {
+        const heading = document.getElementById('overview-title');
+        if (!heading || heading.querySelector('.overview-title-visual')) return;
+        const title = heading.textContent.trim();
+        const visual = element('span', 'overview-title-visual');
+        visual.setAttribute('aria-hidden', 'true');
+        // Expose one complete heading; the decorative letters keep stable sensors
+        // and wrap at word boundaries instead of shifting as individual glyphs grow.
+        for (const part of title.match(/\S+|\s+/g) || []) {
+            if (/^\s+$/.test(part)) {
+                visual.append(document.createTextNode(part));
+                continue;
+            }
+            const word = element('span', 'overview-title-word');
+            for (const letter of part) {
+                const sensor = element('span', 'overview-title-letter-sensor');
+                sensor.dataset.pointerSensor = 'letter';
+                const glyph = element('span', 'overview-title-letter', letter);
+                glyph.setAttribute('data-pointer-visual', '');
+                sensor.append(glyph);
+                word.append(sensor);
+            }
+            visual.append(word);
+        }
+        heading.setAttribute('aria-label', title);
+        heading.dataset.pointerProfile = 'surface';
+        heading.replaceChildren(visual);
+    }
     function describeState(server) {
         const status = server.status || {};
         if (status.state === 'unavailable' || status.state === 'unknown' || status.error) return 'Status unavailable';
@@ -237,6 +265,7 @@
         global.location.href = '/';
     };
     document.addEventListener('DOMContentLoaded', async () => {
+        setupTitleLetters();
         nodes.tiles = document.getElementById('server-tiles');
         nodes.empty = nodes.tiles.querySelector('.overview-empty') || element('p', 'overview-empty');
         nodes.slots = document.getElementById('server-slots');

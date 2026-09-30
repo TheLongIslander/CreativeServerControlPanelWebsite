@@ -2854,6 +2854,9 @@ function setupPointerLighting() {
 }
 
 document.addEventListener('DOMContentLoaded', async function() {
+    document.getElementById('all-servers-button')?.addEventListener('click', () => {
+        window.location.href = '/servers.html';
+    });
     const user = await loadCurrentUser();
     if (!user) {
         return;

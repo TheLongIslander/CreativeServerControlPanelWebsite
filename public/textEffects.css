@@ -1,0 +1,72 @@
+/* Shared non-button typography. Classic never receives these styles. */
+body[data-ui-theme="glass"] {
+    --text-effect-rim: rgba(255,255,255,.24);
+    --text-effect-edge: rgba(125,139,154,.45);
+    --text-effect-depth: rgba(47,57,69,.65);
+    --text-effect-shadow: rgba(0,0,0,.35);
+    --text-effect-glow: 215, 230, 245;
+}
+body[data-ui-theme="glass"][data-color-scheme="light"] {
+    --text-effect-rim: rgba(255,255,255,.8);
+    --text-effect-edge: rgba(24,43,54,.22);
+    --text-effect-depth: rgba(24,43,54,.14);
+    --text-effect-shadow: rgba(24,43,54,.15);
+    --text-effect-glow: 75, 111, 139;
+}
+@media (prefers-color-scheme: light) {
+    body[data-ui-theme="glass"]:not([data-color-scheme]) {
+        --text-effect-rim: rgba(255,255,255,.8);
+        --text-effect-edge: rgba(24,43,54,.22);
+        --text-effect-depth: rgba(24,43,54,.14);
+        --text-effect-shadow: rgba(24,43,54,.15);
+        --text-effect-glow: 75, 111, 139;
+    }
+}
+@layer glass-text {
+    body[data-ui-theme="glass"] :where(*):not(:where(
+        button, button *, [role="button"], [role="button"] *,
+        input, textarea, select, option, [contenteditable], [contenteditable] *,
+        svg, svg *, canvas, [data-no-pointer-lighting], [data-no-pointer-lighting] *,
+        [data-no-text-effects], [data-no-text-effects] *
+    )) {
+        text-shadow: 0 -.02em 0 var(--text-effect-rim),
+            0 .025em 0 var(--text-effect-edge), 0 .045em 0 var(--text-effect-depth),
+            0 .07em .1em var(--text-effect-shadow);
+    }
+    /* Stop inheritance into controls while letting their existing, unlayered
+       component styles keep their own text treatment. */
+    body[data-ui-theme="glass"] :where(button, [role="button"], input, textarea,
+        select, option, [contenteditable], svg, canvas, [data-no-pointer-lighting], [data-no-text-effects]) {
+        text-shadow: none;
+    }
+}
+/* The actual text stays in place for layout, copying, accessibility and live updates.
+   Only the few glyphs under the pointer are painted by this decorative layer. */
+.glass-text-effects-overlay {
+    position: fixed; inset: 0; z-index: 2147483000;
+    pointer-events: none !important; user-select: none; -webkit-user-select: none;
+    overflow: hidden; contain: layout style paint;
+}
+.glass-text-effect-glyph {
+    position: absolute; display: block; margin: 0; padding: 0; border: 0;
+    white-space: pre; pointer-events: none !important;
+    transform: var(--text-source-transform, none); transform-origin: 0 0;
+}
+.glass-text-effect-glyph::before { content: attr(data-text); display: block; transform-origin: 50% 65%; }
+.glass-text-effect-glyph[hidden] { display: none; }
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    body[data-ui-theme="glass"] .glass-text-effect-glyph::before {
+        transform: translate(var(--text-tx, 0px), var(--text-ty, 0px)) scale(var(--text-scale, 1));
+        text-shadow: 0 -.02em 0 var(--text-effect-rim),
+            0 .025em 0 var(--text-effect-edge), 0 .045em 0 var(--text-effect-depth),
+            var(--text-sx, 0px) calc(.07em + var(--text-sy, 0px)) .1em var(--text-effect-shadow),
+            0 0 calc(.05em + .16em * var(--text-pop, 0)) rgba(var(--text-effect-glow), calc(.3 * var(--text-pop, 0)));
+    }
+    body[data-ui-theme="glass"] ::highlight(glass-text-effects-active) {
+        color: transparent; text-shadow: none;
+    }
+}
+body:not([data-ui-theme="glass"]) .glass-text-effects-overlay { display: none; }
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+    .glass-text-effects-overlay { display: none; }
+}

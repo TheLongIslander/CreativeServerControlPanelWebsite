@@ -32,7 +32,9 @@ function target(profile) {
     isConnected: true,
     disabled: false,
     hiddenAncestor: false,
+    ariaHiddenAncestor: null,
     visibility: 'visible',
+    fontSize: '40px',
     children: [],
     rect: { left: 20, top: 40, width: 200, height: 100 },
     classList: {
@@ -50,11 +52,15 @@ function target(profile) {
     removeAttribute() {},
     matches: () => node.disabled,
     closest(selector) {
+      if (selector === '[aria-hidden="true"]') return node.ariaHiddenAncestor;
       return selector.startsWith('[data-no-pointer-lighting]')
         ? (node.hiddenAncestor ? node : null)
         : node;
     },
-    querySelectorAll: () => node.children.filter((child) => child.dataset.pointerSensor === 'surface'),
+    querySelectorAll: (selector) => node.children.flatMap((child) => [
+      ...(child.dataset.pointerSensor && selector.includes(`[data-pointer-sensor="${child.dataset.pointerSensor}"]`) ? [child] : []),
+      ...child.querySelectorAll(selector)
+    ]),
     querySelector: () => node.children.find((child) => child.dataset.pointerVisual !== undefined) || null,
     contains: (child) => node === child || node.children.some((entry) => entry.contains(child)),
     getClientRects: () => node.isConnected && !node.hiddenAncestor ? [node.rect] : [],
@@ -89,7 +95,7 @@ function harness({ theme = 'glass', fine = true, reduced = false, controlPanel =
   const window = {
     ...events(), document,
     matchMedia: (query) => query.includes('prefers-reduced-motion') ? reducedQuery : fineQuery,
-    getComputedStyle: (node) => ({ visibility: node.visibility })
+    getComputedStyle: (node) => ({ visibility: node.visibility, fontSize: node.fontSize })
   };
   let notifyMutation = () => {};
   vm.runInNewContext(source, {
@@ -137,6 +143,118 @@ test('shared lighting gives anchored and surface cards restrained depth while pr
   assertReset(anchored);
   assert.equal(surface.style.getPropertyValue('--pop'), '0.720');
   assert.equal(surface.style.getPropertyValue('--scale'), '1.006');
+});
+
+function letterHeading() {
+  const heading = target('surface');
+  heading.rect = { left: 20, top: 40, width: 240, height: 48 };
+  const wrapper = target();
+  heading.children.push(wrapper);
+  const letters = [50, 80, 170].map((left) => {
+    const pair = nestedSurface(wrapper, { left, top: 40, width: 20, height: 48 });
+    pair.sensor.dataset.pointerSensor = 'letter';
+    pair.sensor.ariaHiddenAncestor = wrapper;
+    pair.visual.ariaHiddenAncestor = wrapper;
+    pair.visual.getBoundingClientRect = () => assert.fail('moving glyphs must not determine their hover region');
+    return pair;
+  });
+  return { heading, wrapper, letters };
+}
+
+test('heading glyphs expand independently with a smooth proximity glow through their decorative wrapper', () => {
+  const h = harness();
+  const { heading, letters: [first, next, distant] } = letterHeading();
+  h.move(heading, { clientX: 60, clientY: 64 });
+  assert.equal(first.visual.classList.contains('is-lit'), true);
+  assert.equal(first.visual.style.getPropertyValue('--pop'), '1.000');
+  assert.equal(first.visual.style.getPropertyValue('--scale'), '1.070');
+  assert.equal(next.visual.classList.contains('is-lit'), true, 'neighbor responds outside its glyph hitbox');
+  assert.equal(next.visual.style.getPropertyValue('--pop'), '0.156');
+  assert.equal(next.visual.style.getPropertyValue('--scale'), '1.011');
+  assert.equal(distant.visual.classList.contains('is-lit'), false);
+  assert.equal(first.sensor.style.getPropertyValue('--scale'), '', 'glyph sensor never moves');
+  assert.equal(heading.style.getPropertyValue('transform'), '', 'heading layout remains stationary');
+  h.mutation([{ target: heading, type: 'childList' }]);
+  assert.equal(first.visual.classList.contains('is-lit'), true, 'decorative wrapper is not mistaken for a closed pane');
+
+  h.move(heading, { clientX: 80, clientY: 64 });
+  assert.equal(first.visual.style.getPropertyValue('--pop'), '0.500');
+  assert.equal(first.visual.style.getPropertyValue('--tx'), '0.75px');
+  assert.equal(first.visual.style.getPropertyValue('--sx'), '-1.00px');
+  assert.equal(first.visual.style.getPropertyValue('--sky'), '-0.25deg');
+  h.move(heading, { clientX: 99, clientY: 64 });
+  assert.equal(first.visual.style.getPropertyValue('--pop'), '0.002', 'falloff approaches zero without a minimum brightness');
+  assert.equal(first.visual.style.getPropertyValue('--scale'), '1.000');
+  h.move(heading, { clientX: 100, clientY: 64 });
+  assertReset(first.visual);
+  assert.equal(next.visual.classList.contains('is-lit'), true);
+});
+
+test('glyph effects respect availability and cannot illuminate arbitrary aria-hidden surfaces', () => {
+  const h = harness();
+  const { heading, wrapper, letters: [first] } = letterHeading();
+  first.sensor.dataset.pointerSensor = 'surface';
+  h.move(heading, { clientX: 60, clientY: 64 });
+  assert.equal(first.visual.classList.contains('is-lit'), false, 'decorative exception is limited to glyphs');
+  first.sensor.dataset.pointerSensor = 'letter';
+  h.move(heading, { clientX: 60, clientY: 64 });
+  assert.equal(first.visual.classList.contains('is-lit'), true);
+  const inaccessiblePane = target();
+  wrapper.ariaHiddenAncestor = inaccessiblePane;
+  heading.ariaHiddenAncestor = inaccessiblePane;
+  h.mutation([{ target: inaccessiblePane, attributeName: 'aria-hidden' }]);
+  assertReset(first.visual);
+  assertReset(heading);
+
+  for (const invalidate of [
+    ({ heading }) => { heading.hiddenAncestor = true; },
+    ({ sensor }) => { sensor.hiddenAncestor = true; },
+    ({ visual }) => { visual.hiddenAncestor = true; },
+    ({ visual }) => { visual.visibility = 'hidden'; },
+    ({ sensor }) => { sensor.disabled = true; },
+    ({ visual }) => { visual.isConnected = false; },
+    ({ heading }) => { heading.children.length = 0; }
+  ]) {
+    const check = harness();
+    const { heading, letters: [{ sensor, visual }] } = letterHeading();
+    check.move(heading, { clientX: 60, clientY: 64 });
+    invalidate({ heading, sensor, visual });
+    check.mutation([{ target: sensor }]);
+    assertReset(visual);
+  }
+});
+
+test('glyphs remain still in Classic, reduced motion, coarse/touch input and during text selection', () => {
+  for (const options of [{ theme: 'flat' }, { fine: false }, { reduced: true }]) {
+    const h = harness(options);
+    const { heading, letters: [{ visual }] } = letterHeading();
+    h.move(heading, { clientX: 60, clientY: 64 });
+    assert.equal(visual.classList.contains('is-lit'), false);
+    assert.equal(visual.style.getPropertyValue('--scale'), '');
+  }
+  for (const exit of [
+    (h, heading) => h.move(heading, { clientX: 60, clientY: 64, buttons: 1 }),
+    (h, heading) => h.move(heading, { clientX: 60, clientY: 64, pointerType: 'touch' }),
+    (h, heading) => h.move(heading, { clientX: 60, clientY: 64, pointerType: 'pen' }),
+    (h) => h.document.emit('scroll'),
+    (h) => h.window.emit('blur'),
+    (h) => h.document.emit('pointerleave'),
+    (h) => h.document.emit('ui-pointer-lighting-reset'),
+    (h) => { h.reducedQuery.matches = true; h.reducedQuery.emit('change'); },
+    (h) => { h.fineQuery.matches = false; h.fineQuery.emit('change'); },
+    (h) => { h.document.hidden = true; h.document.emit('visibilitychange'); },
+    (h) => {
+      h.body.dataset.uiTheme = 'flat';
+      h.mutation([{ target: h.body, attributeName: 'data-ui-theme' }]);
+    }
+  ]) {
+    const h = harness();
+    const { heading, letters: [{ visual }] } = letterHeading();
+    h.move(heading, { clientX: 60, clientY: 64 });
+    exit(h, heading);
+    assertReset(visual);
+    assertReset(heading);
+  }
 });
 
 test('Classic, coarse pointers, reduced motion, touch, pen and disabled controls receive no lighting', () => {

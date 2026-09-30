@@ -5,16 +5,22 @@
     <base href="/">
     <title>Server Control Panel</title>
     <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260505-10">
+    <link rel="stylesheet" href="textEffects.css?v=20260930-1">
     <link rel="stylesheet" href="chat.css?v=20260828-4">
     <link rel="stylesheet" href="playerCenter.css?v=20260831-14">
     <link rel="stylesheet" href="windowMotion.css?v=20260831-2">
-    <link rel="stylesheet" href="servers.css">
+    <link rel="stylesheet" href="servers.css?v=20260930-13">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body class="control-panel">
     <header>
-        <a class="all-servers-link" href="/servers.html">← All servers</a>
+        <div class="all-servers-nav">
+            <button id="all-servers-button" class="overview-brand" type="button">
+                <img class="overview-logo" src="/assets/server-tiles/creative.png" alt="" width="38" height="38">
+                <span>USE Servers</span>
+            </button>
+        </div>
         <div class="account-container">
             <button id="account-button"
                     type="button"
@@ -348,9 +354,10 @@
     </div>
 
     <script src="serverContext.js"></script>
-    <script src="appearance.js?v=20260831-1"></script>
+    <script src="textEffects.js?v=20260930-1"></script>
+    <script src="appearance.js?v=20260930-4"></script>
     <script src="serverChat.js?v=20260831-1"></script>
     <script src="playerCenter.js?v=20260928-1"></script>
-    <script src="script.js?v=20260831-8&amp;pc=20260831-17"></script>
+    <script src="script.js?v=20260930-1&amp;pc=20260831-17"></script>
 </body>
 </html>
