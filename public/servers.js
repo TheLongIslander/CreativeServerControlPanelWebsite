@@ -9,6 +9,7 @@
     let openSlotPopup = null;
     const nodes = {};
     const tilesById = new Map();
+    const serverOrder = ['default', 'pogeg', 'moddedserver4', 'abhihardcoreworld'];
     const tileImages = Object.freeze({
         default: '/assets/server-tiles/creative.png',
         pogeg: '/assets/server-tiles/pogeg-farm.png',
@@ -290,7 +291,14 @@
             tilesById.get(id).aura?.destroy();
             tilesById.delete(id);
         }
-        const tiles = servers.map((server, index) => {
+        const orderedServers = [...servers].sort((a, b) => {
+            const rank = id => {
+                const index = serverOrder.indexOf(id);
+                return index === -1 ? serverOrder.length : index;
+            };
+            return rank(a.id) - rank(b.id);
+        });
+        const tiles = orderedServers.map((server, index) => {
             let entry = tilesById.get(server.id);
             if (!entry) {
                 entry = createTile(server);
