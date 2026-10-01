@@ -209,13 +209,32 @@ body[data-ui-theme="flat"] .server-tile-visual { animation: none; }
 body[data-ui-theme="flat"] .server-tile-info-sensor { width: 100%; margin: auto 0 0; }
 body[data-ui-theme="flat"] .server-tile-info { padding: 14px 18px; border: 0; border-top: 1px solid var(--tile-border); border-radius: 0; background: var(--tile-panel-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 body[data-ui-theme="glass"] .server-tile-visual { box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.2), inset 0 -1px 0 rgba(0,0,0,.16); }
+body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .overview-toolbar { margin-bottom: 40px; }
+body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tiles { gap: 64px 80px; }
+@media (min-width: 641px) {
+    body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .overview-main { width: min(1162px, 94%); }
+}
+@media (min-width: 1194px) {
+    body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile {
+        flex-basis: calc((100% - 160px) / 3); max-width: 334px;
+    }
+}
+/* Expanded decorative surfaces must not create sideways scrolling on phones. */
+html:has(> body.server-overview[data-ui-theme="glass"]:not([data-server-tile-style="still"])),
+body.server-overview[data-ui-theme="glass"]:not([data-server-tile-style="still"]) { overflow-x: clip; }
 body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile .server-tile-visual {
     --tile-edge-mask: url('../assets/server-tiles/glass-edge-mask.svg?v=2');
+    /* 334/242 and 510/418 compensate for the contour's 46px inset. JS supplies
+       exact pixel sizes for the live renderer and its cached halo. */
+    --tile-art-width: 138.016529%; --tile-art-height: 122.009569%;
+    --tile-art-left: -19.008264%; --tile-art-top: -11.004785%;
     border-color: transparent; background: transparent; box-shadow: none; overflow: visible;
 }
 /* Static fallback until the live SVG contour is ready. Controls remain outside the mask. */
 body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-mark,
 body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-visual::before {
+    inset: auto; left: var(--tile-art-left); top: var(--tile-art-top);
+    width: var(--tile-art-width); height: var(--tile-art-height);
     -webkit-mask-image: var(--tile-edge-mask);
     mask-image: var(--tile-edge-mask);
     -webkit-mask-size: 100% 100%;
@@ -223,9 +242,18 @@ body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-v
     -webkit-mask-repeat: no-repeat;
     mask-repeat: no-repeat;
 }
-.server-tile-aura { display: none; }
-body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-aura {
-    display: block; position: absolute; inset: 0; width: 100%; height: 100%;
+body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-mark:not(.has-image) { padding-top: calc(70px - var(--tile-art-top)); }
+.server-tile-aura, .server-tile-foreground { display: none; }
+.server-tile-halo { display: none; }
+body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-halo {
+    display: block; position: absolute; left: calc(var(--tile-art-left) - 40px); top: calc(var(--tile-art-top) - 40px);
+    width: calc(var(--tile-art-width) + 80px); height: calc(var(--tile-art-height) + 80px);
+    z-index: -2; pointer-events: none;
+}
+body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-aura,
+body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .server-tile-foreground {
+    display: block; position: absolute; left: var(--tile-art-left); top: var(--tile-art-top);
+    width: var(--tile-art-width); height: var(--tile-art-height);
     z-index: -1; overflow: visible; pointer-events: none;
 }
 body[data-ui-theme="glass"]:not([data-server-tile-style="still"]) .has-live-aura > .server-tile-mark { visibility: hidden; }

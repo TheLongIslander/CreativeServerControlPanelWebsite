@@ -1,6 +1,9 @@
 (function serverTileAura(global) {
     'use strict';
     const NS = 'http://www.w3.org/2000/svg';
+    const bounds = global.ServerTileContour.bounds;
+    const bodyWidth = bounds.width - 2 * bounds.inset;
+    const bodyHeight = bounds.height - 2 * bounds.inset;
     const contourInterval = 1 / 15;
     const interactionInterval = 1 / 30;
     const records = new Set();
@@ -15,6 +18,7 @@
     let resize;
     let pointer = null;
     let pointerDirty = false;
+    let interactionStreak = 0;
 
     function svg(tag, attributes = {}, children = []) {
         const node = document.createElementNS(NS, tag);
@@ -30,9 +34,12 @@
         return [...records].filter(record => record.visible && record.visual.isConnected);
     }
     function resetRecord(record) {
+        record.nextPaint = null;
+        record.paintInterval = null;
+        record.sincePaint = 0;
         if (!record.contour.isInteracting()) return;
         record.contour.resetInteraction();
-        record.path.setAttribute('d', record.contour.path(record.elapsed));
+        record.paint(record.contour.path(record.elapsed));
     }
     function resetInteractions() {
         pointer = null;
@@ -58,18 +65,20 @@
                 continue;
             }
             record.contour.setPointer(
-                (pointer.x - rect.left) * 334 / rect.width,
-                (pointer.y - rect.top) * 510 / rect.height
+                bounds.inset + (pointer.x - rect.left) * bodyWidth / rect.width,
+                bounds.inset + (pointer.y - rect.top) * bodyHeight / rect.height
             );
         }
     }
     function schedule() {
+        for (const record of records) record.updateHalo?.();
         if (canAnimate() && visibleRecords().length) {
             if (frame === null) frame = global.requestAnimationFrame(tick);
         } else {
             if (frame !== null) global.cancelAnimationFrame(frame);
             frame = null;
             lastFrame = null;
+            interactionStreak = 0;
             resetInteractions();
         }
     }
@@ -78,27 +87,57 @@
         const active = visibleRecords();
         if (!canAnimate() || !active.length) { lastFrame = null; return; }
         updatePointer(active);
-        // Slow ambient motion uses 15fps; only a pulled or settling edge gets
-        // 30fps. Keep at most one SVG repaint per display frame in either case.
-        if (lastFrame === null) lastFrame = now;
-        const delta = Math.min(now - lastFrame, 100) / 1000;
+        // Preserve deadline phase across callbacks: discarding a few milliseconds
+        // after every paint turns a 30Hz target into ~20Hz on a 60Hz display.
+        // Long stalls start a fresh schedule instead of accumulating catch-up work.
+        const gap = lastFrame === null ? 0 : Math.max(0, now - lastFrame);
+        if (gap > 100) {
+            for (const record of active) {
+                record.nextPaint = null;
+                record.paintInterval = null;
+                record.sincePaint = 0;
+            }
+            interactionStreak = 0;
+        }
+        const delta = gap > 100 ? 0 : gap / 1000;
         lastFrame = now;
-        let next = null;
-        let mostOverdue = 0;
+        let interacting = null;
+        let ambient = null;
         for (const record of active) {
             record.elapsed += delta;
             record.sincePaint += delta;
             record.contour.advance(delta);
-            const interval = record.contour.isInteracting() ? interactionInterval : contourInterval;
-            const overdue = record.sincePaint / interval;
-            if (overdue >= 1 && overdue > mostOverdue) {
-                next = record;
-                mostOverdue = overdue;
+            const isInteracting = record.contour.isInteracting();
+            const interval = isInteracting ? interactionInterval : contourInterval;
+            if (record.nextPaint == null) record.nextPaint = record.elapsed - delta + interval;
+            else if (record.paintInterval !== interval) {
+                // An entering or settling interaction adopts its faster cadence
+                // from the last paint, without carrying ambient scheduling debt.
+                record.nextPaint = record.elapsed - record.sincePaint + interval;
+            }
+            record.paintInterval = interval;
+            // Tolerate numerical rounding at exact 60/120Hz boundaries.
+            if (record.elapsed + 1e-6 < record.nextPaint) continue;
+            if (isInteracting) {
+                if (!interacting || record.sincePaint > interacting.sincePaint) interacting = record;
+            } else if (!ambient || record.sincePaint > ambient.sincePaint) {
+                ambient = record;
             }
         }
+        // At most one SVG repaint per callback. Interactions receive first choice,
+        // but reserve every third opportunity for ambient work under overload.
+        // Oldest-painted selection shares each class fairly, including settling edges.
+        const next = interacting && (!ambient || interactionStreak < 2) ? interacting : ambient;
         if (next) {
-            next.path.setAttribute('d', next.contour.path(next.elapsed));
+            next.paint(next.contour.path(next.elapsed));
+            const interval = next.paintInterval;
+            // Preserve one pending deadline so jitter can recover its phase even
+            // when nominal demand fills every callback. Drop older periods under
+            // sustained overload: no tile can accumulate more than one paint owed.
+            const skipped = Math.floor(Math.max(0, next.elapsed + 1e-6 - next.nextPaint) / interval);
+            next.nextPaint += Math.max(1, skipped) * interval;
             next.sincePaint = 0;
+            interactionStreak = next === interacting ? Math.min(2, interactionStreak + 1) : 0;
         }
         frame = global.requestAnimationFrame(tick);
     }
@@ -128,7 +167,12 @@
         document.addEventListener('pointercancel', resetInteractions);
         document.addEventListener('scroll', resetInteractions, { capture: true, passive: true });
         document.addEventListener('ui-pointer-lighting-reset', resetInteractions);
-        global.addEventListener('resize', resetInteractions);
+        global.addEventListener('resize', () => {
+            resetInteractions();
+            // A display-density change can resize canvas backing stores even
+            // when the tile's CSS dimensions (and ResizeObserver) stay unchanged.
+            for (const record of records) record.resize();
+        });
         global.addEventListener('blur', resetInteractions);
         if (global.IntersectionObserver) {
             intersection = new global.IntersectionObserver(entries => {
@@ -158,7 +202,8 @@
         const reference = suffix => `${global.location.href.split('#')[0]}#${id}-${suffix}`;
         const paint = suffix => `url(${JSON.stringify(reference(suffix))})`;
         const contour = global.ServerTileContour.create();
-        const path = svg('path', { d: contour.path(0), fill: 'white', filter: paint('feather') });
+        const restingPath = contour.path(0);
+        const path = svg('path', { d: restingPath, fill: 'white', filter: paint('feather') });
         const initial = svg('text', { class: 'server-tile-aura-initial', x: 167, y: 154, 'text-anchor': 'middle', fill: '#c3faf3', 'font-size': 100, 'font-weight': 700 });
         const contained = imageFit === 'contain';
         const image = svg('image', { width: 334, height: 510, preserveAspectRatio: contained ? 'xMidYMid meet' : 'xMidYMid slice' });
@@ -190,13 +235,53 @@
             glow, mask, art
         ]);
         const maskedArt = () => svg('g', { mask: paint('mask') }, [svg('use', { href: reference('art') })]);
+        const foreground = svg('g', { filter: paint('glow') }, [maskedArt()]);
         const surface = svg('svg', {
             class: 'server-tile-aura', viewBox: '0 0 334 510', preserveAspectRatio: 'none',
             'aria-hidden': 'true', focusable: 'false'
-        }, [defs, svg('g', { filter: paint('glow') }, [maskedArt()])]);
+        }, [defs, foreground]);
+        let source;
+        let letter = '';
+        let halo = null;
+        let artworkWidth;
+        let artworkHeight;
+        let initialY;
+        function paintContour(data) {
+            path.setAttribute('d', data);
+            // Both renderers follow the same scheduled contour. Reading back d
+            // also keeps the diagnostic's frozen-path mode consistent on Safari.
+            halo?.setPath?.(path.getAttribute('d'));
+        }
+        function refreshHalo() {
+            if (!halo) return;
+            const enabled = !suspended && !document.hidden && record.visible && visual.isConnected
+                && document.body.dataset.uiTheme === 'glass' && document.body.dataset.serverTileStyle !== 'still';
+            halo.setEnabled(enabled);
+            if (!enabled) return;
+            const stops = defs.children[0].children;
+            halo.update({
+                width: artworkWidth, height: artworkHeight,
+                path: restingPath, source, label: letter, initialY, contained, imageBackground,
+                tint: global.getComputedStyle(stops[0]).stopColor,
+                depth: global.getComputedStyle(stops[1]).stopColor,
+                initialColor: global.getComputedStyle(initial).fill,
+                fontFamily: global.getComputedStyle(initial).fontFamily
+            });
+        }
         function fit() {
-            const width = visual.clientWidth || 334;
-            const height = visual.clientHeight || 510;
+            const slotWidth = visual.clientWidth || bounds.width;
+            const slotHeight = visual.clientHeight || bounds.height;
+            // The contour's inset reserves space for feathering and deformation.
+            // Enlarge only the artwork so its visible body fills the Still tile's
+            // footprint; layout, controls and pointer hitboxes keep their size.
+            const width = artworkWidth = slotWidth * bounds.width / bodyWidth;
+            const height = artworkHeight = slotHeight * bounds.height / bodyHeight;
+            const left = (slotWidth - width) / 2;
+            const top = (slotHeight - height) / 2;
+            visual.style.setProperty('--tile-art-width', `${width}px`);
+            visual.style.setProperty('--tile-art-height', `${height}px`);
+            visual.style.setProperty('--tile-art-left', `${left}px`);
+            visual.style.setProperty('--tile-art-top', `${top}px`);
             surface.setAttribute('viewBox', `0 0 ${width} ${height}`);
             // Resize the mask independently; artwork retains its chosen aspect fit.
             outline.setAttribute('transform', `scale(${width / 334} ${height / 510})`);
@@ -205,41 +290,58 @@
                 node.setAttribute('height', height);
             }
             initial.setAttribute('x', width / 2);
+            initialY = 154 - top;
+            initial.setAttribute('y', initialY);
             glow.setAttribute('width', width + 80);
             glow.setAttribute('height', height + 80);
             // Re-evaluate a stationary pointer after responsive layout changes.
             if (pointer) pointerDirty = true;
+            refreshHalo();
         }
         visual.append(surface);
         visual.classList.add('has-live-aura');
-        const record = { visual, surface, contour, path, visible: !intersection, resize: fit, elapsed: 0, sincePaint: 0 };
+        if (global.ServerTileHalo?.isPreferred()) {
+            halo = global.ServerTileHalo.create(visual, ready => {
+                if (ready) foreground.removeAttribute('filter');
+                else foreground.setAttribute('filter', paint('glow'));
+                const cachedForeground = ready && !!halo?.setPath;
+                surface.style.display = cachedForeground ? 'none' : '';
+                surface.dataset.auraForeground = cachedForeground ? 'canvas' : 'svg';
+                surface.dataset.auraRenderer = ready ? 'cached-halo' : 'svg';
+            });
+        }
+        const record = { visual, surface, contour, path, paint: paintContour, visible: !intersection, resize: fit, updateHalo: refreshHalo, elapsed: 0, sincePaint: 0 };
         records.add(record);
         fit();
+        paintContour(restingPath);
         resize?.observe(visual);
         intersection?.observe(visual);
         schedule();
         // createTile mounts synchronously after create(); IO normally reports that mount.
         if (!intersection) global.queueMicrotask?.(schedule);
-        let source;
         return {
             setArtwork(url, label) {
-                const letter = label.slice(0, 1).toUpperCase();
+                letter = label.slice(0, 1).toUpperCase();
                 if (initial.textContent !== letter) initial.textContent = letter;
-                if (url === source) return;
+                if (url === source) { refreshHalo(); return; }
                 source = url;
                 background.setAttribute('fill', url && contained ? imageBackground : paint('fallback'));
                 background.setAttribute('visibility', url && !contained ? 'hidden' : 'visible');
                 initial.setAttribute('visibility', url ? 'hidden' : 'visible');
                 if (url) image.setAttribute('href', url);
                 else image.removeAttribute('href');
+                refreshHalo();
             },
+            refreshAppearance: refreshHalo,
             destroy() {
+                halo?.destroy();
                 record.contour.resetInteraction();
                 intersection?.unobserve(visual);
                 resize?.unobserve(visual);
                 records.delete(record);
                 surface.remove();
                 visual.classList.remove('has-live-aura');
+                for (const property of ['width', 'height', 'left', 'top']) visual.style.removeProperty(`--tile-art-${property}`);
                 schedule();
             }
         };

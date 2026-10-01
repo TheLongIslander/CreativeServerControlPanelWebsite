@@ -300,6 +300,8 @@
         });
         if (tiles.length) syncChildren(nodes.tiles, tiles);
         else showEmpty('No servers are available to your account. An admin can add a server or update your access.');
+        // Fallback artwork colors depend on final nth-child order after reconciliation.
+        for (const entry of tilesById.values()) entry.aura?.refreshAppearance?.();
         if (activeEntry && tilesById.has(activeEntry.server.id) && activeEntry.tile.contains(activeElement)
             && document.activeElement !== activeElement) activeElement.focus({ preventScroll: true });
     }

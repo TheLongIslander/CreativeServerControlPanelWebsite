@@ -35,7 +35,11 @@ function element(tagName = 'div') {
   const classes = new Set();
   return {
     ...events(), tagName, attributes, writes: [], children: [], dataset: {},
-    isConnected: true, parentNode: null, textContent: '', style: {}, geometryReads: 0,
+    isConnected: true, parentNode: null, textContent: '',
+    style: {
+      setProperty(name, value) { this[name] = value; },
+      removeProperty(name) { delete this[name]; }
+    }, geometryReads: 0,
     get parentElement() { return this.parentNode; },
     getBoundingClientRect() {
       this.geometryReads++;
@@ -80,7 +84,7 @@ function find(node, tagName) {
   return descendants(node).find(child => child.tagName === tagName);
 }
 
-function harness({ theme = 'glass', serverTileStyle, reduced = false, fine = true, hidden = false, observer = true, resizeObserver = false, seed = 73 } = {}) {
+function harness({ theme = 'glass', serverTileStyle, reduced = false, fine = true, hidden = false, observer = true, resizeObserver = false, cachedHalo = false, seed = 73 } = {}) {
   const body = element('body');
   body.dataset.uiTheme = theme;
   if (serverTileStyle !== undefined) body.dataset.serverTileStyle = serverTileStyle;
@@ -97,9 +101,11 @@ function harness({ theme = 'glass', serverTileStyle, reduced = false, fine = tru
   const intersections = [];
   const resizes = [];
   const mutations = [];
+  const halos = [];
   let nextFrame = 0;
   const window = {
     ...events(), document, location,
+    getComputedStyle: node => ({ stopColor: node.getAttribute('stop-color'), fill: node.getAttribute('fill'), fontFamily: 'sans-serif' }),
     queueMicrotask: callback => microtasks.push(callback),
     matchMedia: query => query.includes('prefers-reduced-motion') ? motion : finePointer,
     requestAnimationFrame(callback) {
@@ -110,6 +116,20 @@ function harness({ theme = 'glass', serverTileStyle, reduced = false, fine = tru
     cancelAnimationFrame(id) {
       cancelled.push(id);
       frames.delete(id);
+    }
+  };
+  if (cachedHalo) window.ServerTileHalo = {
+    isPreferred: () => true,
+    create(visual, onReady) {
+      const halo = {
+        visual, onReady, enabled: false, updates: [], paths: [], disposed: false,
+        setEnabled(value) { this.enabled = value; },
+        update(snapshot) { this.updates.push(snapshot); },
+        setPath(data) { this.paths.push(data); },
+        destroy() { this.disposed = true; }
+      };
+      halos.push(halo);
+      return halo;
     }
   };
   if (observer) {
@@ -166,7 +186,7 @@ function harness({ theme = 'glass', serverTileStyle, reduced = false, fine = tru
   };
   vm.runInContext(auraSource, context);
   return {
-    window, document, body, motion, finePointer, frames, microtasks, cancelled, intersections, mutations, resizes,
+    window, document, body, motion, finePointer, frames, microtasks, cancelled, intersections, mutations, resizes, halos,
     create(dimensions = {}) {
       const visual = element();
       Object.assign(visual, dimensions);
@@ -207,6 +227,35 @@ function harness({ theme = 'glass', serverTileStyle, reduced = false, fine = tru
       document.emit('pointermove', { clientX: x, clientY: y, pointerType: 'mouse', buttons: 0, ...extra });
     }
   };
+}
+
+function measureCadence({ displayRate, tileCount, interactingCount = 0, jitter = 0 }) {
+  const h = harness();
+  const tiles = Array.from({ length: tileCount }, (_, index) => h.create({
+    rect: { left: index < interactingCount ? 0 : (index + 1) * 450, top: 0, width: 334, height: 510 }
+  }));
+  for (const tile of tiles) h.intersect(tile.visual, true);
+  if (interactingCount) h.pointer(314, 255);
+  h.frame(0);
+  const paintTimes = tiles.map(() => []);
+  const noise = random(123456789);
+  // Two seconds of warmup remove initial phase alignment from the measurement.
+  for (let frame = 1; frame <= displayRate * 6 + 1; frame++) {
+    const now = frame * 1000 / displayRate + (noise() * 2 - 1) * jitter;
+    for (const tile of tiles) tile.path.writes.length = 0;
+    h.frame(now);
+    assert.ok(tiles.reduce((sum, tile) => sum + tile.path.writes.length, 0) <= 1,
+      `at most one contour paint per ${displayRate}Hz callback`);
+    assert.equal(h.frames.size, 1, 'only one shared callback is pending');
+    tiles.forEach((tile, index) => {
+      if (tile.path.writes.length && now > 2000 && now <= 6000) paintTimes[index].push(now);
+    });
+  }
+  tiles.forEach((tile, index) => assert.equal(tile.contour.model.isInteracting(), index < interactingCount));
+  return paintTimes.map(times => {
+    const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
+    return { count: times.length, rate: times.length / 4, p95: gaps[Math.ceil(gaps.length * .95) - 1], max: gaps.at(-1) };
+  });
 }
 
 test('aura updates the actual contour while artwork and tile geometry stay fixed', () => {
@@ -253,36 +302,19 @@ test('visible tiles share one frame loop and stagger their contour paints', () =
   assert.equal(h.mutations.length, 1, 'tiles share the theme observer');
 });
 
-test('contour paints stay below 15fps per tile without starving tiles at different display rates', () => {
+test('ambient contour pacing retains its phase and shares overloaded callbacks fairly', () => {
   for (const displayRate of [30, 60, 120]) {
-    for (const tileCount of [3, 8]) {
-      const h = harness();
-      const tiles = Array.from({ length: tileCount }, () => h.create());
-      const paintTimes = tiles.map(() => []);
-      for (const tile of tiles) h.intersect(tile.visual, true);
-      h.frame(0);
-      for (const tile of tiles) tile.path.writes.length = 0;
-      for (let frame = 1; frame <= displayRate * 2; frame++) {
-        const time = frame * 1000 / displayRate;
-        const writesBefore = tiles.map(tile => tile.path.writes.length);
-        h.frame(time);
-        let painted = 0;
-        tiles.forEach((tile, index) => {
-          const newWrites = tile.path.writes.length - writesBefore[index];
-          painted += newWrites;
-          if (newWrites) paintTimes[index].push(time);
-        });
-        assert.ok(painted <= 1, `at most one contour paint per ${displayRate}Hz display frame`);
-        assert.equal(h.frames.size, 1, 'the manager keeps only one pending callback');
-      }
-      const counts = paintTimes.map(times => times.length);
-      assert.ok(Math.min(...counts) >= 3, 'every visible tile continues animating');
-      assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, 'paint opportunities are shared fairly');
-      for (const times of paintTimes) {
-        assert.ok(times.length <= 30, 'each tile paints at most 30 times in two seconds');
-        for (let index = 1; index < times.length; index++) {
-          assert.ok(times[index] - times[index - 1] >= 1000 / 15 - 1e-6,
-            'successive paints for a tile are at least one contour interval apart');
+    for (const tileCount of [3, 4, 8]) {
+      for (const jitter of [0, .6]) {
+        const metrics = measureCadence({ displayRate, tileCount, jitter });
+        const target = Math.min(15, displayRate / tileCount);
+        const counts = metrics.map(metric => metric.count);
+        assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, 'ambient tiles share capacity equally');
+        for (const metric of metrics) {
+          assert.ok(Math.abs(metric.rate - target) <= .25,
+            `${displayRate}Hz/${tileCount} tiles/jitter ${jitter}: ${metric.rate} approaches ${target}`);
+          assert.ok(metric.p95 <= Math.max(1000 / 15 + 2000 / displayRate, tileCount * 1000 / displayRate) + 1.3,
+            'normal jitter and overloaded fairness have bounded update gaps');
         }
       }
     }
@@ -493,7 +525,7 @@ test('an offscreen tile resumes its own contour phase while a visible peer keeps
   assert.equal(paused.path.getAttribute('d'), expected.path(.24));
 });
 
-test('responsive fitting keeps artwork cover cropping and scales only the mask coordinates', () => {
+test('responsive fitting fills the Still footprint without resizing controls or stretching artwork', () => {
   const h = harness({ resizeObserver: true });
   const tile = h.create({ clientWidth: 668, clientHeight: 255 });
   const peer = h.create();
@@ -504,23 +536,34 @@ test('responsive fitting keeps artwork cover cropping and scales only the mask c
   assert.equal(h.resizes.length, 1, 'all tiles share one resize observer');
   assert.equal(h.resizes[0].observed.has(tile.visual), true);
   assert.equal(h.resizes[0].observed.has(peer.visual), true);
-  assert.equal(tile.surface.getAttribute('viewBox'), '0 0 668 255');
-  assert.equal(outline.getAttribute('transform'), 'scale(2 0.5)');
-  assert.equal(tile.image.getAttribute('preserveAspectRatio'), 'xMidYMid slice');
-  for (const node of [background, tile.image, mask]) {
-    assert.equal(node.getAttribute('width'), '668');
-    assert.equal(node.getAttribute('height'), '255');
+  function assertFits(slotWidth, slotHeight) {
+    const [, , width, height] = tile.surface.getAttribute('viewBox').split(' ').map(Number);
+    const left = parseFloat(tile.visual.style['--tile-art-left']);
+    const top = parseFloat(tile.visual.style['--tile-art-top']);
+    const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} ~= ${expected}`);
+    // The contour's nominal edges, rather than its transparent drawing bounds,
+    // must coincide with the stationary layout box after every resize.
+    close(left + 46 * width / 334, 0);
+    close(left + 288 * width / 334, slotWidth);
+    close(top + 46 * height / 510, 0);
+    close(top + 464 * height / 510, slotHeight);
+    assert.equal(tile.visual.clientWidth, slotWidth);
+    assert.equal(tile.visual.clientHeight, slotHeight);
+    assert.equal(parseFloat(tile.visual.style['--tile-art-width']), width);
+    assert.equal(parseFloat(tile.visual.style['--tile-art-height']), height);
+    assert.equal(outline.getAttribute('transform'), `scale(${width / 334} ${height / 510})`);
+    assert.equal(tile.image.getAttribute('preserveAspectRatio'), 'xMidYMid slice');
+    for (const node of [background, tile.image, mask]) {
+      assert.equal(Number(node.getAttribute('width')), width);
+      assert.equal(Number(node.getAttribute('height')), height);
+    }
+    close(Number(find(tile.surface, 'text').getAttribute('x')) + left, slotWidth / 2);
+    close(Number(find(tile.surface, 'text').getAttribute('y')) + top, 154);
   }
+  assertFits(668, 255);
   h.resize(tile.visual, 501, 1020);
-  assert.equal(tile.surface.getAttribute('viewBox'), '0 0 501 1020');
-  assert.equal(outline.getAttribute('transform'), 'scale(1.5 2)');
+  assertFits(501, 1020);
   assert.equal(tile.path.getAttribute('d'), initialPath, 'resize preserves the current contour phase');
-  assert.equal(tile.image.getAttribute('preserveAspectRatio'), 'xMidYMid slice');
-  for (const node of [background, tile.image, mask]) {
-    assert.equal(node.getAttribute('width'), '501');
-    assert.equal(node.getAttribute('height'), '1020');
-  }
-  assert.equal(find(tile.surface, 'text').getAttribute('x'), '250.5');
 
   tile.api.destroy();
   assert.equal(h.resizes[0].observed.has(tile.visual), false);
@@ -530,7 +573,7 @@ test('responsive fitting keeps artwork cover cropping and scales only the mask c
   h.resize(tile.visual, 200, 300);
   assert.equal(tile.surface.writes.length, writesAfterDestroy, 'late resize notifications ignore destroyed tiles');
   h.resize(peer.visual, 200, 300);
-  assert.equal(peer.image.getAttribute('width'), '200', 'remaining tiles still respond to resizing');
+  assert.equal(Number(peer.image.getAttribute('width')), 200 * 334 / 242, 'remaining tiles still respond to resizing');
   peer.api.destroy();
   assert.equal(h.resizes[0].observed.size, 0);
 });
@@ -622,6 +665,75 @@ test('glow and crisp artwork reuse one masked source', () => {
   assert.equal(merge.children[1].getAttribute('in'), 'SourceGraphic', 'the original masked artwork overlays the glow');
 });
 
+test('cached canvases replace SVG only after ready and share the scheduled contour without rebuilding artwork', () => {
+  const h = harness({ cachedHalo: true });
+  const tile = h.create();
+  tile.api.setArtwork('/first.png', 'Creative');
+  const foreground = tile.surface.children[1];
+  const originalFilter = foreground.getAttribute('filter');
+  const halo = h.halos[0];
+  assert.equal(halo.enabled, false, 'do not rasterize before visibility is known');
+  h.intersect(tile.visual, true);
+  const snapshot = halo.updates.at(-1);
+  assert.equal(snapshot.source, '/first.png');
+  assert.equal(snapshot.label, 'C');
+  assert.equal(snapshot.path, tile.path.getAttribute('d'));
+  assert.equal(halo.paths.at(-1), snapshot.path, 'initial foreground starts at the resting contour');
+  halo.onReady(true);
+  assert.equal(foreground.getAttribute('filter'), null);
+  assert.equal(tile.surface.dataset.auraRenderer, 'cached-halo');
+  assert.equal(tile.surface.style.display, 'none', 'ready canvas avoids live SVG filter painting');
+  assert.equal(tile.surface.dataset.auraForeground, 'canvas');
+  assert.ok(foreground.children[0].getAttribute('mask'), 'SVG fallback retains its feathered mask');
+  const updates = halo.updates.length;
+  h.frame(0);
+  h.pointer(314, 255);
+  for (let time = 20; time <= 600; time += 20) h.frame(time);
+  assert.notEqual(tile.path.getAttribute('d'), snapshot.path, 'only foreground follows the pointer');
+  assert.equal(halo.paths.at(-1), tile.path.getAttribute('d'), 'canvas follows the same scheduled path');
+  assert.equal(halo.updates.length, updates, 'animation never invalidates cached artwork or halo');
+  halo.onReady(false);
+  assert.equal(foreground.getAttribute('filter'), originalFilter, 'retain working SVG if rasterization fails');
+  assert.equal(tile.surface.style.display, '', 'a failed cache makes the SVG visible again');
+  assert.equal(tile.surface.dataset.auraForeground, 'svg');
+});
+
+test('halo invalidation follows size, artwork, final fallback colors and visibility without defeating reduced motion', () => {
+  const h = harness({ cachedHalo: true, resizeObserver: true, reduced: true });
+  const tile = h.create();
+  const halo = h.halos[0];
+  h.intersect(tile.visual, true);
+  assert.equal(halo.enabled, true, 'static halo still renders under reduced motion');
+  assert.equal(h.frames.size, 0);
+  tile.api.setArtwork(null, 'Fallback');
+  h.resize(tile.visual, 240, 540);
+  assert.equal(halo.updates.at(-1).width, 240 * 334 / 242);
+  assert.equal(halo.updates.at(-1).height, 540 * 510 / 418);
+  assert.equal(halo.updates.at(-1).initialY, Number(find(tile.surface, 'text').getAttribute('y')),
+    'cached and live fallback initials remain aligned inside the expanded surface');
+  const tint = find(tile.surface, 'stop');
+  tint.setAttribute('stop-color', '#66558d');
+  tile.api.refreshAppearance();
+  assert.equal(halo.updates.at(-1).tint, '#66558d', 'final tile order can change fallback palette');
+  tile.api.setArtwork('/new.png', 'New');
+  assert.equal(halo.updates.at(-1).source, '/new.png');
+  tile.api.setArtwork(null, 'Error');
+  assert.equal(halo.updates.at(-1).source, null);
+  assert.equal(halo.updates.at(-1).label, 'E');
+  h.tileStyle('still');
+  assert.equal(halo.enabled, false);
+  h.tileStyle('dynamic');
+  assert.equal(halo.enabled, true);
+  h.intersect(tile.visual, false);
+  assert.equal(halo.enabled, false);
+  h.intersect(tile.visual, true);
+  h.document.hidden = true;
+  h.document.emit('visibilitychange');
+  assert.equal(halo.enabled, false);
+  tile.api.destroy();
+  assert.equal(halo.disposed, true);
+});
+
 test('aura can animate without IntersectionObserver and stays stopped under reduced motion', () => {
   for (const reduced of [false, true]) {
     const h = harness({ observer: false, reduced });
@@ -683,7 +795,7 @@ test('pointer events coalesce into one geometry read and latest sample on the sh
   assert.equal(tile.path.writes.length, writes);
   assert.equal(h.frames.size, 1, 'pointer input reuses the existing animation loop');
   h.frame(40);
-  assert.deepEqual(tile.contour.pointers, [[314, 299]]);
+  assert.deepEqual(tile.contour.pointers, [[46 + 314 * 242 / 334, 46 + 299 * 418 / 510]]);
   assert.equal(tile.wrapper.geometryReads, 1);
   assert.equal(tile.visual.geometryReads, 0, 'the moving visual is never used as the hitbox');
   h.frame(80);
@@ -698,14 +810,14 @@ test('edge hit testing uses the stationary wrapper and maps responsive sizes to 
   h.intersect(tile.visual, true);
   h.pointer(728, 327.5);
   h.frame(0);
-  assert.deepEqual(tile.contour.pointers.at(-1), [314, 255]);
+  assert.deepEqual(tile.contour.pointers.at(-1), [46 + 628 * 242 / 668, 255]);
   assert.equal(tile.contour.model.isInteracting(), true);
   assert.equal(tile.visual.geometryReads, 0);
 
   tile.wrapper.rect = { left: 100, top: 200, width: 1002, height: 510 };
   h.resize(tile.visual, 1002, 510);
   h.frame(40);
-  assert.deepEqual(tile.contour.pointers.at(-1), [628 / 3, 127.5],
+  assert.deepEqual(tile.contour.pointers.at(-1), [46 + 628 * 242 / 1002, 46 + 127.5 * 418 / 510],
     'a resize rechecks a stationary pointer against the new layout');
   assert.equal(tile.wrapper.geometryReads, 2);
 
@@ -825,42 +937,108 @@ test('destroyed and offscreen tiles receive no pointer or spring work while thei
   assert.equal(offscreen.contour.model.isInteracting(), false, 'returning on screen does not reuse an old pointer');
 });
 
-test('interactive and ambient tiles share repaint capacity without starving either cadence', () => {
-  for (const displayRate of [30, 60, 120]) {
-    const h = harness();
-    const tiles = [h.create(), h.create(), h.create()];
-    tiles[1].wrapper.rect = { left: 1000, top: 0, width: 334, height: 510 };
-    tiles[2].wrapper.rect = { left: 1500, top: 0, width: 334, height: 510 };
-    for (const tile of tiles) h.intersect(tile.visual, true);
-    h.pointer(314, 255);
-    h.frame(0);
-    const paintTimes = tiles.map(() => []);
-    for (let frame = 1; frame <= displayRate * 3; frame++) {
-      const time = frame * 1000 / displayRate;
-      const before = tiles.map(tile => tile.path.writes.length);
-      h.frame(time);
-      let paints = 0;
-      tiles.forEach((tile, index) => {
-        const writes = tile.path.writes.length - before[index];
-        paints += writes;
-        if (writes) paintTimes[index].push(time);
+test('one interacting edge reaches 30Hz at 60/120Hz while two ambient peers retain 15Hz', () => {
+  for (const displayRate of [60, 120]) {
+    for (const jitter of [0, .6]) {
+      const metrics = measureCadence({ displayRate, tileCount: 3, interactingCount: 1, jitter });
+      metrics.forEach((metric, index) => {
+        const target = index ? 15 : 30;
+        assert.ok(Math.abs(metric.rate - target) <= .25,
+          `${displayRate}Hz/jitter ${jitter}: ${index ? 'ambient' : 'active'} ${metric.rate} approaches ${target}`);
+        assert.ok(metric.p95 <= 1000 / target + (index ? 2000 : 1000) / displayRate + 1.3,
+          'the mean rate cannot hide long gaps in contour updates');
       });
-      assert.ok(paints <= 1, `at most one SVG repaint per ${displayRate}Hz display frame`);
-      assert.equal(h.frames.size, 1);
     }
-    assert.equal(tiles[0].contour.model.isInteracting(), true);
-    assert.equal(tiles[1].contour.model.isInteracting(), false);
-    assert.equal(tiles[2].contour.model.isInteracting(), false);
-    assert.ok(paintTimes[0].length > paintTimes[1].length, 'the pulled edge gets more frequent paints');
-    assert.ok(Math.abs(paintTimes[1].length - paintTimes[2].length) <= 1, 'ambient peers share opportunities fairly');
-    paintTimes.forEach((times, index) => {
-      const rate = index ? 15 : 30;
-      assert.ok(times.length >= 10, 'all visible tiles keep evolving');
-      assert.ok(times.length <= rate * 3);
-      for (let item = 1; item < times.length; item++) {
-        assert.ok(times[item] - times[item - 1] >= 1000 / rate - 1e-6,
-          `${index ? 'ambient' : 'interactive'} paint rate stays bounded`);
-      }
-    });
   }
+});
+
+test('overload reserves interaction capacity and a fair ambient share without starving either class', () => {
+  for (const displayRate of [30, 60, 120]) {
+    for (const interactingCount of [1, 3]) {
+      const tileCount = 8;
+      const ambientCount = tileCount - interactingCount;
+      const metrics = measureCadence({ displayRate, tileCount, interactingCount, jitter: .6 });
+      const activeBudget = Math.min(30 * interactingCount, displayRate * 2 / 3);
+      const ambientBudget = displayRate - activeBudget;
+      for (const [group, budget, count] of [
+        [metrics.slice(0, interactingCount), activeBudget, interactingCount],
+        [metrics.slice(interactingCount), ambientBudget, ambientCount]
+      ]) {
+        const counts = group.map(metric => metric.count);
+        assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, 'oldest-painted tiles rotate within each class');
+        for (const metric of group) {
+          assert.ok(Math.abs(metric.rate - budget / count) <= .25,
+            `${displayRate}Hz/${interactingCount} active: ${metric.rate} approaches share ${budget / count}`);
+          assert.ok(metric.max <= Math.max(1000 / 30 + 1000 / displayRate, count * 3000 / displayRate) + 1.3,
+            `${displayRate}Hz/${interactingCount} active: maximum wait ${metric.max} stays bounded under overload`);
+        }
+      }
+    }
+  }
+});
+
+test('settling edges retain interaction priority until their spring comes to rest', () => {
+  const h = harness();
+  const tiles = Array.from({ length: 4 }, (_, index) => h.create({
+    rect: { left: index * 450, top: 0, width: 334, height: 510 }
+  }));
+  for (const tile of tiles) h.intersect(tile.visual, true);
+  h.pointer(314, 255);
+  h.frame(0);
+  for (let frame = 1; frame <= 120; frame++) h.frame(frame * 1000 / 60);
+  h.document.emit('pointerleave');
+  const counts = tiles.map(() => 0);
+  for (let frame = 121; frame <= 180; frame++) {
+    for (const tile of tiles) tile.path.writes.length = 0;
+    h.frame(frame * 1000 / 60);
+    tiles.forEach((tile, index) => { counts[index] += tile.path.writes.length; });
+    assert.equal(tiles[0].contour.model.isInteracting(), true, 'spring energy keeps the faster cadence during release');
+  }
+  assert.deepEqual(counts, [30, 10, 10, 10]);
+  for (let frame = 181; frame <= 720; frame++) h.frame(frame * 1000 / 60);
+  assert.equal(tiles[0].contour.model.isInteracting(), false);
+});
+
+test('long callback stalls discard overdue work and resume without a catch-up burst', () => {
+  const h = harness();
+  const tiles = Array.from({ length: 8 }, () => h.create());
+  for (const tile of tiles) h.intersect(tile.visual, true);
+  h.pointer(314, 255);
+  h.frame(0);
+  for (let frame = 1; frame <= 120; frame++) h.frame(frame * 1000 / 60);
+  const paths = tiles.map(tile => tile.path.getAttribute('d'));
+  for (const tile of tiles.slice(1)) tile.api.destroy();
+  const remaining = tiles[0];
+  remaining.path.writes.length = 0;
+  h.frame(10000);
+  assert.equal(remaining.path.writes.length, 0, 'the stalled frame starts a fresh phase');
+  assert.equal(remaining.path.getAttribute('d'), paths[0]);
+  assert.equal(remaining.contour.advances.at(-1), 0, 'physics does not catch up through the stall');
+  h.frame(10000 + 1000 / 60);
+  assert.equal(remaining.path.writes.length, 0);
+  h.frame(10000 + 2000 / 60);
+  assert.equal(remaining.path.writes.length, 1);
+  h.frame(10050);
+  assert.equal(remaining.path.writes.length, 1, 'overloaded peers left no extra debt to paint on the next callback');
+  h.frame(10000 + 4000 / 60);
+  assert.equal(remaining.path.writes.length, 2);
+});
+
+test('offscreen ambient tiles clear overdue paint credit while visible peers keep running', () => {
+  const h = harness();
+  const tiles = Array.from({ length: 8 }, () => h.create());
+  for (const tile of tiles) h.intersect(tile.visual, true);
+  h.frame(0);
+  for (let frame = 1; frame <= 120; frame++) h.frame(frame * 1000 / 60);
+  const paused = tiles.at(-1);
+  h.intersect(paused.visual, false);
+  const before = paused.path.getAttribute('d');
+  for (let frame = 121; frame <= 240; frame++) h.frame(frame * 1000 / 60);
+  for (const tile of tiles.slice(0, -1)) tile.api.destroy();
+  h.intersect(paused.visual, true);
+  h.frame(10000);
+  h.frame(10050);
+  assert.equal(paused.path.getAttribute('d'), before, 'hidden time and pre-hide overload credit are discarded');
+  h.frame(10080);
+  assert.notEqual(paused.path.getAttribute('d'), before);
 });

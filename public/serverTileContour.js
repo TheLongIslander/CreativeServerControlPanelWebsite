@@ -188,5 +188,5 @@
         return { sample, path, setPointer, releasePointer, resetInteraction, advance, isInteracting: () => held || moving };
     }
 
-    return { create };
+    return { create, bounds: Object.freeze({ width, height, inset }) };
 });
