@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const nodeFs = require('node:fs');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -9,7 +10,9 @@ const zlib = require('node:zlib');
 const { createPlayerStore } = require('../backend/db/playerStore');
 const {
   createPlayerFileCollector,
+  DEFAULT_LIMITS,
   extractLegacyBukkitPlayerData,
+  flattenStats,
   normalizeEmbeddedBukkitTime,
   normalizeFileActivityTime,
   parseNbtBuffer,
@@ -164,6 +167,137 @@ test('prefers current paths over legacy duplicates and stores provenance atomica
     uuid: PLAYER
   })).find(stat => stat.statKey === 'minecraft:play_time').value, 2400);
   assert.equal((await store.listSnapshots({ serverId: 'creative' }))[0].metadata.coverage.privatePlayerDataMaterialized, false);
+});
+
+test('imports flat 1.7.10 stats into current totals while preserving numeric mod IDs and provenance', async t => {
+  const serverPath = await makeServer(t);
+  const worldPath = path.join(serverPath, 'world');
+  const statsPath = path.join(worldPath, 'stats', `${PLAYER}.json`);
+  await writeJson(statsPath, {
+    'stat.playOneMinute': 72000, 'stat.deaths': 3, 'stat.leaveGame': 8,
+    'stat.mobKills': 19, 'stat.playerKills': 2, 'stat.jump': 400,
+    'stat.walkOneCm': 12345, 'stat.crouchOneCm': 200,
+    'stat.swimOneCm': 300, 'stat.diveOneCm': 450,
+    'stat.damageDealt': 65, 'stat.damageTaken': 20,
+    'stat.mineBlock.4095': 17, 'stat.craftItem.5000': 4,
+    'stat.useItem.mod.item': 12, 'stat.killEntity.ModEntity': 6,
+    'stat.ae2.Grindstone': 2,
+    'achievement.openInventory': 1,
+    'achievement.exploreAllBiomes': { value: 0, progress: ['Plains'] },
+    modAchievement: 1
+  });
+  const original = await fs.readFile(statsPath);
+  const store = createPlayerStore({ dbPath: ':memory:' });
+  await store.initialize();
+  t.after(() => store.close());
+  const collector = createPlayerFileCollector({ serverPath, worldPath, store });
+  const result = await collector.collect({ serverId: 'legacy', observedAt: '2026-08-30T12:00:00Z' });
+  assert.equal(result.inserted, true);
+  assert.equal(result.inspection.coverage.legacyStatsFiles, 1);
+  assert.equal(result.inspection.diagnostics.length, 0);
+  assert.equal(result.inspection.advancements.length, 0);
+  const stats = await store.getCurrentStats({ serverId: 'legacy', uuid: PLAYER });
+  assert.equal(stats.length, 17);
+  const stat = key => stats.find(row => row.statKey === key);
+  assert.equal(stat('minecraft:play_time').value, 72000);
+  assert.equal(stat('minecraft:play_time').unit, 'ticks');
+  assert.equal(stat('minecraft:deaths').value, 3);
+  assert.equal(stat('minecraft:leave_game').value, 8);
+  for (const key of ['walk_one_cm', 'crouch_one_cm', 'walk_on_water_one_cm', 'walk_under_water_one_cm']) {
+    assert.equal(stat(`minecraft:${key}`).unit, 'centimeters');
+  }
+  assert.equal(stat('minecraft:swim_one_cm'), undefined, 'old water walking is not modern swimming');
+  assert.equal(stat('minecraft:damage_dealt').unit, 'tenths_of_hit_point');
+  assert.equal(stat('stat.mineBlock.4095').category, 'legacy:stat');
+  assert.equal(stat('stat.mineBlock.4095').value, 17);
+  assert.equal(stat('stat.craftItem.5000').unit, 'count');
+  assert.equal(stat('stat.killEntity.ModEntity').value, 6);
+  assert.equal(stat('stat.ae2.Grindstone').unit, 'source_units');
+  assert.ok(stats.every(row => row.source === 'minecraft_files' && row.quality === 'direct'));
+  assert.equal((await store.listPlayers({ serverId: 'legacy' })).players[0].playtime.value, 72000);
+  assert.deepEqual(await fs.readFile(statsPath), original);
+});
+
+test('modern statistics win over flat aliases without duplicate rows in transitional files', () => {
+  const stats = flattenStats(PLAYER, {
+    'stat.playOneMinute': 9000, 'stat.deaths': 9, 'stat.jump': 5,
+    stats: { 'minecraft:custom': {
+      'minecraft:play_time': 2400, 'minecraft:play_one_minute': 3000,
+      'minecraft:deaths': 0
+    } }
+  }, { limits: DEFAULT_LIMITS, source: 'minecraft_files', quality: 'direct', observedAt: '2026-08-30T12:00:00Z' });
+  assert.deepEqual(stats.map(({ statKey, value }) => [statKey, value]), [
+    ['minecraft:play_time', 2400], ['minecraft:deaths', 0], ['minecraft:jump', 5]
+  ]);
+});
+
+test('legacy stats reject malformed counters and retain bounded nonnegative integers', () => {
+  const context = { limits: { ...DEFAULT_LIMITS, maxStatsPerPlayer: 2 } };
+  const input = {
+    'stat.deaths': 0, 'stat.jump': Number.MAX_SAFE_INTEGER,
+    'stat.negative': -1, 'stat.fraction': 1.5, 'stat.tooLarge': Number.MAX_SAFE_INTEGER + 1,
+    'stat.string': '10', 'stat.null': null, 'stat.boolean': true,
+    'stat.array': [1], 'stat.object': { value: 1 }, 'stat.infinity': Infinity,
+    'stat.bad key': 4, 'stat.bad\nkey': 4, ['stat.' + 'x'.repeat(160)]: 4,
+    'achievement.openInventory': 1, DataVersion: 0
+  };
+  assert.deepEqual(flattenStats(PLAYER, input, context).map(({ statKey, value }) => [statKey, value]), [
+    ['minecraft:deaths', 0], ['minecraft:jump', Number.MAX_SAFE_INTEGER]
+  ]);
+  assert.throws(() => flattenStats(PLAYER, { ...input, 'stat.mobKills': 1 }, context), /per-player ingestion limit/);
+  assert.throws(() => flattenStats(PLAYER, {
+    stats: { 'minecraft:custom': { 'minecraft:play_time': 1200 } },
+    'stat.deaths': 1, 'stat.jump': 5
+  }, context), /per-player ingestion limit/);
+});
+
+test('invalid modern counters cannot mask valid flat or nested playtime aliases', () => {
+  for (const invalid of [null, false, '', '12', [], {}, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const modern = { 'minecraft:custom': { 'minecraft:play_time': invalid, 'minecraft:deaths': invalid } };
+    const context = { limits: DEFAULT_LIMITS };
+    const flat = flattenStats(PLAYER, { stats: modern, 'stat.playOneMinute': 1200, 'stat.deaths': 2 }, context);
+    assert.deepEqual(flat.map(({ statKey, value }) => [statKey, value]), [
+      ['minecraft:play_time', 1200], ['minecraft:deaths', 2]
+    ]);
+    const nested = flattenStats(PLAYER, { stats: { 'minecraft:custom': {
+      'minecraft:play_time': invalid, 'minecraft:play_one_minute': 2400
+    } } }, context);
+    assert.equal(nested.length, 1);
+    assert.equal(nested[0].statKey, 'minecraft:play_time');
+    assert.equal(nested[0].value, 2400);
+  }
+});
+
+test('unchanged live legacy files repair old empty snapshots once without rewriting their data', async t => {
+  const serverPath = await makeServer(t);
+  const worldPath = path.join(serverPath, 'world');
+  const relativePath = `stats/${PLAYER}.json`;
+  await writeJson(path.join(worldPath, relativePath), { 'stat.playOneMinute': 3600, 'stat.deaths': 4 });
+  const bytes = await fs.readFile(path.join(worldPath, relativePath));
+  const oldDigest = crypto.createHash('sha256').update(`${relativePath}:${crypto.createHash('sha256').update(bytes).digest('hex')}`).digest('hex');
+  const store = createPlayerStore({ dbPath: ':memory:' });
+  await store.initialize();
+  t.after(() => store.close());
+  await store.recordSnapshot({
+    serverId: 'legacy', snapshotKey: 'before-legacy-stats', contentDigest: oldDigest,
+    sourceKind: 'live', source: 'minecraft_files', observedAt: '2026-08-29T12:00:00Z', stats: []
+  });
+  const collector = createPlayerFileCollector({ serverPath, worldPath, store });
+  const repaired = await collector.collect({ serverId: 'legacy', skipUnchanged: true, observedAt: '2026-08-30T12:00:00Z' });
+  assert.equal(repaired.inserted, true);
+  assert.notEqual(repaired.inspection.contentDigest, oldDigest);
+  assert.equal(repaired.inspection.coverage.filesIncluded, 1, 'parser marker is not a file');
+  assert.equal((await store.getCurrentStats({ serverId: 'legacy', uuid: PLAYER })).length, 2);
+  const replay = await collector.collect({ serverId: 'legacy', skipUnchanged: true, observedAt: '2026-08-31T12:00:00Z' });
+  assert.equal(replay.unchanged, true);
+  assert.deepEqual(await fs.readFile(path.join(worldPath, relativePath)), bytes);
+
+  await writeJson(path.join(worldPath, relativePath), { stats: { 'minecraft:custom': { 'minecraft:play_time': 4800 } } });
+  const modernBytes = await fs.readFile(path.join(worldPath, relativePath));
+  const modernDigest = crypto.createHash('sha256').update(`${relativePath}:${crypto.createHash('sha256').update(modernBytes).digest('hex')}`).digest('hex');
+  const modern = await collector.inspect();
+  assert.equal(modern.contentDigest, modernDigest, 'modern-only files retain the original digest algorithm');
+  assert.equal(modern.coverage.legacyStatsFiles, 0);
 });
 
 test('persists safe file-mtime activity after snapshot deduplication without opening playerdata', async t => {

@@ -202,44 +202,119 @@ function parseBoundedJson(buffer, label) {
 function minecraftStatUnit(category, statKey) {
   if (category === 'minecraft:custom') {
     if (/play_time|total_world_time|time_since_death|time_since_rest|sneak_time$/.test(statKey)) return 'ticks';
-    if (/walk_|sprint_|swim_|fall_|climb_|fly_|aviate_|boat_|horse_|pig_|strider_|minecart_/.test(statKey)) return 'centimeters';
+    if (/walk_|crouch_|sprint_|swim_|fall_|climb_|fly_|aviate_|boat_|horse_|pig_|strider_|minecart_/.test(statKey)) return 'centimeters';
     if (/damage_/.test(statKey)) return 'tenths_of_hit_point';
   }
   return 'count';
 }
 
+// Pre-1.13 stats files store counters directly on the JSON object. Only map
+// known equivalents: numeric block/item IDs and mod entity names depend on
+// the old world's registries and must not be guessed into modern IDs.
+const LEGACY_CUSTOM_STATS = Object.freeze({
+  leaveGame: 'leave_game',
+  playOneMinute: 'play_time', // Despite the old name, the stored value is ticks.
+  timeSinceDeath: 'time_since_death',
+  sneakTime: 'sneak_time',
+  walkOneCm: 'walk_one_cm',
+  crouchOneCm: 'crouch_one_cm',
+  sprintOneCm: 'sprint_one_cm',
+  // These became water walking counters when swimming was added in 1.13.
+  // https://www.spigotmc.org/threads/328883/
+  swimOneCm: 'walk_on_water_one_cm',
+  diveOneCm: 'walk_under_water_one_cm',
+  fallOneCm: 'fall_one_cm',
+  climbOneCm: 'climb_one_cm',
+  flyOneCm: 'fly_one_cm',
+  minecartOneCm: 'minecart_one_cm',
+  boatOneCm: 'boat_one_cm',
+  pigOneCm: 'pig_one_cm',
+  horseOneCm: 'horse_one_cm',
+  aviateOneCm: 'aviate_one_cm',
+  jump: 'jump',
+  drop: 'drop',
+  damageDealt: 'damage_dealt',
+  damageTaken: 'damage_taken',
+  deaths: 'deaths',
+  mobKills: 'mob_kills',
+  playerKills: 'player_kills',
+  animalsBred: 'animals_bred',
+  fishCaught: 'fish_caught',
+  talkedToVillager: 'talked_to_villager',
+  tradedWithVillager: 'traded_with_villager',
+  cakeSlicesEaten: 'eat_cake_slice',
+  cauldronFilled: 'fill_cauldron',
+  cauldronUsed: 'use_cauldron',
+  armorCleaned: 'clean_armor',
+  bannerCleaned: 'clean_banner',
+  brewingstandInteraction: 'interact_with_brewingstand',
+  beaconInteraction: 'interact_with_beacon',
+  dropperInspected: 'inspect_dropper',
+  hopperInspected: 'inspect_hopper',
+  dispenserInspected: 'inspect_dispenser',
+  noteblockPlayed: 'play_noteblock',
+  noteblockTuned: 'tune_noteblock',
+  flowerPotted: 'pot_flower',
+  trappedChestTriggered: 'trigger_trapped_chest',
+  enderchestOpened: 'open_enderchest',
+  itemEnchanted: 'enchant_item',
+  recordPlayed: 'play_record',
+  furnaceInteraction: 'interact_with_furnace',
+  craftingTableInteraction: 'interact_with_crafting_table',
+  chestOpened: 'open_chest',
+  sleepInBed: 'sleep_in_bed',
+  shulkerBoxOpened: 'open_shulker_box'
+});
+
+function isLegacyStat(key, value) {
+  return key.length <= 160 && /^stat\.[A-Za-z0-9_.:/-]+$/.test(key)
+    && Number.isSafeInteger(value) && value >= 0;
+}
+
+function legacyStatUnit(statKey) {
+  if (/^stat\.(?:mineBlock|useItem|craftItem|breakItem|pickup|drop|killEntity|entityKilledBy)\./.test(statKey)
+    || ['stat.treasureFished', 'stat.junkFished'].includes(statKey)) return 'count';
+  return 'source_units';
+}
+
 function flattenStats(uuid, document, context) {
   const result = [];
+  const seen = new Set();
+  const append = (category, statKey, value, unit) => {
+    const identity = `${category}\0${statKey}`;
+    if (seen.has(identity)) return;
+    if (result.length >= context.limits.maxStatsPerPlayer) {
+      throw new Error(`Statistics for ${uuid} exceed the per-player ingestion limit.`);
+    }
+    seen.add(identity);
+    result.push({ uuid, category, statKey, value, unit,
+      source: context.source, quality: context.quality, observedAt: context.observedAt });
+  };
   const stats = document.stats;
-  if (!stats || typeof stats !== 'object' || Array.isArray(stats)) return result;
-  for (const [category, values] of Object.entries(stats)) {
+  for (const [category, values] of Object.entries(stats && typeof stats === 'object' && !Array.isArray(stats) ? stats : {})) {
     if (!values || typeof values !== 'object' || Array.isArray(values)) continue;
     for (const [statKey, rawValue] of Object.entries(values)) {
-      if (result.length >= context.limits.maxStatsPerPlayer) {
-        throw new Error(`Statistics for ${uuid} exceed the per-player ingestion limit.`);
-      }
-      const value = Number(rawValue);
+      const value = rawValue;
       if (!Number.isSafeInteger(value) || value < 0) continue;
-      const canonicalStatKey = category === 'minecraft:custom'
-        && statKey === 'minecraft:play_one_minute'
-        && !Object.prototype.hasOwnProperty.call(values, 'minecraft:play_time')
-        ? 'minecraft:play_time'
-        : statKey;
+      const playtimeAlias = category === 'minecraft:custom' && statKey === 'minecraft:play_one_minute';
+      const canonicalStatKey = playtimeAlias ? 'minecraft:play_time' : statKey;
       // When both keys exist, the modern play_time total is canonical and the
       // legacy alias is omitted to avoid presenting the same counter twice.
-      if (category === 'minecraft:custom'
-        && statKey === 'minecraft:play_one_minute'
-        && Object.prototype.hasOwnProperty.call(values, 'minecraft:play_time')) continue;
-      result.push({
-        uuid,
-        category,
-        statKey: canonicalStatKey,
-        value,
-        unit: minecraftStatUnit(category, canonicalStatKey),
-        source: context.source,
-        quality: context.quality,
-        observedAt: context.observedAt
-      });
+      if (playtimeAlias && Number.isSafeInteger(values['minecraft:play_time']) && values['minecraft:play_time'] >= 0) continue;
+      append(category, canonicalStatKey, value, minecraftStatUnit(category, canonicalStatKey));
+    }
+  }
+  for (const [legacyKey, value] of Object.entries(document)) {
+    // Achievements (including value/progress objects) are a different format.
+    // Accept bounded numeric stat.* counters, never coerce null/bool/objects.
+    if (!isLegacyStat(legacyKey, value)) continue;
+    const name = legacyKey.slice(5);
+    if (Object.hasOwn(LEGACY_CUSTOM_STATS, name)) {
+      const statKey = `minecraft:${LEGACY_CUSTOM_STATS[name]}`;
+      // Modern counters win if a transitional file also has the old key.
+      append('minecraft:custom', statKey, value, minecraftStatUnit('minecraft:custom', statKey));
+    } else {
+      append('legacy:stat', legacyKey, value, legacyStatUnit(legacyKey));
     }
   }
   return result;
@@ -913,6 +988,7 @@ function createPlayerFileCollector(options = {}) {
     const bukkitIdentityCandidates = new Map();
     let legacyPlayerMetadataFilesScanned = 0;
     let legacyPlayerMetadataFilesMatched = 0;
+    let legacyStatsFiles = 0;
     let activityLimitReported = false;
     const reportActivityLimit = () => {
       if (activityLimitReported) return;
@@ -986,6 +1062,7 @@ function createPlayerFileCollector(options = {}) {
             throw new Error('World statistics exceed the bounded snapshot limit.');
           }
           stats.push(...playerStats);
+          if (Object.entries(document).some(([key, value]) => isLegacyStat(key, value))) legacyStatsFiles += 1;
           if (Number.isSafeInteger(Number(document.DataVersion))) dataVersions.stats[file.uuid] = Number(document.DataVersion);
           identities.push({ uuid: file.uuid, association: 'uuid_only', source: 'minecraft_stats', quality, observedAt, sourceKey: `stats:${file.uuid}` });
           contentParts.push(hashPart(file.relativePath, read.buffer));
@@ -1244,7 +1321,11 @@ function createPlayerFileCollector(options = {}) {
       });
       identities.length = limits.maxIdentityObservations;
     }
-    const contentDigest = crypto.createHash('sha256').update(contentParts.join('\n')).digest('hex');
+    // Previously these exact files yielded no legacy stats. Give the expanded
+    // interpretation a new digest so unchanged live/backup snapshots can be
+    // imported once; modern-only snapshots retain their existing digest.
+    const digestParts = legacyStatsFiles ? [...contentParts, 'legacy-flat-stats:v1'].sort() : contentParts;
+    const contentDigest = crypto.createHash('sha256').update(digestParts.join('\n')).digest('hex');
     return {
       observedAt,
       sourceKind,
@@ -1260,6 +1341,7 @@ function createPlayerFileCollector(options = {}) {
       dataVersions,
       coverage: {
         statPlayers: seenStats.size,
+        legacyStatsFiles,
         advancementPlayers: seenAdvancements.size,
         activityPlayers: new Set(activityEvidence.map(item => item.uuid)).size,
         activityEvidence: activityEvidence.length,

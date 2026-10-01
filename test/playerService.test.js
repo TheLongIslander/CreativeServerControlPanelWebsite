@@ -25,6 +25,17 @@ test('public statistics prioritize useful custom totals before high-cardinality 
   ]);
 });
 
+test('legacy water movement and original mod counters remain visible in public statistics', () => {
+  const selected = selectPublicStats([
+    { category: 'minecraft:custom', statKey: 'minecraft:walk_on_water_one_cm', value: 400, unit: 'centimeters' },
+    { category: 'minecraft:custom', statKey: 'minecraft:walk_under_water_one_cm', value: 800, unit: 'centimeters' },
+    { category: 'legacy:stat', statKey: 'stat.mineBlock.4095', value: 12, unit: 'count' }
+  ]);
+  assert.deepEqual(selected.map(stat => stat.key), [
+    'minecraft:walk_on_water_one_cm', 'minecraft:walk_under_water_one_cm', 'stat.mineBlock.4095'
+  ]);
+});
+
 function fixture(serviceOverrides = {}) {
   const broadcasts = [];
   const store = {

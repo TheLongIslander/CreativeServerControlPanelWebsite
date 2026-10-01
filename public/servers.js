@@ -11,7 +11,8 @@
     const tilesById = new Map();
     const tileImages = Object.freeze({
         default: '/assets/server-tiles/creative.png',
-        pogeg: '/assets/server-tiles/pogeg-farm.png'
+        pogeg: '/assets/server-tiles/pogeg-farm.png',
+        moddedserver4: '/assets/server-tiles/modded-server-4.png?v=4'
     });
     function element(tag, className, text) {
         const node = document.createElement(tag);

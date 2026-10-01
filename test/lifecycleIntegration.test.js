@@ -55,6 +55,25 @@ function responseRecorder() {
   };
 }
 
+test('Minecraft 1.7.10 readiness accepts the legacy help suffix without accepting chat or arbitrary trailing text', () => {
+  const startup = '[22:01:08] [Server thread/INFO]: Starting minecraft server version 1.7.10';
+  const ready = '[22:03:00] [Server thread/INFO]: Done (31.765s)! For help, type "help" or "?"';
+  for (const newline of ['\n', '\r\n']) {
+    const transcript = [startup, ready, ''].join(newline);
+    assert.equal(classifyLogState(transcript).latestLifecycle, 'ready');
+    assert.equal(classifyLogState(transcript).hasCurrentReady, true);
+    assert.equal(classifyLogState(`${transcript}[22:04:00] [Server thread/INFO]: Stopping server`).hasCurrentReady, false);
+  }
+  for (const line of [
+    ready.replace('INFO]: ', 'INFO]: <Alex> '),
+    ready.replace('Server thread', 'Worker-Main-1'),
+    `${ready} extra text`,
+    ready.replace('or "?"', 'or "anything"')
+  ]) {
+    assert.equal(classifyLogState(`${startup}\n${line}`).hasCurrentReady, false);
+  }
+});
+
 test('process classification, exact Screen matching, and lifecycle transport stay argv-only', async () => {
   const readyLog = [
     '[12:00:00] [Server thread/INFO]: Starting minecraft server version 1.21',

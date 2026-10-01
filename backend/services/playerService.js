@@ -125,6 +125,8 @@ function selectPublicStats(stats) {
     'minecraft:walk_one_cm',
     'minecraft:sprint_one_cm',
     'minecraft:swim_one_cm',
+    'minecraft:walk_on_water_one_cm',
+    'minecraft:walk_under_water_one_cm',
     'minecraft:fly_one_cm',
     'minecraft:aviate_one_cm',
     'minecraft:damage_dealt',

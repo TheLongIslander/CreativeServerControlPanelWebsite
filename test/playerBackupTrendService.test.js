@@ -1,10 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
 const { createPlayerStore } = require('../backend/db/playerStore');
+const { createPlayerFileCollector } = require('../backend/services/playerFileCollector');
 const {
   backupCollectorName,
   createPlayerBackupTrendService,
@@ -99,6 +101,93 @@ test('discovers bounded backup snapshots, ignores symlinks, backfills once, and 
   assert.equal(trend.points[1].delta, 3600);
   assert.equal(trend.points[1].derived.deltaMinutes, 3);
   assert.equal(trend.points[1].elapsedMs, 60 * 60 * 1000);
+});
+
+test('reimports cached legacy backups once and joins flat counters to modern playtime history', async t => {
+  const { backupPath, store } = await makeHarness(t);
+  const serverId = 'legacy-modded';
+  const relativePath = 'April 22nd, 2024/10 PM';
+  const serverPath = path.join(backupPath, relativePath);
+  const worldPath = path.join(serverPath, 'world');
+  const statsRelativePath = `stats/${PLAYER}.json`;
+  const legacyBuffer = Buffer.from(JSON.stringify({
+    'stat.playOneMinute': 1200,
+    'stat.deaths': 2
+  }));
+  await fs.mkdir(path.join(worldPath, 'stats'), { recursive: true });
+  await fs.writeFile(path.join(worldPath, statsRelativePath), legacyBuffer);
+  const collector = createPlayerFileCollector({ serverPath, worldPath });
+  const fingerprint = await collector.fingerprint({ includeIdentityFiles: false });
+  const observedAt = parseBackupTimestamp(relativePath);
+
+  // Simulate the old collector: it hashed the file but ingested no flat stats.
+  const fileDigest = crypto.createHash('sha256').update(legacyBuffer).digest('hex');
+  const oldContentDigest = crypto.createHash('sha256')
+    .update(`${statsRelativePath}:${fileDigest}`).digest('hex');
+  const directoryDigest = crypto.createHash('sha256').update(relativePath).digest('hex').slice(0, 24);
+  const old = await store.recordSnapshot({
+    serverId,
+    snapshotKey: `backup:${directoryDigest}:${oldContentDigest}`,
+    sourceKind: 'backup',
+    source: 'minecraft_backup_files',
+    sourceLabel: relativePath,
+    observedAt,
+    quality: 'inferred',
+    contentDigest: oldContentDigest,
+    identities: [],
+    stats: [],
+    advancements: [],
+    scores: []
+  });
+  const collectorName = backupCollectorName(relativePath);
+  await store.setCollectorState({
+    serverId,
+    collector: collectorName,
+    cursor: {
+      version: 3,
+      relativePath,
+      fingerprint: fingerprint.digest,
+      snapshotId: old.snapshot.id,
+      contentDigest: oldContentDigest,
+      activityEvidenceRecorded: true
+    },
+    status: 'ready',
+    observedAt
+  });
+  await writePlayerWorld(path.join(backupPath, 'April 22nd, 2024', '11 PM'), {
+    uuid: PLAYER,
+    playtime: 3600,
+    modern: true,
+    includeScoreboard: false
+  });
+
+  const service = createPlayerBackupTrendService({ backupPath, store });
+  const repaired = await service.backfill({ serverId, sampleMode: 'all' });
+  assert.equal(repaired.failed, 0);
+  assert.equal(repaired.inserted, 2, 'unchanged legacy file produces a new interpreted snapshot');
+  assert.equal(repaired.skipped, 0);
+  const state = await store.getCollectorState({ serverId, collector: collectorName });
+  assert.equal(state.cursor.version, 4);
+  assert.notEqual(state.cursor.contentDigest, oldContentDigest);
+  assert.notEqual(state.cursor.snapshotId, old.snapshot.id);
+  const deaths = await store.getStatHistory({
+    serverId,
+    uuid: PLAYER,
+    category: 'minecraft:custom',
+    statKey: 'minecraft:deaths'
+  });
+  assert.equal(deaths[0].value, 2);
+  assert.equal(deaths[0].observedAt, observedAt, 'death history begins with the repaired legacy backup');
+  const trend = await service.getPlaytimeTrend({ serverId, uuid: PLAYER });
+  assert.equal(trend.source, 'uuid_stats');
+  assert.deepEqual(trend.points.map(point => point.value), [1200, 3600]);
+  assert.equal(trend.points[1].delta, 2400);
+  assert.equal(trend.points[1].derived.deltaMinutes, 2);
+
+  const replay = await service.backfill({ serverId, sampleMode: 'all' });
+  assert.equal(replay.inserted, 0);
+  assert.equal(replay.skipped, 2);
+  assert.equal((await store.listSnapshots({ serverId, sourceKind: 'backup' })).length, 3);
 });
 
 test('discovers and imports dated-root backups while rejecting junk and preferring hourly copies', async t => {
@@ -236,22 +325,22 @@ test('persists selected backup activity after snapshot dedupe and retries indepe
     serverId: 'creative',
     collector: collectorName
   });
-  assert.equal(collectorState.cursor.version, 3);
+  assert.equal(collectorState.cursor.version, 4);
   await store.setCollectorState({
     serverId: 'creative',
     collector: collectorName,
-    cursor: { ...collectorState.cursor, version: 2 },
+    cursor: { ...collectorState.cursor, version: 3 },
     status: 'ready',
     observedAt: collectorState.observedAt
   });
   const upgraded = await service.backfill({ serverId: 'creative', sampleMode: 'all' });
-  assert.equal(upgraded.skipped, 0, 'a v2 cursor is reinspected once for legacy Bukkit evidence');
+  assert.equal(upgraded.skipped, 0, 'a v3 cursor is reinspected once for legacy statistics');
   assert.equal(upgraded.deduplicated, 1);
   assert.equal(activityCalls, 3);
 
   const skipped = await service.backfill({ serverId: 'creative', sampleMode: 'all' });
   assert.equal(skipped.skipped, 1);
-  assert.equal(activityCalls, 3, 'ready v3 collector state avoids reparsing recorded evidence');
+  assert.equal(activityCalls, 3, 'ready v4 collector state avoids reparsing recorded evidence');
 });
 
 test('prepends scoreboard history only through verified names and ignores candidates', async t => {

@@ -482,7 +482,7 @@ function createPlayerBackupTrendService(options = {}) {
           && fingerprint.reliable
           && priorState.status === 'ready'
           && priorState.cursor
-          && priorState.cursor.version === 3
+          && priorState.cursor.version === 4
           && priorState.cursor.activityEvidenceRecorded === true
           && priorState.cursor.relativePath === snapshot.relativePath
           && priorState.cursor.fingerprint === fingerprint.digest) {
@@ -560,11 +560,10 @@ function createPlayerBackupTrendService(options = {}) {
               serverId: input.serverId,
               collector: collectorName,
               cursor: {
-                // v3 forces one bounded reinspection of v1/v2 cursors so
-                // newly supported, selectively extracted legacy Bukkit
-                // identity/first-play evidence can repair an already
-                // deduplicated snapshot.
-                version: 3,
+                // v4 forces one bounded reinspection of older cursors so
+                // newly supported flat stat.* counters can populate legacy
+                // backups whose earlier snapshots contained no statistics.
+                version: 4,
                 relativePath: snapshot.relativePath,
                 fingerprint: fingerprint.digest,
                 snapshotId: recorded.snapshot.id,

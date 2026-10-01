@@ -79,7 +79,7 @@ function classifyLogState(text) {
     new RegExp(`${serverInfoPrefix}Starting Minecraft server on(?: .*)?\\r?$`, 'gm')
   ];
   const readyPattern = new RegExp(
-    `${serverInfoPrefix}Done \\([^)]+\\)!(?: For help, type ["']help["'])?\\r?$`,
+    `${serverInfoPrefix}Done \\([^)]+\\)!(?: For help, type ["']help["'](?: or ["']\\?["'])?)?\\r?$`,
     'gm'
   );
   const stopPatterns = [
