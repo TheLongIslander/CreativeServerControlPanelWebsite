@@ -135,6 +135,7 @@ body.control-panel #server-chat-toggle:hover {
         bottom: calc(max(12px, env(safe-area-inset-bottom)) + 116px);
         height: min(622px, calc(100vh - 170px));
         height: min(622px, calc(100dvh - 170px));
+        min-height: 0;
     }
 }
 
@@ -982,5 +983,34 @@ body[data-color-scheme="light"] #server-chat-input {
 
     body.control-panel[data-ui-theme="glass"] #server-chat-panel #server-chat-new-messages {
         transform: translateX(-50%) !important;
+    }
+}
+
+/* Short landscape windows still need room for the composer and close button. */
+@media (min-width: 769px) and (max-height: 600px) {
+    #server-chat-panel,
+    body:has(#corner-action-stack #update-server:not(.hidden)) #server-chat-panel {
+        top: max(8px, env(safe-area-inset-top));
+        height: auto;
+        min-height: 0;
+    }
+
+    body.control-panel #server-chat-panel > .server-chat-header { padding: 8px 12px; }
+    #server-chat-title { font-size: 20px; }
+    .server-chat-toolbar { max-height: 20dvh; overflow-y: auto; box-sizing: border-box; }
+}
+
+@media (max-width: 768px) {
+    /* The Players launcher must not cover Send in the full-screen chat view. */
+    body.server-chat-mobile-open #player-center-toggle { display: none; }
+}
+
+@media (max-width: 360px) {
+    body.control-panel #server-chat-toggle,
+    body.control-panel #player-center-toggle {
+        min-width: 0;
+        max-width: calc((100vw - 28px) / 2);
+        padding-inline: 10px;
+        gap: 6px;
     }
 }

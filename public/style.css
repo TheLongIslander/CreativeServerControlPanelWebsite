@@ -40,13 +40,14 @@ body.control-panel {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    box-sizing: border-box;
+    min-height: 100vh;
+    min-height: 100dvh;
     flex-direction: column;
     position: relative;
-    overflow: hidden;
 }
 
-body.control-panel header {
+body.control-panel > header {
     position: absolute;
     width: 100%;
     top: 20px;
@@ -466,6 +467,13 @@ body[data-ui-theme="glass"] .switch input:checked + .slider::before {
 }
 
 .modal-content {
+    box-sizing: border-box;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    overflow-wrap: anywhere;
     position: relative;
     background: linear-gradient(160deg, #f9fbff 0%, #eef3f8 100%);
     border: 1px solid #dde3ea;
@@ -489,6 +497,7 @@ body[data-ui-theme="glass"] .switch input:checked + .slider::before {
 }
 
 .modal-actions {
+    flex-wrap: wrap;
     display: flex;
     gap: 10px;
     justify-content: flex-end;
@@ -515,7 +524,7 @@ body[data-ui-theme="glass"] .switch input:checked + .slider::before {
     background-color: #0a6a8b;
 }
 
-body.control-panel.modal-open header {
+body.control-panel.modal-open > header {
     opacity: 0;
     pointer-events: none;
 }
@@ -892,6 +901,7 @@ button:active {
 .update-summary-modal-content {
     width: min(760px, 94vw);
     max-height: min(86vh, 760px);
+    max-height: min(86dvh, 760px);
 }
 
 .update-summary-content {
@@ -1375,7 +1385,7 @@ button:disabled:hover {
         align-items: center;
     }
 
-    body.control-panel header {
+    body.control-panel > header {
         top: 10px;
     }
 
@@ -1388,7 +1398,7 @@ button:disabled:hover {
         width: 100%; /* Use full width for layout adjustments */
     }
 
-    body.control-panel button {
+    body.control-panel .content > button {
         width: 90%; /* Make buttons slightly smaller than full width for aesthetics */
         margin: 10px 5%; /* Center buttons with automatic margins */
         padding: 12px; /* Slightly smaller padding */
@@ -1787,6 +1797,7 @@ body.control-panel #server-info-button:hover {
 .server-info-modal-content {
     width: min(1180px, 94vw);
     max-height: min(88vh, 880px);
+    max-height: min(88dvh, 880px);
     box-sizing: border-box;
     overflow: hidden;
     gap: 16px;
@@ -2571,6 +2582,7 @@ body[data-ui-theme="glass"][data-color-scheme="light"] #server-info-modal .modal
     .server-info-modal-content {
         width: 94vw;
         max-height: 90vh;
+        max-height: calc(100dvh - 24px);
         padding: 18px;
     }
 

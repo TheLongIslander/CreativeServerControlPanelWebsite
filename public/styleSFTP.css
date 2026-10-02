@@ -65,6 +65,7 @@ header {
 }
 
 .path-navigation {
+    order: -1;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -108,6 +109,8 @@ header {
 .toolbar-actions > * {
     pointer-events: auto;
 }
+
+.toolbar-label-compact { display: none; }
 
 body[data-ui-theme="glass"] header {
     background: transparent;
@@ -928,45 +931,79 @@ body.sftp-progress-flat .glass-progress .progress-visual {
 
 /* Mobile styles */
 @media (max-width: 768px) {
-    header {
+    /* Do not distribute spare viewport height into the toolbar's grid row. */
+    body { align-content: start; }
+
+    .sftp-toolbar {
         flex-direction: column;
         align-items: stretch;
-        gap: 10px;
-        padding: 10px;
+        gap: 8px;
+        padding: 10px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left));
     }
 
     .path-navigation {
+        order: 0;
         flex: 0 0 auto;
         width: 100%;
+        gap: 8px;
     }
 
     .toolbar-actions {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
         gap: 8px;
         width: 100%;
         margin-left: 0;
+        z-index: 2;
     }
+
+    .sftp-toolbar .toolbar-label-full { display: none; }
+    .sftp-toolbar .toolbar-label-compact { display: inline; }
 
     header input[type="text"] {
         width: 100%;
+        height: 44px;
         margin: 0;
+        font-size: 16px;
     }
 
     header button {
         width: auto;
         margin: 0;
+        min-height: 44px;
+    }
+
+    .sftp-toolbar .toolbar-actions > button,
+    .sftp-toolbar #account-button,
+    .sftp-toolbar .path-navigation > button {
+        height: 44px;
+        min-width: 0;
+        padding: 8px 10px;
+        border-radius: 12px;
+        font-size: 13px;
+    }
+
+    .sftp-toolbar .path-navigation > button { flex: 0 0 44px; }
+    .sftp-toolbar #up-directory-button { font-size: 22px; }
+    .sftp-toolbar #account-button::after { margin-top: 0; font-size: 10px; }
+
+    body[data-ui-theme="glass"] .sftp-toolbar .toolbar-actions > button,
+    body[data-ui-theme="glass"] .sftp-toolbar #account-button,
+    body[data-ui-theme="glass"] .sftp-toolbar .path-navigation > button {
+        box-shadow: inset 0 1px 1px rgba(255,255,255,.2), 0 3px 8px rgba(0,0,0,.2);
     }
 
     .toolbar-actions > button,
     .toolbar-actions > .account-container,
     .toolbar-actions > .account-container > #account-button {
         width: 100%;
+        min-width: 0;
     }
 
     .account-dropdown {
-        max-height: calc(100vh - 150px);
-        max-height: calc(100dvh - 150px);
+        max-height: calc(100vh - 80px);
+        max-height: calc(100dvh - 80px);
         overflow-y: auto;
         overscroll-behavior: contain;
         -webkit-overflow-scrolling: touch;
@@ -1004,7 +1041,13 @@ body.sftp-progress-flat .glass-progress .progress-visual {
 
     .directory, .file-name {
         font-size: 18px; /* Increase font size */
+        min-width: 0;
+        overflow-wrap: anywhere;
     }
+
+    .folder-icon, .file-icon { width: 56px; height: 56px; flex-shrink: 0; }
+    .modal-content { max-height: calc(100dvh - 24px); overflow: auto; }
+    .modal-content input { min-width: 0; font-size: 16px; }
 }
 #manage-account-button {
     background-color: #0f8fba;

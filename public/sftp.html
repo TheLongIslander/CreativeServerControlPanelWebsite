@@ -4,24 +4,21 @@
     <meta charset="UTF-8">
     <base href="/">
     <title>Server Backup Files</title>
-    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20260930-1">
+    <link id="theme-stylesheet" rel="stylesheet" href="style.css?v=20261001-1">
     <link rel="stylesheet" href="textEffects.css?v=20260930-1">
-    <link rel="stylesheet" href="styleSFTP.css">
+    <link rel="stylesheet" href="styleSFTP.css?v=20261001-2">
     <link rel="icon" type="image/x-icon" href="../assets/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
     <header class="sftp-toolbar">
-        <div class="path-navigation">
-            <div class="path-input-shell">
-                <input type="text" id="path-input" aria-label="Directory path" placeholder="Enter path here..." value="/" autocomplete="off" spellcheck="false">
-            </div>
-            <button id="go-button" onclick="changeDirectory()">Go</button>
-        </div>
         <div class="toolbar-actions">
-            <button id="create-directory-button">Create Directory</button>
-            <button id="up-directory-button" onclick="upDirectory()">Up Directory</button>
-            <button id="control-panel" onclick="location.href=window.ServerContext.panelUrl()">Control Panel</button>
+            <button id="control-panel" type="button" onclick="location.href=window.ServerContext.panelUrl()" aria-label="Back to Control Panel">
+                <span class="toolbar-label-full">Control Panel</span><span class="toolbar-label-compact" aria-hidden="true">← Panel</span>
+            </button>
+            <button id="create-directory-button" type="button" aria-label="Create directory">
+                <span class="toolbar-label-full">Create Directory</span><span class="toolbar-label-compact" aria-hidden="true">New folder</span>
+            </button>
             <div class="account-container">
                 <button id="account-button">Account</button>
                 <div id="account-dropdown" class="account-dropdown hidden">
@@ -65,6 +62,15 @@
                 </div>
             </div>
         </div>
+        <div class="path-navigation">
+            <button id="up-directory-button" type="button" onclick="upDirectory()" aria-label="Up one directory" title="Up one directory">
+                <span class="toolbar-label-full">Up Directory</span><span class="toolbar-label-compact" aria-hidden="true">↑</span>
+            </button>
+            <div class="path-input-shell">
+                <input type="text" id="path-input" aria-label="Directory path" placeholder="Enter path here..." value="/" autocomplete="off" spellcheck="false">
+            </div>
+            <button id="go-button" onclick="changeDirectory()">Go</button>
+        </div>
     </header>
     <div class="content">
         <h1 onclick="goToRoot()">Server Backup Files</h1>
@@ -83,7 +89,7 @@
     </div>
     <div id="loading-spinner" class="spinner" style="display:none;"></div>
     <script src="textEffects.js?v=20260930-1"></script>
-    <script src="appearance.js?v=20260930-8"></script>
+    <script src="appearance.js?v=20261001-1"></script>
     <script src="serverContext.js?v=permissions-1"></script>
     <script src="sftp.js?v=permissions-1"></script>
 </body>

@@ -159,6 +159,8 @@ section {
 }
 
 .create-user form {
+    box-sizing: border-box;
+    min-width: 0;
     background: var(--card);
     padding: 20px;
     border-radius: 16px;
@@ -896,6 +898,8 @@ body[data-ui-theme="glass"][data-color-scheme="light"] .never-value {
 
 .account-container {
     position: relative;
+    top: auto;
+    right: auto;
 }
 
 #account-button {
@@ -1249,9 +1253,29 @@ body.modal-open header {
 
 @media (max-width: 768px) {
     header {
-        flex-direction: column;
+        flex-direction: row;
+        align-items: flex-start;
+        padding: 16px;
         gap: 12px;
     }
+
+    main { padding: 24px 16px; }
+    h1 { font-size: clamp(24px, 7vw, 32px); overflow-wrap: anywhere; }
+    .section-header { flex-wrap: wrap; gap: 12px; }
+    .section-header > * { min-width: 0; }
+    .section-header h2 { flex: 1 1 100%; }
+    #account-button { max-width: 150px; overflow-wrap: anywhere; }
+    button { min-height: 44px; }
+    input:not([type="checkbox"]):not([type="radio"]), select, textarea,
+    body .profile-fields input { box-sizing: border-box; min-width: 0; max-width: 100%; font-size: 16px; }
+    .account-dropdown {
+        max-height: calc(100vh - 100px);
+        max-height: calc(100dvh - 100px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+    .modal-content { padding: 20px; }
+    .audit-filters > * { min-width: 0; max-width: 100%; }
 
     .create-user form {
         width: 100%;

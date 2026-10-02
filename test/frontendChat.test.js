@@ -98,7 +98,7 @@ test('chat close control keeps explicit theme-aware contrast in every interactio
     chatCss,
     /#server-chat-panel #server-chat-close:hover:not\(:disabled\)[\s\S]*color:\s*var\(--chat-accent\)/
   );
-  assert.match(indexHtml, /chat\.css\?v=20260828-4/);
+  assert.match(indexHtml, /chat\.css\?v=20261001-1/);
 });
 
 test('chat controls reuse compact glass physics while flat and reduced-motion modes stay stable', () => {
